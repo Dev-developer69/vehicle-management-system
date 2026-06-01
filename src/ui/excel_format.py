@@ -71,3 +71,57 @@ def editable_grid():
         cleaned_df.to_csv("records.csv", index=False)
         st.success("✅ Changes saved!")
         st.rerun()
+
+
+
+def driver_salary():
+    data= pd.DataFrame({
+        'Date':[date.today()],
+        'Driver Name': ['Ramesh'],
+        'Salary':['2000'],
+        'Transaction':['cash/online']
+
+    })
+    driver_df = st.data_editor(
+        data,
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Date":           st.column_config.DateColumn("Date", default=date.today()),
+            "Driver Name":    st.column_config.TextColumn("Driver Name"),
+            "Salary" :        st.column_config.NumberColumn("Salary", min_value=0),
+            "Transaction":    st.column_config.TextColumn("Transaction"),
+        }
+    )
+    st.dataframe(driver_df, use_container_width=True, hide_index=True)
+
+    if st.button("💾 Save Changes",width='stretch'):
+        cleaned_df = driver_df.dropna(how="all")
+        cleaned_df.to_csv("expanse_records.csv", index=False)
+        st.success("✅ Changes saved!")
+
+
+
+
+
+def expenses():
+    data= pd.DataFrame({
+        'Date':[date.today()],
+        'Driver Name': ['Ramesh'],
+        'Salary':['2000'],
+        'Transaction':['cash/online']
+
+    })
+    driver_df = st.data_editor(
+        data,
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Date":           st.column_config.DateColumn("Date", default=date.today()),
+            "Driver Name":    st.column_config.TextColumn("Driver Name"),
+            "Salary" :        st.column_config.NumberColumn("Salary", min_value=0),
+            "Transaction":    st.column_config.TextColumn("Transaction"),
+        }
+    )

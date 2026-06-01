@@ -1,8 +1,8 @@
 import streamlit as st
 from src.ui.home_base_layout import home_layout
 
-def expanses():
-    st.header("Expanses")
+def expenses():
+    st.header("Expenses")
     home_layout()
 
     col1, col2= st.columns(2, gap='small')

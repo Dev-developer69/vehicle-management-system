@@ -18,16 +18,16 @@ def page_3131():
     editable_grid()
 
 
-def expanse_3131():
+def expense_3131():
 
     col1, col2 = st.columns(2)
     with col1:
-            st.header("Expanse page 3131 ",text_alignment='center')
+            st.header("Expense page 3131 ",text_alignment='center')
     with col2:
         if st.button('Home page',type='secondary', width='stretch', icon=':material/home:', shortcut='control+backspace'):
             st.session_state['login_state']= None
             st.rerun()
 
         if st.button('Back page', type='primary', width='stretch', icon=':material/home:', shortcut='control+enter'):
-            st.session_state['login_state']= 'expanses'
+            st.session_state['login_state']= 'expenses'
             st.rerun()

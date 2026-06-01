@@ -18,6 +18,6 @@ def home_page():
             st.rerun()
         
     with col3:
-        if st.button("Expanses",type='primary',key='btn3', width= 'stretch', icon=':material/bus_railway:', icon_position='right'):
-            st.session_state['login_state']='expanses'
+        if st.button("Expenses",type='primary',key='btn3', width= 'stretch', icon=':material/bus_railway:', icon_position='right'):
+            st.session_state['login_state']='expenses'
             st.rerun()

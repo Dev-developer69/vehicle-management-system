@@ -86,3 +86,52 @@ def home_layout():
             
         </style>
     """, unsafe_allow_html=True)
+
+
+def background():
+    st.markdown('''
+    <style>
+            .stApp{
+                background: #EB459E !important;
+            }
+            
+            #MainMenu, header {
+                visibility: hidden;
+            }
+                
+            .block-container{
+                padding-top:0.5rem !important;
+            }
+            
+            button[kind= 'primary']{
+                # background:#5865F2 !important;
+                border-radius: 1.5rem !important;
+                color: white !important;
+                padding: 5px 2px !important;
+                transition :transform 0.5s ease-in-out !important ;   
+            }    
+            
+            button[kind='secondary']{
+                background:blue !important;
+                border-radius: 1.5rem !important;
+                color: white !important;
+                padding: 5px 2px !important;
+                transition :transform 0.5s ease-in-out !important ;   
+            }
+            
+            button[kind='tertiary']{
+                background:pink !important;
+                border-radius: 1.5rem !important;
+                color: white !important;
+                padding: 5px 2px !important;
+                transition :transform 0.5s ease-in-out !important ;   
+            }
+                
+            button:hover[kind='primary']{
+                transform: scale(0.9)}
+            button:hover[kind='secondary']{
+                transform: scale(0.9)}
+            button:hover[kind='tertiary']{
+                transform: scale(0.9)}
+    </style>
+''',unsafe_allow_html=True)
