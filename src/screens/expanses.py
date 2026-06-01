@@ -2,7 +2,13 @@ import streamlit as st
 from src.ui.home_base_layout import home_layout
 
 def expenses():
-    st.header("Expenses")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.header("Expenses ",text_alignment='center')
+    with col2:
+        if st.button('Home page',type='primary', width='stretch', icon=':material/home:', shortcut='control+backspace'):
+            st.session_state['login_state']= None
+            st.rerun()
     home_layout()
 
     col1, col2= st.columns(2, gap='small')

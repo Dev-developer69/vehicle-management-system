@@ -1,6 +1,6 @@
 import streamlit as st
 from src.ui.excel_format import editable_grid, driver_salary, expenses
-from src.ui.home_base_layout import background,home_layout
+from src.ui.home_base_layout import background
 
 def page_0303():
     col1, col2 = st.columns(2)
