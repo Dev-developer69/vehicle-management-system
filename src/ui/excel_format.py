@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from datetime import date, timedelta
+from datetime import date
 
 
 def build_total_row(edited_df, numeric_cols, label_col="Driver Name"):

@@ -2,6 +2,12 @@ import streamlit as st
 from src.ui.excel_format import editable_grid, expenses, driver_salary
 from src.ui.home_base_layout import background
 
+from supabase import create_client
+
+SUPABASE_URL = st.secrets["SUPABASE_URL"]
+SUPABASE_KEY = st.secrets["SUPABASE_API_KEY"]
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
 
 def page_3131():
     col1, col2 = st.columns(2)
@@ -16,7 +22,7 @@ def page_3131():
             st.session_state['login_state']= 'vehicle_record'
             st.rerun()
         
-    editable_grid()
+    editable_grid(bus_number='3131')
 
 
 def expense_3131():

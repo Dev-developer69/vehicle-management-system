@@ -15,7 +15,7 @@ def page_0303():
             st.session_state['login_state']= 'vehicle_record'
             st.rerun()
 
-    editable_grid()
+    editable_grid(bus_number='0303')
 
 def expense_0303():
 
