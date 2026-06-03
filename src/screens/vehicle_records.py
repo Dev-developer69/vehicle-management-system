@@ -1,34 +1,35 @@
 import streamlit as st
 import pandas as pd
+from src.ui.home_base_layout import home_layout
 
 def vehicle_records():
     col1, col2 = st.columns(2)
     with col1:
         st.header("Select Vehicle ",text_alignment='center')
     with col2:
-        if st.button('Home page',type='secondary', width='stretch', icon=':material/home:', shortcut='control+backspace'):
+        if st.button('Home page',type='primary', width='stretch', icon=':material/home:', shortcut='control+backspace'):
             st.session_state['login_state']= None
             st.rerun()
-       
+    home_layout()
 
     col1,col2 = st.columns(2)
     with col1:
-        if st.button("7389",type='primary',key='btn1', width= 'stretch', icon=':material/bus_railway:', icon_position='right'):
+        if st.button("7389",type='secondary',key='btn1', width= 'stretch', icon=':material/bus_railway:', icon_position='right'):
             st.session_state['login_state']='page_7389'
             st.rerun()
     
     with col2:
-        if st.button("2350",type='primary',key='btn2', width= 'stretch', icon=':material/bus_railway:', icon_position='right'):
+        if st.button("2350",type='secondary',key='btn2', width= 'stretch', icon=':material/bus_railway:', icon_position='right'):
             st.session_state['login_state']='page_2350'
             st.rerun()
         
     with col1:
-        if st.button("0303",type='primary',key='btn3', width= 'stretch', icon=':material/bus_railway:', icon_position='right'):
+        if st.button("0303",type='tertiary',key='btn3', width= 'stretch', icon=':material/bus_railway:', icon_position='right'):
             st.session_state['login_state']='page_0303'
             st.rerun()
 
     with col2:
-        if st.button("3131",type='primary',key='btn4', width= 'stretch', icon=':material/bus_railway:', icon_position='right'):
+        if st.button("3131",type='tertiary',key='btn4', width= 'stretch', icon=':material/bus_railway:', icon_position='right'):
             st.session_state['login_state']='page_3131'
             st.rerun()
 

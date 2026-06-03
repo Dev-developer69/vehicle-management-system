@@ -1,106 +1,158 @@
-from supabase import create_client
-from datetime import date
-import streamlit as st
 import pandas as pd
-
-# Supabase client — apni keys daal
-SUPABASE_URL = st.secrets["SUPABASE_URL"]
-SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+from src.database.config import supabase
 
 
-def editable_grid(bus_number: str):
-    numeric_cols = ["Scheduled KM", "Actual KM", "Diesel", "Avg"]
+# ══════════════════════════════════════════════
+# VEHICLE RECORDS
+# ══════════════════════════════════════════════
 
-    # ✅ Supabase se fetch — us bus ke records
-    response = supabase.table("vehicle_records") \
+def save_vehicle_records(bus_number: str, df: pd.DataFrame) -> None:
+    rows = []
+    for _, row in df.iterrows():
+        rows.append({
+            "bus_number":   bus_number,
+            "date":         str(row["Date"]),
+            "driver_name":    row["Driver Name"],
+            "conductor_name": row["Conductor Name"],
+            "scheduled_km": row["Scheduled KM"],
+            "actual_km":    row["Actual KM"],
+            "diesel":       row["Diesel"],
+        })
+
+    edited_dates = df["Date"].astype(str).unique().tolist()
+    supabase.table("vehicle_records") \
+        .delete() \
+        .eq("bus_number", bus_number) \
+        .in_("date", edited_dates) \
+        .execute()
+    supabase.table("vehicle_records").insert(rows).execute()
+
+
+def get_vehicle_records(bus_number: str) -> pd.DataFrame:
+    res = supabase.table("vehicle_records") \
         .select("*") \
         .eq("bus_number", bus_number) \
-        .order("date", desc=False) \
+        .order("date", desc=True) \
         .execute()
 
-    rows = response.data
+    if not res.data:
+        return pd.DataFrame(columns=["Date", "Driver Name", "Conductor Name", "Scheduled KM", "Actual KM", "Diesel"])
 
-    if rows:
-        df = pd.DataFrame(rows)
-        df = df.rename(columns={
-            "date":           "Date",
-            "driver_name":    "Driver Name",
-            "conductor_name": "Conductor Name",
-            "scheduled_km":   "Scheduled KM",
-            "actual_km":      "Actual KM",
-            "diesel":         "Diesel",
-        })
-        df["Date"] = pd.to_datetime(df["Date"]).dt.date
-        df = df[["Date", "Driver Name", "Conductor Name", "Scheduled KM", "Actual KM", "Diesel"]]
-    else:
-        # Pehli baar — empty default
-        df = pd.DataFrame({
-            "Date":           [date.today()],
-            "Driver Name":    [""],
-            "Conductor Name": [""],
-            "Scheduled KM":   [0],
-            "Actual KM":      [0],
-            "Diesel":         [0],
-        })
+    df = pd.DataFrame(res.data)
+    df = df.rename(columns={
+        "date":         "Date",
+        "driver_name":    "Driver Name",
+        "conductor_name": "Conductor Name",
+        "scheduled_km": "Scheduled KM",
+        "actual_km":    "Actual KM",
+        "diesel":       "Diesel",
+    })
+    return df[["Date", "Driver Name", "Conductor Name", "Scheduled KM", "Actual KM", "Diesel"]]
 
-    st.markdown("### Vehicle Records 🚐")
 
-    # Session state fix — tab switch pe reset na ho
-    key = f"grid_{bus_number}"
-    if key not in st.session_state:
-        st.session_state[key] = df
+# ══════════════════════════════════════════════
+# DRIVER SALARY
+# ══════════════════════════════════════════════
 
-    edited_df = st.data_editor(
-        st.session_state[key],
-        num_rows="dynamic",
-        use_container_width=True,
-        hide_index=True,
-        key=f"editor_{bus_number}",
-        column_config={
-            "Date":           st.column_config.DateColumn("Date", default=date.today()),
-            "Driver Name":    st.column_config.TextColumn("Driver Name"),
-            "Conductor Name": st.column_config.TextColumn("Conductor Name"),
-            "Scheduled KM":   st.column_config.NumberColumn("Scheduled KM", min_value=0, default=466),
-            "Actual KM":      st.column_config.NumberColumn("Actual KM", min_value=0, default=0),
-            "Diesel":         st.column_config.NumberColumn("Diesel", min_value=0, default=0),
+def save_driver_salary(df: pd.DataFrame) -> None:
+    records = [
+        {
+            "driver_name":   row["Driver Name"],
+            "date":        str(row["Date"]),
+            "salary":      float(row["Salary"] or 0),
+            "transaction": row["Transaction"] or "",
         }
-    )
-    st.session_state[key] = edited_df
+        for _, row in df.iterrows()
+    ]
 
-    edited_df["Avg"] = (edited_df["Actual KM"] / edited_df["Diesel"].replace(0, 1)).round(2)
+    edited_dates = df["Date"].astype(str).unique().tolist()
+    supabase.table("driver_salary") \
+        .delete() \
+        .in_("date", edited_dates) \
+        .execute()
+    supabase.table("driver_salary").insert(records).execute()
 
-    total_row  = build_total_row(edited_df, numeric_cols, label_col="Driver Name")
-    display_df = pd.concat([edited_df, total_row], ignore_index=True)
-    st.dataframe(display_df, use_container_width=True, hide_index=True)
 
-    if st.button("💾 Save Changes", key=f"save_{bus_number}"):
-        cleaned_df = edited_df.dropna(subset=["Driver Name"]).copy()
-        cleaned_df["Avg"] = (cleaned_df["Actual KM"] / cleaned_df["Diesel"].replace(0, 1)).round(2)
+def get_driver_salary() -> pd.DataFrame:
+    res = supabase.table("driver_salary") \
+        .select("*") \
+        .order("date", desc=True) \
+        .execute()
 
-        # ✅ Supabase mein save
-        records = []
-        for _, row in cleaned_df.iterrows():
-            records.append({
-                "bus_number":     bus_number,
-                "date":           str(row["Date"]),
-                "driver_name":    row["Driver Name"],
-                "conductor_name": row["Conductor Name"],
-                "scheduled_km":   float(row["Scheduled KM"]),
-                "actual_km":      float(row["Actual KM"]),
-                "diesel":         float(row["Diesel"]),
-            })
+    if not res.data:
+        return pd.DataFrame(columns=["Date", "Driver Name", "Salary", "Transaction"])
 
-        # Pehle us bus ke aaj ke records delete karo, phir insert
-        supabase.table("vehicle_records") \
-            .delete() \
-            .eq("bus_number", bus_number) \
-            .execute()
+    df = pd.DataFrame(res.data)
+    df = df.rename(columns={
+        "date":        "Date",
+        "driver_name":   "Driver Name",
+        "salary":      "Salary",
+        "transaction": "Transaction",
+    })
+    return df[["Date", "Driver Name", "Salary", "Transaction"]]
 
-        supabase.table("vehicle_records") \
-            .insert(records) \
-            .execute()
 
-        st.success("✅ Saved to database!")
-        st.session_state.pop(key, None)  # cache clear — fresh fetch hoga
-        st.rerun()
+# ══════════════════════════════════════════════
+# VEHICLE EXPENSES
+# ══════════════════════════════════════════════
+
+def save_vehicle_expenses(bus_number: str, df: pd.DataFrame) -> None:
+    records = [
+        {
+            "bus_number":  bus_number,
+            "date":        str(row["Date"]),
+            "category":    row["Category"].strip(),
+            "amount":      float(row["Amount"] or 0),
+            "description": row["Description"] or "",
+        }
+        for _, row in df.iterrows()
+    ]
+
+    edited_dates = df["Date"].astype(str).unique().tolist()
+    supabase.table("vehicle_expenses") \
+        .delete() \
+        .eq("bus_number", bus_number) \
+        .in_("date", edited_dates) \
+        .execute()
+    supabase.table("vehicle_expenses").insert(records).execute()
+
+
+def get_vehicle_expenses(bus_number: str) -> pd.DataFrame:
+    res = supabase.table("vehicle_expenses") \
+        .select("*") \
+        .eq("bus_number", bus_number) \
+        .order("date", desc=True) \
+        .execute()
+
+    if not res.data:
+        return pd.DataFrame(columns=["Date", "Category", "Amount", "Description"])
+
+    df = pd.DataFrame(res.data)
+    df = df.rename(columns={
+        "date":        "Date",
+        "category":    "Category",
+        "amount":      "Amount",
+        "description": "Description",
+    })
+    return df[["Date", "Category", "Amount", "Description"]]
+
+
+# salary check
+
+def get_salary_check(from_date: str = None, to_date: str = None) -> pd.DataFrame:
+    query = supabase.table("salary_check").select("*")
+    
+    res = query.execute()
+    
+    if not res.data:
+        return pd.DataFrame(columns=["Sr No", "Driver Name", "Conductor Name", "Duties", "Salary Given"])
+    
+    df = pd.DataFrame(res.data)
+    df = df.rename(columns={
+        "driver_id":      "Sr No",
+        "driver_name":    "Driver Name",
+        "conductor_name": "Conductor Name",
+        "duties":         "Duties",
+        "total_salary":   "Salary Given",
+    })
+    return df[["Sr No", "Driver Name", "Conductor Name", "Duties", "Salary Given"]] 
