@@ -3,5 +3,5 @@ numpy
 
 streamlit
 
-supabase
+supabase==2.15.1
 bcrypt
