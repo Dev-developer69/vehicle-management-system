@@ -45,11 +45,7 @@ def home_layout():
 
             #MainMenu, header {
                 visibility: hidden;
-            }
-
-            * {
-                overflow: hidden;
-            }
+    }
 
             .block-container {
                 padding-top: 2.5rem !important;
