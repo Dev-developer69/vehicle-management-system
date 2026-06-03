@@ -10,6 +10,18 @@ def driver_records():
         st.rerun()
     home_layout()
     salary_check_view()
+    st.markdown("""
+    <div style='
+        position: fixed;
+        bottom: 20px;
+        width: 100%;
+        text-align: center;
+        color: white;
+        font-size: 0.9rem;
+    '>
+        <p>Created with ❤️ by Dev-developer69</p>
+    </div>
+""", unsafe_allow_html=True)
 
 
 def salary_check_view():
