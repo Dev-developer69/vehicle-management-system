@@ -107,11 +107,14 @@ def home_layout():
                 color: white !important;
                 padding: 5px 2px !important;
                 transition: transform 0.3s ease-in-out !important;
-}
+            }
 
             button[kind="tertiary"]:hover {
                 background: #48CAE4 !important;
                 transform: scale(0.95) !important;
+            }
+            [data-testid="stDecoration"] {
+            display: none !important;
             }
             
         </style>
