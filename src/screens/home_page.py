@@ -22,5 +22,10 @@ def home_page():
             st.session_state['login_state']='expenses'
             st.rerun()
 
+    st.markdown("""
+        <div style='display:flex; align-item: center; justify-content: center;'>
+                <p>Created with ❤️ by Dev-developer69 </p>
+        </div>   
+""",unsafe_allow_html=True)
 
 
