@@ -110,7 +110,6 @@ def save_vehicle_expenses(bus_number: str, df: pd.DataFrame) -> None:
 
     edited_dates = df["Date"].astype(str).unique().tolist()
     supabase.table("vehicle_expenses") \
-        .delete() \
         .eq("bus_number", bus_number) \
         .in_("date", edited_dates) \
         .execute()
