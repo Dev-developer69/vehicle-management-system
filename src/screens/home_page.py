@@ -23,9 +23,16 @@ def home_page():
             st.rerun()
 
     st.markdown("""
-        <div style='display:flex; align-item: center; justify-content: center;'>
-                <p>Created with ❤️ by Dev-developer69 </p>
-        </div>   
-""",unsafe_allow_html=True)
+    <div style='
+        position: fixed;
+        bottom: 20px;
+        width: 100%;
+        text-align: center;
+        color: white;
+        font-size: 0.9rem;
+    '>
+        <p>Created with ❤️ by Dev-developer69</p>
+    </div>
+""", unsafe_allow_html=True)
 
 
