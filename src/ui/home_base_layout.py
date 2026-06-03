@@ -120,20 +120,10 @@ def home_layout():
 def background():
     st.markdown('''
     <style>
-            def background():
-    st.markdown('''
-    <style>
             .stApp {
                 background: #12122A !important;
                 overflow-y: auto !important;
             }
-
-            .block-container {
-                padding-top: 0.5rem !important;
-                overflow-y: auto !important;
-                max-height: none !important;
-            }
-        
 
             #MainMenu, header {
                 visibility: hidden;
@@ -141,23 +131,23 @@ def background():
 
             .block-container {
                 padding-top: 0.5rem !important;
+                overflow-y: auto !important;
+                max-height: none !important;
             }
 
-            /* Primary buttons — purple */
             button[kind="primary"] {
-                background: #9B59B6  !important;
+                background: #9B59B6 !important;
                 border-radius: 1.5rem !important;
                 color: white !important;
                 padding: 5px 2px !important;
                 transition: transform 0.3s ease-in-out !important;
             }
 
-            button[kind= "primary"]:hover {
+            button[kind="primary"]:hover {
                 background: #9B59B6 !important;
                 transform: scale(0.95) !important;
             }
 
-            /* Secondary buttons — indigo blue */
             button[kind="secondary"] {
                 background: #5865F2 !important;
                 border-radius: 1.5rem !important;
@@ -173,13 +163,12 @@ def background():
 
             button[kind="tertiary"] {
                 background: #2D6A4F !important;
-                background-color: #2D6A4F !important;
                 border: none !important;
                 border-radius: 1.5rem !important;
                 color: white !important;
                 padding: 5px 2px !important;
                 transition: transform 0.3s ease-in-out !important;
-}
+            }
 
             button[kind="tertiary"]:hover {
                 background: #48CAE4 !important;
@@ -187,6 +176,5 @@ def background():
             }
     </style>
 ''', unsafe_allow_html=True)
-    
 
 
