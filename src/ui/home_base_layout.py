@@ -8,8 +8,7 @@ def get_base64_image(image_path):
     return data
 
 def image_backgroung():
-    with open(r"E:\my projcts\vehicle maintanance system\cv-banner.jpg", "rb") as f:
-        img_data = base64.b64encode(f.read()).decode()
+    img_data = get_base64_image("cv-banner.jpg")
 
     st.markdown(f"""
     <style>
