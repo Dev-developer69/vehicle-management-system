@@ -120,9 +120,20 @@ def home_layout():
 def background():
     st.markdown('''
     <style>
+            def background():
+    st.markdown('''
+    <style>
             .stApp {
                 background: #12122A !important;
+                overflow-y: auto !important;
             }
+
+            .block-container {
+                padding-top: 0.5rem !important;
+                overflow-y: auto !important;
+                max-height: none !important;
+            }
+        
 
             #MainMenu, header {
                 visibility: hidden;
