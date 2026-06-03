@@ -1,6 +1,5 @@
-python
 pandas
 numpy
-supabase
+streamlit
 supabase
 bcrypt
