@@ -1,10 +1,13 @@
 import streamlit as st
 from src.ui.home_base_layout import home_layout,image_backgroung
+from src.database.auth import logout
+
 
 def home_page():
     st.header("Welcome to Vehicle Records ")
     home_layout()
     image_backgroung()
+    logout()
     st.text('Choose one')
     col1,col2 ,col3= st.columns(3, gap='small')
     with col1:
