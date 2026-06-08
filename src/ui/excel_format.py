@@ -357,13 +357,45 @@ def expenses(bus_number: str = ""):
         st.session_state[fetch_key] = get_vehicle_expenses(bus_number)
 
     fetched_df = st.session_state[fetch_key]
+
+    col_r, col_ref = st.columns([5, 1])
+    with col_ref:
+        if st.button("🔄", key=f"ref_exp_{bus_number}"):
+            st.session_state.pop(fetch_key, None)
+            st.rerun()
+
     if not fetched_df.empty:
-        total_row = build_total_row(fetched_df, ["Amount"], label_col="Category")
-        st.dataframe(
-            pd.concat([fetched_df, total_row], ignore_index=True),
+        # Editable table — id hidden
+        edited = st.data_editor(
+            fetched_df,
             use_container_width=True,
             hide_index=True,
+            num_rows="dynamic",
+            key=f"edit_exp_{bus_number}",
+            column_config={
+                "id":          st.column_config.TextColumn("id", disabled=True),
+                "Date":        st.column_config.DateColumn("Date"),
+                "Category":    st.column_config.TextColumn("Category"),
+                "Amount":      st.column_config.NumberColumn("Amount", min_value=0),
+                "Description": st.column_config.TextColumn("Description"),
+            }
         )
+
+        if st.button("💾 Update Expenses", key=f"update_exp_{bus_number}"):
+            from src.database.db import update_vehicle_expense, delete_vehicle_expense
+            editor_state = st.session_state.get(f"edit_exp_{bus_number}", {})
+
+            for row_idx, changes in editor_state.get("edited_rows", {}).items():
+                expense_id = fetched_df.iloc[row_idx]["id"]
+                update_vehicle_expense(expense_id, changes)
+
+            for row_idx in sorted(editor_state.get("deleted_rows", []), reverse=True):
+                expense_id = fetched_df.iloc[row_idx]["id"]
+                delete_vehicle_expense(expense_id)
+
+            st.success("✅ Updated!")
+            st.session_state.pop(fetch_key, None)
+            st.rerun()
     else:
         st.info("No records found.")
 
