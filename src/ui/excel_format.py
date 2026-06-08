@@ -375,7 +375,7 @@ def expenses(bus_number: str = ""):
             num_rows="dynamic",
             key=f"edit_exp_{bus_number}",
             column_config={
-                "id":          st.column_config.TextColumn("id", disabled=True),
+                "id":           None,
                 "Date":        st.column_config.TextColumn("Date"),  # DateColumn → TextColumn
                 "Category":    st.column_config.TextColumn("Category"),
                 "Amount":      st.column_config.NumberColumn("Amount", min_value=0),
