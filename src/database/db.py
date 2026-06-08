@@ -65,13 +65,6 @@ def save_driver_salary(df: pd.DataFrame) -> None:
         }
         for _, row in df.iterrows()
     ]
-
-    edited_dates = df["Date"].astype(str).unique().tolist()
-    for d in edited_dates:
-        supabase.table("driver_salary") \
-            .delete() \
-            .eq("date", d) \
-            .execute()
     supabase.table("driver_salary").insert(records).execute()
 
 
@@ -82,7 +75,7 @@ def get_driver_salary() -> pd.DataFrame:
         .execute()
 
     if not res.data:
-        return pd.DataFrame(columns=["Date", "Driver Name", "Salary", "Transaction"])
+        return pd.DataFrame(columns=["id", "Date", "Driver Name", "Salary", "Transaction"])
 
     df = pd.DataFrame(res.data)
     df = df.rename(columns={
@@ -91,7 +84,28 @@ def get_driver_salary() -> pd.DataFrame:
         "salary":      "Salary",
         "transaction": "Transaction",
     })
-    return df[["Date", "Driver Name", "Salary", "Transaction"]]
+    return df[["id", "Date", "Driver Name", "Salary", "Transaction"]]
+
+
+def update_driver_salary(record_id: str, updates: dict) -> None:
+    rename = {
+        "Date":        "date",
+        "Driver Name": "driver_name",
+        "Salary":      "salary",
+        "Transaction": "transaction",
+    }
+    db_updates = {rename.get(k, k): v for k, v in updates.items()}
+    supabase.table("driver_salary") \
+        .update(db_updates) \
+        .eq("id", record_id) \
+        .execute()
+
+
+def delete_driver_salary(record_id: str) -> None:
+    supabase.table("driver_salary") \
+        .delete() \
+        .eq("id", record_id) \
+        .execute()
 
 
 # ══════════════════════════════════════════════
@@ -133,7 +147,6 @@ def get_vehicle_expenses(bus_number: str) -> pd.DataFrame:
 
 
 def update_vehicle_expense(expense_id: str, updates: dict) -> None:
-    # Rename keys to DB column names if needed
     rename = {
         "Date":        "date",
         "Category":    "category",
