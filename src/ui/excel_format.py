@@ -1,3 +1,4 @@
+import calendar
 import streamlit as st
 import pandas as pd
 from datetime import date
@@ -10,7 +11,7 @@ from src.database.db import (
     get_driver_salary,
     get_vehicle_expenses,
     get_salary_check,
-    update_vehicle_expense,  
+    update_vehicle_expense,
     delete_vehicle_expense,
 )
 
@@ -163,12 +164,25 @@ def editable_grid(bus_number: str):
 
     col1, col2, col3 = st.columns([2, 2, 1])
     with col1:
-        from_date = st.date_input("From", value=None, key=f"from_{bus_number}", format="YYYY-MM-DD")
+        month = st.selectbox(
+            "Month",
+            options=list(range(1, 13)),
+            index=date.today().month - 1,
+            format_func=lambda x: date(2000, x, 1).strftime("%B"),
+            key=f"month_{bus_number}",
+        )
     with col2:
-        to_date = st.date_input("To", value=None, key=f"to_{bus_number}", format="YYYY-MM-DD")
+        default_half = "1-15" if date.today().day <= 15 else "16-31"
+        half = st.radio(
+            "Period",
+            ["1-15", "16-31"],
+            index=0 if default_half == "1-15" else 1,
+            horizontal=True,
+            key=f"half_{bus_number}",
+        )
     with col3:
         st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("🔄 Load", key=f"refresh_{bus_number}",width='stretch', type='tertiary'):
+        if st.button("🔄 Load", key=f"refresh_{bus_number}", width='stretch', type='tertiary'):
             st.session_state.pop(fetch_key, None)
             st.rerun()
 
@@ -176,23 +190,26 @@ def editable_grid(bus_number: str):
         display_df = fetched_df.copy()
         display_df["Date"] = pd.to_datetime(display_df["Date"])
 
-        if from_date is not None:
-            display_df = display_df[display_df["Date"] >= pd.Timestamp(from_date)]
-        if to_date is not None:
-            display_df = display_df[display_df["Date"] <= pd.Timestamp(to_date)]
+        year = date.today().year
+        if half == "1-15":
+            start = pd.Timestamp(year, month, 1)
+            end   = pd.Timestamp(year, month, 15)
+        else:
+            start    = pd.Timestamp(year, month, 16)
+            last_day = calendar.monthrange(year, month)[1]
+            end      = pd.Timestamp(year, month, last_day)
 
-        if from_date is None and to_date is None:
-            display_df = display_df.head(15)
+        display_df = display_df[
+            (display_df["Date"] >= start) &
+            (display_df["Date"] <= end)
+        ]
 
         display_df["Date"] = display_df["Date"].dt.strftime("%Y-%m-%d")
-        display_df["Avg"] = (
+        display_df["Avg"]  = (
             display_df["Actual KM"] / display_df["Diesel"].replace(0, float("nan"))
         ).round(2)
 
-        # Data alag, total alag
         st.dataframe(display_df, use_container_width=True, hide_index=True)
-
-        # Total row hamesha neeche fixed
         total_row = build_total_row(display_df, numeric_cols, label_col="Driver Name")
         st.dataframe(total_row, use_container_width=True, hide_index=True)
     else:
@@ -293,11 +310,8 @@ def driver_salary(bus_number: str = ""):
     fetched_df = st.session_state[fetch_key]
     if not fetched_df.empty:
         total_row = build_total_row(fetched_df, ["Salary"], label_col="Driver Name")
-        st.dataframe(
-            pd.concat([fetched_df, total_row], ignore_index=True),
-            use_container_width=True,
-            hide_index=True,
-        )
+        st.dataframe(fetched_df, use_container_width=True, hide_index=True)
+        st.dataframe(total_row, use_container_width=True, hide_index=True)
     else:
         st.info("No records found.")
 
@@ -367,7 +381,6 @@ def expenses(bus_number: str = ""):
             st.rerun()
 
     if not fetched_df.empty:
-        # Editable table — id hidden
         edited = st.data_editor(
             fetched_df,
             use_container_width=True,
@@ -375,8 +388,8 @@ def expenses(bus_number: str = ""):
             num_rows="dynamic",
             key=f"edit_exp_{bus_number}",
             column_config={
-                "id":           None,
-                "Date":        st.column_config.TextColumn("Date"),  # DateColumn → TextColumn
+                "id":          None,
+                "Date":        st.column_config.TextColumn("Date"),
                 "Category":    st.column_config.TextColumn("Category"),
                 "Amount":      st.column_config.NumberColumn("Amount", min_value=0),
                 "Description": st.column_config.TextColumn("Description"),
@@ -384,7 +397,6 @@ def expenses(bus_number: str = ""):
         )
 
         if st.button("💾 Update Expenses", key=f"update_exp_{bus_number}"):
-            from src.database.db import update_vehicle_expense, delete_vehicle_expense
             editor_state = st.session_state.get(f"edit_exp_{bus_number}", {})
 
             for row_idx, changes in editor_state.get("edited_rows", {}).items():
