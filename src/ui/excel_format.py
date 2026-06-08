@@ -13,6 +13,8 @@ from src.database.db import (
     get_salary_check,
     update_vehicle_expense,
     delete_vehicle_expense,
+    update_driver_salary,
+    delete_driver_salary,
 )
 
 
@@ -220,11 +222,9 @@ def editable_grid(bus_number: str):
 # 2. DRIVER SALARY
 # ──────────────────────────────────────────────
 def driver_salary(bus_number: str = ""):
-    key         = f"driver_salary_{bus_number}"
-    ed_key      = f"editor_salary_{bus_number}"
-    fetch_key   = f"fetched_salary_{bus_number}"
-    confirm_key = f"show_confirm_salary_{bus_number}"
-    pending_key = f"pending_df_salary_{bus_number}"
+    key       = f"driver_salary_{bus_number}"
+    ed_key    = f"editor_salary_{bus_number}"
+    fetch_key = f"fetched_salary_{bus_number}"
 
     if key not in st.session_state:
         st.session_state[key] = pd.DataFrame({
@@ -253,54 +253,21 @@ def driver_salary(bus_number: str = ""):
     editor_state = st.session_state.get(ed_key, {})
     edited_df    = _apply_editor_state(st.session_state[key], editor_state)
 
-    # ── Save / Confirm buttons ──
-    if st.session_state.get(confirm_key):
-        st.warning("⚠️ Duplicate dates exist. Update karna hai?")
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("✅ Yes, Update", key=f"yes_salary_{bus_number}"):
-                pending = st.session_state.get(pending_key)
-                save_driver_salary(pending)
-                st.success("✅ Updated!")
-                st.session_state.pop(key, None)
-                st.session_state.pop(fetch_key, None)
-                st.session_state.pop(confirm_key, None)
-                st.session_state.pop(pending_key, None)
-                st.rerun()
-        with col2:
-            if st.button("❌ Cancel", key=f"no_salary_{bus_number}"):
-                st.session_state.pop(confirm_key, None)
-                st.session_state.pop(pending_key, None)
-                st.rerun()
-    else:
-        if st.button("💾 Save Changes", key=f"save_salary_{bus_number}"):
-            cleaned_df = edited_df[
-                edited_df["Driver Name"].notna() &
-                (edited_df["Driver Name"].astype(str).str.strip() != "")
-            ].copy()
+    if st.button("💾 Save Changes", key=f"save_salary_{bus_number}"):
+        cleaned_df = edited_df[
+            edited_df["Driver Name"].notna() &
+            (edited_df["Driver Name"].astype(str).str.strip() != "")
+        ].copy()
 
-            if cleaned_df.empty:
-                st.warning("⚠️ No valid rows to save.")
-                return
+        if cleaned_df.empty:
+            st.warning("⚠️ No valid rows to save.")
+            return
 
-            if fetch_key not in st.session_state:
-                st.session_state[fetch_key] = get_driver_salary()
-            fetched_df = st.session_state[fetch_key]
-
-            new_dates       = set(cleaned_df["Date"].astype(str).tolist())
-            existing_dates  = set(fetched_df["Date"].astype(str).tolist()) if not fetched_df.empty else set()
-            duplicate_dates = new_dates & existing_dates
-
-            if duplicate_dates:
-                st.session_state[pending_key] = cleaned_df
-                st.session_state[confirm_key] = True
-                st.rerun()
-            else:
-                save_driver_salary(cleaned_df)
-                st.success("✅ Saved!")
-                st.session_state.pop(key, None)
-                st.session_state.pop(fetch_key, None)
-                st.rerun()
+        save_driver_salary(cleaned_df)
+        st.success("✅ Saved!")
+        st.session_state.pop(key, None)
+        st.session_state.pop(fetch_key, None)
+        st.rerun()
 
     # ── Saved Records display ──
     st.markdown("### Saved Salary Records 📋")
@@ -308,9 +275,45 @@ def driver_salary(bus_number: str = ""):
         st.session_state[fetch_key] = get_driver_salary()
 
     fetched_df = st.session_state[fetch_key]
+
+    col_r, col_ref = st.columns([5, 1])
+    with col_ref:
+        if st.button("🔄 Refresh", key=f"ref_sal_{bus_number}"):
+            st.session_state.pop(fetch_key, None)
+            st.rerun()
+
     if not fetched_df.empty:
+        st.data_editor(
+            fetched_df,
+            use_container_width=True,
+            hide_index=True,
+            num_rows="dynamic",
+            key=f"edit_sal_{bus_number}",
+            column_config={
+                "id":          None,
+                "Date":        st.column_config.TextColumn("Date"),
+                "Driver Name": st.column_config.TextColumn("Driver Name"),
+                "Salary":      st.column_config.NumberColumn("Salary", min_value=0),
+                "Transaction": st.column_config.TextColumn("Transaction"),
+            }
+        )
+
+        if st.button("💾 Update Salary", key=f"update_sal_{bus_number}"):
+            sal_editor_state = st.session_state.get(f"edit_sal_{bus_number}", {})
+
+            for row_idx, changes in sal_editor_state.get("edited_rows", {}).items():
+                record_id = fetched_df.iloc[row_idx]["id"]
+                update_driver_salary(record_id, changes)
+
+            for row_idx in sorted(sal_editor_state.get("deleted_rows", []), reverse=True):
+                record_id = fetched_df.iloc[row_idx]["id"]
+                delete_driver_salary(record_id)
+
+            st.success("✅ Updated!")
+            st.session_state.pop(fetch_key, None)
+            st.rerun()
+
         total_row = build_total_row(fetched_df, ["Salary"], label_col="Driver Name")
-        st.dataframe(fetched_df, use_container_width=True, hide_index=True)
         st.dataframe(total_row, use_container_width=True, hide_index=True)
     else:
         st.info("No records found.")
@@ -376,12 +379,12 @@ def expenses(bus_number: str = ""):
 
     col_r, col_ref = st.columns([5, 1])
     with col_ref:
-        if st.button("🔄", key=f"ref_exp_{bus_number}"):
+        if st.button("🔄 Refresh", key=f"ref_exp_{bus_number}"):
             st.session_state.pop(fetch_key, None)
             st.rerun()
 
     if not fetched_df.empty:
-        edited = st.data_editor(
+        st.data_editor(
             fetched_df,
             use_container_width=True,
             hide_index=True,
@@ -397,13 +400,13 @@ def expenses(bus_number: str = ""):
         )
 
         if st.button("💾 Update Expenses", key=f"update_exp_{bus_number}"):
-            editor_state = st.session_state.get(f"edit_exp_{bus_number}", {})
+            exp_editor_state = st.session_state.get(f"edit_exp_{bus_number}", {})
 
-            for row_idx, changes in editor_state.get("edited_rows", {}).items():
+            for row_idx, changes in exp_editor_state.get("edited_rows", {}).items():
                 expense_id = fetched_df.iloc[row_idx]["id"]
                 update_vehicle_expense(expense_id, changes)
 
-            for row_idx in sorted(editor_state.get("deleted_rows", []), reverse=True):
+            for row_idx in sorted(exp_editor_state.get("deleted_rows", []), reverse=True):
                 expense_id = fetched_df.iloc[row_idx]["id"]
                 delete_vehicle_expense(expense_id)
 
