@@ -10,6 +10,8 @@ from src.database.db import (
     get_driver_salary,
     get_vehicle_expenses,
     get_salary_check,
+    update_vehicle_expense,  
+    delete_vehicle_expense,
 )
 
 
