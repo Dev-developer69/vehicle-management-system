@@ -376,7 +376,7 @@ def expenses(bus_number: str = ""):
             key=f"edit_exp_{bus_number}",
             column_config={
                 "id":          st.column_config.TextColumn("id", disabled=True),
-                "Date":        st.column_config.DateColumn("Date"),
+                "Date":        st.column_config.TextColumn("Date"),  # DateColumn → TextColumn
                 "Category":    st.column_config.TextColumn("Category"),
                 "Amount":      st.column_config.NumberColumn("Amount", min_value=0),
                 "Description": st.column_config.TextColumn("Description"),
