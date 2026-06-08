@@ -15,12 +15,12 @@ def main():
     if 'login_state' not in st.session_state:
         st.session_state['login_state'] = None
 
-    # ✅ Login check — agar logged in nahi toh sirf login page dikhao
+    #  Login check — agar logged in nahi toh sirf login page dikhao
     if not is_logged_in():
         login_page()
         return
 
-    # ✅ Logged in — logout button sidebar mein
+    #  Logged in — logout button sidebar mein
     logout()
 
     match st.session_state['login_state']:
