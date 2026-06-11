@@ -1,7 +1,9 @@
 import calendar
+import io
 import streamlit as st
 import pandas as pd
 from datetime import date
+from fpdf import FPDF
 
 from src.database.db import (
     save_vehicle_records,
@@ -67,10 +69,58 @@ def build_total_row(df: pd.DataFrame, numeric_cols: list, label_col: str = "Driv
 
 
 # ──────────────────────────────────────────────
+# HELPER: Generate PDF from DataFrame
+# ──────────────────────────────────────────────
+def _generate_pdf(df: pd.DataFrame, total_row: pd.DataFrame, bus_number: str, month: int, half: str) -> bytes:
+    pdf = FPDF(orientation="L", unit="mm", format="A4")
+    pdf.add_page()
+    pdf.set_auto_page_break(auto=True, margin=10)
+
+    # Title
+    pdf.set_font("Helvetica", "B", 14)
+    month_name = date(2000, month, 1).strftime("%B")
+    pdf.cell(0, 10, f"Vehicle Records - {bus_number}  |  {month_name} ({half})", ln=True, align="C")
+    pdf.ln(3)
+
+    cols = list(df.columns)
+    page_w = pdf.w - 2 * pdf.l_margin
+    col_w  = page_w / len(cols)
+
+    # Header row
+    pdf.set_fill_color(52, 73, 94)
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_font("Helvetica", "B", 8)
+    for col in cols:
+        pdf.cell(col_w, 8, str(col), border=1, align="C", fill=True)
+    pdf.ln()
+
+    # Data rows
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_font("Helvetica", "", 8)
+    for i, row in df.iterrows():
+        fill = i % 2 == 0
+        pdf.set_fill_color(245, 245, 245) if fill else pdf.set_fill_color(255, 255, 255)
+        for col in cols:
+            pdf.cell(col_w, 7, str(row[col]) if pd.notna(row[col]) else "", border=1, align="C", fill=fill)
+        pdf.ln()
+
+    # Total row
+    pdf.set_fill_color(230, 240, 255)
+    pdf.set_font("Helvetica", "B", 8)
+    for col in cols:
+        val = total_row.iloc[0][col]
+        pdf.cell(col_w, 8, str(val), border=1, align="C", fill=True)
+    pdf.ln()
+
+    return bytes(pdf.output())
+
+
+# ──────────────────────────────────────────────
 # 1. VEHICLE RECORDS
 # ──────────────────────────────────────────────
 def editable_grid(bus_number: str):
-    numeric_cols = ["Scheduled KM", "Actual KM", "Diesel", "Avg"]
+    # ← Added "Income" to numeric_cols
+    numeric_cols = ["Scheduled KM", "Actual KM", "Diesel", "Avg", "Income"]
     key         = f"grid_{bus_number}"
     ed_key      = f"editor_{bus_number}"
     fetch_key   = f"fetched_{bus_number}"
@@ -84,7 +134,8 @@ def editable_grid(bus_number: str):
             "Conductor Name": [None],
             "Scheduled KM":   [466],
             "Actual KM":      [0],
-            "Diesel":         [0],
+            "Diesel":         [0.00],   
+            "Income":         [0],     
         })
 
     st.markdown(f"### Vehicle Records {bus_number} 🚐")
@@ -101,7 +152,8 @@ def editable_grid(bus_number: str):
             "Conductor Name": st.column_config.TextColumn("Conductor Name"),
             "Scheduled KM":   st.column_config.NumberColumn("Scheduled KM", min_value=0, default=466),
             "Actual KM":      st.column_config.NumberColumn("Actual KM", min_value=0, default=0),
-            "Diesel":         st.column_config.NumberColumn("Diesel", min_value=0, default=0),
+            "Diesel":         st.column_config.NumberColumn("Diesel", min_value=0.0, default=0.0, step=0.1, format="%.2f"),  
+            "Income":         st.column_config.NumberColumn("Income", min_value=0, default=0), 
         },
     )
 
@@ -110,7 +162,7 @@ def editable_grid(bus_number: str):
 
     # ── Save / Confirm buttons ──
     if st.session_state.get(confirm_key):
-        st.warning("⚠️ Duplicate dates exist. Update karna hai?")
+        st.warning("⚠️ Duplicate dates exist. Wanna update?")
         col1, col2 = st.columns(2)
         with col1:
             if st.button("✅ Yes, Update", key=f"yes_{bus_number}"):
@@ -214,6 +266,17 @@ def editable_grid(bus_number: str):
         st.dataframe(display_df, use_container_width=True, hide_index=True)
         total_row = build_total_row(display_df, numeric_cols, label_col="Driver Name")
         st.dataframe(total_row, use_container_width=True, hide_index=True)
+
+        # ── PDF Download ──
+        pdf_bytes = _generate_pdf(display_df, total_row, bus_number, month, half)
+        month_name = date(2000, month, 1).strftime("%B")
+        st.download_button(
+            label="📥 Download PDF",
+            data=pdf_bytes,
+            file_name=f"vehicle_records_{bus_number}_{month_name}_{half.replace('-','_')}.pdf",
+            mime="application/pdf",
+            key=f"pdf_{bus_number}",
+        )
     else:
         st.info("No records found.")
 
