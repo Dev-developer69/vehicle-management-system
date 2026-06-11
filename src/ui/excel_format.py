@@ -1,5 +1,4 @@
 import calendar
-import io
 import streamlit as st
 import pandas as pd
 from datetime import date
@@ -59,10 +58,10 @@ def build_total_row(df: pd.DataFrame, numeric_cols: list, label_col: str = "Driv
         if col == label_col:
             total[col] = "TOTAL"
         elif col == "Avg":
-            valid = df["Avg"].dropna()
+            valid = pd.to_numeric(df["Avg"], errors="coerce").dropna()
             total[col] = round(float(valid.mean()), 2) if not valid.empty else 0.0
         elif col in numeric_cols:
-            total[col] = round(float(df[col].sum()), 3)
+            total[col] = round(float(pd.to_numeric(df[col], errors="coerce").sum()), 3)
         else:
             total[col] = ""
     return pd.DataFrame({k: [v] for k, v in total.items()})
@@ -119,7 +118,6 @@ def _generate_pdf(df: pd.DataFrame, total_row: pd.DataFrame, bus_number: str, mo
 # 1. VEHICLE RECORDS
 # ──────────────────────────────────────────────
 def editable_grid(bus_number: str):
-    # ← Added "Income" to numeric_cols
     numeric_cols = ["Scheduled KM", "Actual KM", "Diesel", "Avg", "Income"]
     key         = f"grid_{bus_number}"
     ed_key      = f"editor_{bus_number}"
@@ -134,8 +132,8 @@ def editable_grid(bus_number: str):
             "Conductor Name": [None],
             "Scheduled KM":   [466],
             "Actual KM":      [0],
-            "Diesel":         [0.00],   
-            "Income":         [0],     
+            "Diesel":         [0.00],
+            "Income":         [0],
         })
 
     st.markdown(f"### Vehicle Records {bus_number} 🚐")
@@ -152,8 +150,8 @@ def editable_grid(bus_number: str):
             "Conductor Name": st.column_config.TextColumn("Conductor Name"),
             "Scheduled KM":   st.column_config.NumberColumn("Scheduled KM", min_value=0, default=466),
             "Actual KM":      st.column_config.NumberColumn("Actual KM", min_value=0, default=0),
-            "Diesel":         st.column_config.NumberColumn("Diesel", min_value=0.0, default=0.0, step=0.1, format="%.2f"),  
-            "Income":         st.column_config.NumberColumn("Income", min_value=0, default=0), 
+            "Diesel":         st.column_config.NumberColumn("Diesel", min_value=0.0, default=0.0, step=0.1, format="%.2f"),
+            "Income":         st.column_config.NumberColumn("Income", min_value=0, default=0),
         },
     )
 
@@ -180,7 +178,7 @@ def editable_grid(bus_number: str):
                 st.session_state.pop(pending_key, None)
                 st.rerun()
     else:
-        if st.button("💾 Save Changes", key=f"save_{bus_number}", width='stretch', type='tertiary'):
+        if st.button("💾 Save Changes", key=f"save_{bus_number}", use_container_width=True):
             cleaned_df = edited_df[
                 edited_df["Driver Name"].notna() &
                 (edited_df["Driver Name"].astype(str).str.strip() != "")
@@ -194,8 +192,8 @@ def editable_grid(bus_number: str):
                 st.session_state[fetch_key] = get_vehicle_records(bus_number)
             fetched_df = st.session_state[fetch_key]
 
-            new_dates       = set(cleaned_df["Date"].astype(str).tolist())
-            existing_dates  = set(fetched_df["Date"].astype(str).tolist()) if not fetched_df.empty else set()
+            new_dates      = set(cleaned_df["Date"].astype(str).tolist())
+            existing_dates = set(fetched_df["Date"].astype(str).tolist()) if not fetched_df.empty else set()
             duplicate_dates = new_dates & existing_dates
 
             if duplicate_dates:
@@ -236,7 +234,7 @@ def editable_grid(bus_number: str):
         )
     with col3:
         st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("🔄 Load", key=f"refresh_{bus_number}", width='stretch', type='tertiary'):
+        if st.button("🔄 Load", key=f"refresh_{bus_number}", use_container_width=True):
             st.session_state.pop(fetch_key, None)
             st.rerun()
 
@@ -260,12 +258,15 @@ def editable_grid(bus_number: str):
 
         display_df["Date"] = display_df["Date"].dt.strftime("%Y-%m-%d")
         display_df["Avg"]  = (
-            display_df["Actual KM"] / display_df["Diesel"].replace(0, float("nan"))
+            pd.to_numeric(display_df["Actual KM"], errors="coerce") /
+            pd.to_numeric(display_df["Diesel"], errors="coerce").replace(0, float("nan"))
         ).round(2)
-        if "Income" not in display_df.columns:
-    display_df["Income"] = 0
 
-    display_df = display_df[[
+        # Guard: add Income column if DB doesn't return it yet
+        if "Income" not in display_df.columns:
+            display_df["Income"] = 0
+
+        display_df = display_df[[
             "Date", "Driver Name", "Conductor Name",
             "Scheduled KM", "Actual KM", "Diesel", "Avg", "Income"
         ]]
