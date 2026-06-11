@@ -262,6 +262,10 @@ def editable_grid(bus_number: str):
         display_df["Avg"]  = (
             display_df["Actual KM"] / display_df["Diesel"].replace(0, float("nan"))
         ).round(2)
+        display_df = display_df[[
+                "Date", "Driver Name", "Conductor Name",
+            "Scheduled KM", "Actual KM", "Diesel", "Avg", "Income"
+                ]]
 
         st.dataframe(display_df, use_container_width=True, hide_index=True)
         total_row = build_total_row(display_df, numeric_cols, label_col="Driver Name")
