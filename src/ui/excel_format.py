@@ -265,7 +265,7 @@ def editable_grid(bus_number: str):
         if "Income" not in display_df.columns:
     display_df["Income"] = 0
 
-        display_df = display_df[[
+    display_df = display_df[[
             "Date", "Driver Name", "Conductor Name",
             "Scheduled KM", "Actual KM", "Diesel", "Avg", "Income"
         ]]
