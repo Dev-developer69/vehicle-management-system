@@ -9,14 +9,17 @@ from src.database.config import supabase
 def save_vehicle_records(bus_number: str, df: pd.DataFrame) -> None:
     rows = []
     for _, row in df.iterrows():
+        actual = row["Actual KM"]
+        on_leave = str(actual).strip().lower() == "on leave"
         rows.append({
-            "bus_number":    bus_number,
-            "date":          str(row["Date"]),
-            "driver_name":   row["Driver Name"],
+            "bus_number":     bus_number,
+            "date":           str(row["Date"]),
+            "driver_name":    row["Driver Name"],
             "conductor_name": row["Conductor Name"],
-            "scheduled_km":  row["Scheduled KM"],
-            "actual_km":     row["Actual KM"],
-            "diesel":        row["Diesel"],
+            "scheduled_km":   row["Scheduled KM"],
+            "actual_km":      None if on_leave else actual,
+            "diesel":         0.0  if on_leave else float(row.get("Diesel") or 0),
+            "income":         0    if on_leave else int(row.get("Income") or 0),
         })
 
     edited_dates = df["Date"].astype(str).unique().tolist()
@@ -37,18 +40,28 @@ def get_vehicle_records(bus_number: str) -> pd.DataFrame:
         .execute()
 
     if not res.data:
-        return pd.DataFrame(columns=["Date", "Driver Name", "Conductor Name", "Scheduled KM", "Actual KM", "Diesel"])
+        return pd.DataFrame(columns=[
+            "Date", "Driver Name", "Conductor Name",
+            "Scheduled KM", "Actual KM", "Diesel", "Income"
+        ])
 
     df = pd.DataFrame(res.data)
     df = df.rename(columns={
-        "date":          "Date",
-        "driver_name":   "Driver Name",
+        "date":           "Date",
+        "driver_name":    "Driver Name",
         "conductor_name": "Conductor Name",
-        "scheduled_km":  "Scheduled KM",
-        "actual_km":     "Actual KM",
-        "diesel":        "Diesel",
+        "scheduled_km":   "Scheduled KM",
+        "actual_km":      "Actual KM",
+        "diesel":         "Diesel",
+        "income":         "Income",
     })
-    return df[["Date", "Driver Name", "Conductor Name", "Scheduled KM", "Actual KM", "Diesel"]]
+
+    # On Leave rows — actual_km will be None in DB, show "On Leave"
+    df["Actual KM"] = df["Actual KM"].apply(
+        lambda x: "On Leave" if x is None or (isinstance(x, float) and pd.isna(x)) else x
+    )
+
+    return df[["Date", "Driver Name", "Conductor Name", "Scheduled KM", "Actual KM", "Diesel", "Income"]]
 
 
 # ══════════════════════════════════════════════
