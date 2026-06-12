@@ -1,4 +1,6 @@
 import streamlit as st
+import os
+sys.path.insert(0, os.path.dirname(__file__))
 
 from src.screens.home_page import home_page
 from src.screens.driver_records import driver_records
