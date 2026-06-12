@@ -150,7 +150,7 @@ def editable_grid(bus_number: str):
             "Conductor Name": st.column_config.TextColumn("Conductor Name"),
             "Scheduled KM":   st.column_config.NumberColumn("Scheduled KM", min_value=0, default=466),
             "Actual KM":      st.column_config.NumberColumn("Actual KM", min_value=0, default=0),
-            "Diesel":         st.column_config.NumberColumn("Diesel", min_value=0.0, default=0.0, step=0.1, format="%.2f"),
+            "Diesel":         st.column_config.NumberColumn("Diesel", min_value=0.0, default=0.0, step=0.01, format="%.2f"),
             "Income":         st.column_config.NumberColumn("Income", min_value=0, default=0),
         },
     )
