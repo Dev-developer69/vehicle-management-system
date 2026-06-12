@@ -18,7 +18,7 @@ def save_vehicle_records(bus_number: str, df: pd.DataFrame) -> None:
             "conductor_name": row["Conductor Name"],
             "scheduled_km":   row["Scheduled KM"],
             "actual_km":      None if on_leave else actual,
-            "diesel":         0.0  if on_leave else float(row.get("Diesel") or 0),
+            "diesel":         0.00  if on_leave else float(row.get("Diesel") or 0),
             "income":         0    if on_leave else int(row.get("Income") or 0),
         })
 
