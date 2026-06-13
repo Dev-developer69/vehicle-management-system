@@ -43,7 +43,7 @@ def expense_3131():
     if 'expense_tab' not in st.session_state:
         st.session_state['expense_tab'] = None
 
-    if st.button('Vehicle Expanse',type='tertiary', width='stretch', icon=':material/home:'):
+    if st.button('Vehicle Expense',type='tertiary', width='stretch', icon=':material/home:'):
         st.session_state['expense_tab'] = 'vehicle'
 
     if st.button('Driver Salary',type='tertiary', width='stretch', icon=':material/home:'):
