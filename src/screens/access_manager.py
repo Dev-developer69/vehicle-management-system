@@ -64,6 +64,18 @@ def _update_role(user_id: str, new_role: str):
 # ACCESS MANAGER PAGE
 # ──────────────────────────────────────────────
 def access_manager_page():
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button('Home page',type='secondary', width='stretch', icon=':material/home:', shortcut='control+backspace'):
+            st.session_state['login_state']= None
+            st.rerun()
+
+    with col2:
+        if st.button('Back page', type='primary', width='stretch', icon=':material/home:', shortcut='control+enter'):
+            st.session_state['login_state']= 'vehicle_record'
+            st.rerun()
+            
     if not is_admin_or_manager():
         st.error("❌ Access denied. Admin ya Manager hi yeh page dekh sakte hain.")
         return
