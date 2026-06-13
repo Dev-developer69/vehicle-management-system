@@ -1,5 +1,6 @@
 import streamlit as st
 from src.ui.home_base_layout import home_layout, image_backgroung
+from src.database.auth import is_admin_or_manager
 
 def home_page():
     st.header("Welcome to Vehicle Records")
@@ -23,6 +24,15 @@ def home_page():
                      icon=':material/payments:', icon_position='right'):
             st.session_state['login_state'] = 'expenses'
             st.rerun()
+
+    # Access Manager — sirf admin/manager ko dikhega
+    if is_admin_or_manager():
+        st.divider()
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            if st.button("👥 Access Manager", type='primary', key='btn_access_mgr', width='stretch'):
+                st.session_state['login_state'] = 'access_manager'
+                st.rerun()
 
     st.markdown("""
         <div style='
