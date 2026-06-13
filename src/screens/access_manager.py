@@ -71,10 +71,6 @@ def access_manager_page():
             st.session_state['login_state']= None
             st.rerun()
 
-    with col2:
-        if st.button('Back page', type='primary', width='stretch', icon=':material/home:', shortcut='control+enter'):
-            st.session_state['login_state']= 'vehicle_record'
-            st.rerun()
             
     if not is_admin_or_manager():
         st.error("❌ Access denied. Admin ya Manager hi yeh page dekh sakte hain.")
