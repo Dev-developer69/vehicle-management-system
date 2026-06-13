@@ -1,87 +1,80 @@
 import streamlit as st
 import pandas as pd
 from src.ui.home_base_layout import home_layout
-from src.database.auth import get_accessible_vehicles, is_admin_or_manager
+from src.database.db import get_vehicle_expenses
+from src.database.auth import get_accessible_vehicles
 
-# Bus number → session state key mapping
-VEHICLE_MAP = {
-    "7389": "page_7389",
-    "2350": "page_2350",
-    "0303": "page_0303",
-    "3131": "page_3131",
-}
+ALL_BUSES = [("3131", "3131_E"), ("0303", "0303_E"), ("7389", "7389_E"), ("2350", "2350_E")]
 
-def vehicle_records():
-    col1, col2 = st.columns(2)
-    with col1:
-        st.header("Select Vehicle", text_alignment='center')
-    with col2:
-        if st.button('Home page', type='primary', width='stretch', icon=':material/home:', shortcut='control+backspace'):
-            st.session_state['login_state'] = None
-            st.rerun()
-
+def expenses():
+    if st.button('Home page', type='secondary', width='stretch', icon=':material/home:', shortcut='control+backspace'):
+        st.session_state['login_state'] = None
+        st.rerun()
     home_layout()
+    st.markdown("<h2 style='text-align:center;'>Expenses 🧾</h2>", unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
 
-    # Sirf accessible vehicles ke buttons dikhao
+    # Sirf allowed buses — admin/manager ko sab, subordinate ko assigned waali
     accessible = get_accessible_vehicles()
-    visible_vehicles = [bus for bus in VEHICLE_MAP.keys() if bus in accessible]
+    visible_buses = [(bus, state) for bus, state in ALL_BUSES if bus in accessible]
 
-    if not visible_vehicles:
-        st.warning("⚠️ Aapko kisi bhi vehicle ka access nahi diya gaya. Admin se contact karo.")
+    if not visible_buses:
+        st.warning("⚠️ Aapko kisi bhi bus ka access nahi diya gaya. Admin se contact karo.")
+        return
+
+    # ── Vehicle buttons ──
+    cols = st.columns(2)
+    for i, (bus, state) in enumerate(visible_buses):
+        with cols[i % 2]:
+            if st.button(f"🚌 Bus {bus}", type='secondary', width='stretch', key=f"exp_btn_{bus}"):
+                st.session_state['login_state'] = state
+                st.rerun()
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("---")
+
+    # ── Summary cards ──
+    st.markdown("### Expenses Summary 📊")
+    all_expenses = []
+    for bus, _ in visible_buses:
+        df = get_vehicle_expenses(bus)
+        if not df.empty:
+            df["bus_number"] = bus
+            all_expenses.append(df)
+
+    if all_expenses:
+        combined = pd.concat(all_expenses, ignore_index=True)
+        totals = combined.groupby("bus_number")["Amount"].sum()
+
+        card_cols = st.columns(len(visible_buses))
+        for i, (bus, _) in enumerate(visible_buses):
+            with card_cols[i]:
+                st.markdown(f"""
+                <div style='background:#1E1E3A;border-radius:12px;padding:20px;text-align:center;border:1px solid #2D2D5E;'>
+                    <div style='font-size:1.8rem;color:#7B8CFF;font-weight:bold;'>₹{totals.get(bus, 0):,.0f}</div>
+                    <div style='color:#aaa;margin-top:8px;'>Bus {bus}</div>
+                </div>""", unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        grand_total = combined["Amount"].sum()
+        st.markdown(f"""
+        <div style='background:#2D2D5E;border-radius:12px;padding:16px;text-align:center;'>
+            <span style='color:#aaa;font-size:1rem;'>Total Expenses (All Buses): </span>
+            <span style='color:#9B59B6;font-size:1.5rem;font-weight:bold;'>₹{grand_total:,.0f}</span>
+        </div>""", unsafe_allow_html=True)
     else:
-        # 2 columns mein buttons
-        cols = st.columns(2)
-        for i, bus in enumerate(visible_vehicles):
-            with cols[i % 2]:
-                btn_type = 'secondary' if i < 2 else 'tertiary'
-                if st.button(
-                    bus,
-                    type=btn_type,
-                    key=f"btn_v_{bus}",
-                    width='stretch',
-                    icon=':material/bus_railway:',
-                    icon_position='right'
-                ):
-                    st.session_state['login_state'] = VEHICLE_MAP[bus]
-                    st.rerun()
-
-    stats_grid()
+        st.info("No expense data found.")
 
     st.markdown("""
-        <div style='
-            position: fixed;
-            bottom: 20px;
-            width: 100%;
-            text-align: center;
-            color: white;
-            font-size: 0.9rem;
-        '>
-            <p>Created with ❤️ by Dev-developer69</p>
-        </div>
-    """, unsafe_allow_html=True)
-
-
-def stats_grid():
-    stats_df = pd.DataFrame({
-        "icon":  ["🚗", "🔧", "✅", "⏳"],
-        "label": ["Total Vehicles", "Under Maintenance", "Completed Jobs", "Pending Jobs"],
-        "value": [120, 35, 85, 12],
-    })
-    cols = st.columns(4)
-    for col, (_, row) in zip(cols, stats_df.iterrows()):
-        with col:
-            st.markdown(f"""
-                <div style="
-                    background: rgba(255,255,255,0.15);
-                    border-radius: 12px;
-                    padding: 20px;
-                    text-align: center;
-                    backdrop-filter: blur(10px);
-                    border: 1px solid rgba(255,255,255,0.3);
-                    opacity:0.7;
-                ">
-                    <h2 style="font-size:2rem; margin:0;">{row['icon']}</h2>
-                    <h3 style="font-size:1.8rem; margin:5px 0; color:white;">{row['value']}</h3>
-                    <p style="color:rgba(255,255,255,0.8); margin:0;">{row['label']}</p>
-                </div>
-            """, unsafe_allow_html=True)
+    <div style='
+        position: fixed;
+        bottom: 20px;
+        width: 100%;
+        text-align: center;
+        color: white;
+        font-size: 0.9rem;
+    '>
+        <p>Created with ❤️ by Dev-developer69</p>
+    </div>
+""", unsafe_allow_html=True)
