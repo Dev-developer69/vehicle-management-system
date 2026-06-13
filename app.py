@@ -26,6 +26,20 @@ from src.database.auth import (
 from src.database.config import supabase
 
 
+def inject_sidebar_shortcut():
+    st.markdown("""
+        <script>
+        document.addEventListener('keydown', function(e) {
+            if (e.ctrlKey && e.code === 'Space') {
+                e.preventDefault();
+                const btn = window.parent.document.querySelector('[data-testid="collapsedControl"]') ||
+                            window.parent.document.querySelector('[data-testid="baseButton-headerNoPadding"]');
+                if (btn) btn.click();
+            }
+        });
+        </script>
+    """, unsafe_allow_html=True)
+
 def render_sidebar():
     with st.sidebar:
         user = st.session_state.get("user")
@@ -65,6 +79,7 @@ def main():
 
     # Sidebar har page pe
     render_sidebar()
+    inject_sidebar_shortcut()
 
     # ── Routing ──
     match st.session_state['login_state']:
