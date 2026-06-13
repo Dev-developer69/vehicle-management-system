@@ -7,19 +7,28 @@ from src.database.config import supabase
 # ══════════════════════════════════════════════
 
 def save_vehicle_records(bus_number: str, df: pd.DataFrame) -> None:
+    from src.database.auth import get_current_role
+    import streamlit as st
+
+    user = st.session_state.get("user")
+    current_email = user.email if user else "unknown"
+    current_role  = get_current_role()
+
     rows = []
     for _, row in df.iterrows():
-        actual = row["Actual KM"]
-        on_leave = str(actual).strip().lower() == "on leave"
+        on_leave = str(row.get("Status", "Present")).strip() == "On Leave"
         rows.append({
-            "bus_number":     bus_number,
-            "date":           str(row["Date"]),
-            "driver_name":    row["Driver Name"],
-            "conductor_name": row["Conductor Name"],
-            "scheduled_km":   row["Scheduled KM"],
-            "actual_km":      None if on_leave else actual,
-            "diesel":         0.00  if on_leave else float(row.get("Diesel") or 0),
-            "income":         0    if on_leave else int(row.get("Income") or 0),
+            "bus_number":       bus_number,
+            "date":             str(row["Date"]),
+            "status":           "On Leave" if on_leave else "Present",
+            "driver_name":      row["Driver Name"],
+            "conductor_name":   row["Conductor Name"],
+            "scheduled_km":     row["Scheduled KM"],
+            "actual_km":        0 if on_leave else row["Actual KM"],
+            "diesel":           0.0 if on_leave else float(row.get("Diesel") or 0),
+            "income":           0   if on_leave else int(row.get("Income") or 0),
+            "updated_by":       current_email,       # ← kaun ne save kiya
+            "updated_by_role":  current_role,        # ← uska role
         })
 
     edited_dates = df["Date"].astype(str).unique().tolist()
@@ -41,13 +50,14 @@ def get_vehicle_records(bus_number: str) -> pd.DataFrame:
 
     if not res.data:
         return pd.DataFrame(columns=[
-            "Date", "Driver Name", "Conductor Name",
+            "Date", "Status", "Driver Name", "Conductor Name",
             "Scheduled KM", "Actual KM", "Diesel", "Income"
         ])
 
     df = pd.DataFrame(res.data)
     df = df.rename(columns={
         "date":           "Date",
+        "status":         "Status",
         "driver_name":    "Driver Name",
         "conductor_name": "Conductor Name",
         "scheduled_km":   "Scheduled KM",
@@ -56,12 +66,11 @@ def get_vehicle_records(bus_number: str) -> pd.DataFrame:
         "income":         "Income",
     })
 
-    # On Leave rows — actual_km will be None in DB, show "On Leave"
-    df["Actual KM"] = df["Actual KM"].apply(
-        lambda x: "On Leave" if x is None or (isinstance(x, float) and pd.isna(x)) else x
-    )
+    # fallback if status column not yet in DB
+    if "Status" not in df.columns:
+        df["Status"] = "Present"
 
-    return df[["Date", "Driver Name", "Conductor Name", "Scheduled KM", "Actual KM", "Diesel", "Income"]]
+    return df[["Date", "Status", "Driver Name", "Conductor Name", "Scheduled KM", "Actual KM", "Diesel", "Income"]]
 
 
 # ══════════════════════════════════════════════
