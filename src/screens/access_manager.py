@@ -1,7 +1,7 @@
 import streamlit as st
 from src.database.config import supabase, supabase_admin
 from src.database.auth import get_current_role, is_admin_or_manager
-
+from src.ui.home_base_layout import home_layout
 
 # ──────────────────────────────────────────────
 # DB HELPERS
@@ -64,7 +64,7 @@ def _update_role(user_id: str, new_role: str):
 # ACCESS MANAGER PAGE
 # ──────────────────────────────────────────────
 def access_manager_page():
-
+    home_layout()
     col1, col2 = st.columns(2)
     with col1:
         if st.button('Home page',type='secondary', width='stretch', icon=':material/home:', shortcut='control+backspace'):
