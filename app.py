@@ -3,6 +3,13 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(__file__))
 
+st.set_page_config(
+    page_title="Vehicle Management",
+    page_icon="🚌",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
 from src.screens.home_page import home_page
 from src.screens.driver_records import driver_records
 from src.screens.expanses import expenses
@@ -57,49 +64,49 @@ def main():
             if '0303' in get_accessible_vehicles():
                 page_0303()
             else:
-                st.error("❌ Aapko is vehicle ka access nahi hai.")
+                st.error("❌ You don't have access.Contact Admin.")    
 
         case 'page_2350':
             if '2350' in get_accessible_vehicles():
                 page_2350()
             else:
-                st.error("❌ Aapko is vehicle ka access nahi hai.")
+                st.error("❌ You don't have access.Contact Admin.")
 
         case 'page_7389':
             if '7389' in get_accessible_vehicles():
                 page_7389()
             else:
-                st.error("❌ Aapko is vehicle ka access nahi hai.")
+                st.error("❌ You don't have access.Contact Admin.")
 
         case 'page_3131':
             if '3131' in get_accessible_vehicles():
                 page_3131()
             else:
-                st.error("❌ Aapko is vehicle ka access nahi hai.")
+                st.error("❌ You don't have access.Contact Admin.")
 
         case '3131_E':
             if '3131' in get_accessible_vehicles():
                 expense_3131()
             else:
-                st.error("❌ Aapko is vehicle ka access nahi hai.")
+                st.error("❌ You don't have access.Contact Admin.")
 
         case '0303_E':
             if '0303' in get_accessible_vehicles():
                 expense_0303()
             else:
-                st.error("❌ Aapko is vehicle ka access nahi hai.")
+                sst.error("❌ You don't have access.Contact Admin.")
 
         case '7389_E':
             if '7389' in get_accessible_vehicles():
                 expense_7389()
             else:
-                st.error("❌ Aapko is vehicle ka access nahi hai.")
+                st.error("❌ You don't have access.Contact Admin.")
 
         case '2350_E':
             if '2350' in get_accessible_vehicles():
                 expense_2350()
             else:
-                st.error("❌ Aapko is vehicle ka access nahi hai.")
+                st.error("❌ You don't have access.Contact Admin.")
 
         case None:
             home_page()
