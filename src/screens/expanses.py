@@ -5,6 +5,12 @@ from src.database.db import get_vehicle_expenses
 from src.database.auth import get_accessible_vehicles
 
 
+allowed = get_accessible_vehicles()
+role = get_current_role()
+st.write(f"Role: {role}")
+st.write(f"Allowed buses: {allowed}")
+
+
 def expenses():
     if st.button('Home page', type='secondary', width='stretch', icon=':material/home:', shortcut='control+backspace'):
         st.session_state['login_state'] = None
