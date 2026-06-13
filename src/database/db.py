@@ -27,8 +27,8 @@ def save_vehicle_records(bus_number: str, df: pd.DataFrame) -> None:
             "actual_km":        0 if on_leave else row["Actual KM"],
             "diesel":           0.0 if on_leave else float(row.get("Diesel") or 0),
             "income":           0   if on_leave else int(row.get("Income") or 0),
-            "updated_by":       current_email,       # ← kaun ne save kiya
-            "updated_by_role":  current_role,        # ← uska role
+            "updated_by":       current_email,
+            "updated_by_role":  current_role,
         })
 
     edited_dates = df["Date"].astype(str).unique().tolist()
@@ -66,7 +66,6 @@ def get_vehicle_records(bus_number: str) -> pd.DataFrame:
         "income":         "Income",
     })
 
-    # fallback if status column not yet in DB
     if "Status" not in df.columns:
         df["Status"] = "Present"
 
@@ -193,8 +192,23 @@ def delete_vehicle_expense(expense_id: str) -> None:
 # SALARY CHECK
 # ══════════════════════════════════════════════
 
-def get_salary_check(from_date: str = None, to_date: str = None) -> pd.DataFrame:
-    res = supabase.table("salary_check").select("*").execute()
+def get_salary_check(
+    from_date: str = None,
+    to_date: str = None,
+    allowed_buses: list = None,
+) -> pd.DataFrame:
+    query = supabase.table("salary_check").select("*")
+
+    # Subordinate ke liye sirf assigned buses ka data
+    if allowed_buses is not None:
+        query = query.in_("bus_number", allowed_buses)
+
+    if from_date:
+        query = query.gte("date", from_date)
+    if to_date:
+        query = query.lte("date", to_date)
+
+    res = query.execute()
 
     if not res.data:
         return pd.DataFrame(columns=["Sr No", "Driver Name", "Conductor Name", "Duties", "Salary Given"])
