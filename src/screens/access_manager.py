@@ -13,8 +13,7 @@ def _get_all_users():
 
 
 def _get_all_vehicles():
-    res = supabase.table("vehicle_records").select("bus_number").execute()
-    return sorted({r["bus_number"] for r in res.data}) if res.data else []
+    return ["7389", "2350", "0303", "3131"]
 
 
 def _get_user_vehicles(user_id: str):
