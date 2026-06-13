@@ -19,7 +19,7 @@ def expenses():
     visible_buses = [(bus, state) for bus, state in ALL_BUSES if bus in accessible]
 
     if not visible_buses:
-        st.warning("⚠️ Aapko kisi bhi bus ka access nahi diya gaya. Admin se contact karo.")
+        st.warning("⚠️ No access given.Contact Admin.")
         return
 
     # ── Vehicle buttons ──
