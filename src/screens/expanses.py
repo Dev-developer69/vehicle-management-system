@@ -4,6 +4,7 @@ from src.ui.home_base_layout import home_layout
 from src.database.db import get_vehicle_expenses
 from src.database.auth import get_accessible_vehicles
 
+ALL_BUSES = [("3131", "3131_E"), ("0303", "0303_E"), ("7389", "7389_E"), ("2350", "2350_E")]
 
 def expenses():
     if st.button('Home page', type='secondary', width='stretch', icon=':material/home:', shortcut='control+backspace'):
@@ -14,19 +15,17 @@ def expenses():
     st.markdown("<br>", unsafe_allow_html=True)
 
     # Sirf allowed buses — admin/manager ko sab, subordinate ko assigned waali
-    allowed_buses = get_accessible_vehicles()
+    accessible = get_accessible_vehicles()
+    visible_buses = [(bus, state) for bus, state in ALL_BUSES if bus in accessible]
 
-    # Saari buses ki mapping (button state ke saath)
-    ALL_BUSES = [("3131", "3131_E"), ("0303", "0303_E"), ("7389", "7389_E"), ("2350", "2350_E")]
-
-    # Filter: sirf woh buses dikhao jo allowed hain
-    visible_buses = [(bus, state) for bus, state in ALL_BUSES if bus in allowed_buses]
+    if not visible_buses:
+        st.warning("⚠️ Aapko kisi bhi bus ka access nahi diya gaya. Admin se contact karo.")
+        return
 
     # ── Vehicle buttons ──
-    col1, col2 = st.columns(2, gap='small')
+    cols = st.columns(2)
     for i, (bus, state) in enumerate(visible_buses):
-        col = col1 if i % 2 == 0 else col2
-        with col:
+        with cols[i % 2]:
             if st.button(f"🚌 Bus {bus}", type='secondary', width='stretch', key=f"exp_btn_{bus}"):
                 st.session_state['login_state'] = state
                 st.rerun()
@@ -47,10 +46,9 @@ def expenses():
         combined = pd.concat(all_expenses, ignore_index=True)
         totals = combined.groupby("bus_number")["Amount"].sum()
 
-        # Dynamically columns banao based on visible buses
-        cols = st.columns(len(visible_buses))
+        card_cols = st.columns(len(visible_buses))
         for i, (bus, _) in enumerate(visible_buses):
-            with cols[i]:
+            with card_cols[i]:
                 st.markdown(f"""
                 <div style='background:#1E1E3A;border-radius:12px;padding:20px;text-align:center;border:1px solid #2D2D5E;'>
                     <div style='font-size:1.8rem;color:#7B8CFF;font-weight:bold;'>₹{totals.get(bus, 0):,.0f}</div>
@@ -59,7 +57,6 @@ def expenses():
 
         st.markdown("<br>", unsafe_allow_html=True)
 
-        # Grand total
         grand_total = combined["Amount"].sum()
         st.markdown(f"""
         <div style='background:#2D2D5E;border-radius:12px;padding:16px;text-align:center;'>
