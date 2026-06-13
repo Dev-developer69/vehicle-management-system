@@ -20,6 +20,8 @@ def get_current_role() -> str:
     return role
 
 
+ALL_VEHICLES = ["7389", "2350", "0303", "3131"]
+
 def get_accessible_vehicles() -> list:
     """Subordinate ke liye assigned vehicles, admin/manager ko sab"""
     user = st.session_state.get("user")
@@ -28,12 +30,8 @@ def get_accessible_vehicles() -> list:
 
     role = get_current_role()
     if role in ("admin", "manager"):
-        # sab vehicles
-        res = supabase.table("vehicle_records").select("bus_number").execute()
-        buses = list({r["bus_number"] for r in res.data}) if res.data else []
-        return sorted(buses)
+        return ALL_VEHICLES
     else:
-        # sirf assigned vehicles
         res = supabase.table("vehicle_access").select("bus_number").eq("user_id", user.id).execute()
         return [r["bus_number"] for r in res.data] if res.data else []
 
