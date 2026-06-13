@@ -77,5 +77,3 @@ def stats_grid():
                 </div>
             """, unsafe_allow_html=True)
 
-
-is code ki tarah krr de
