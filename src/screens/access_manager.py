@@ -1,5 +1,5 @@
 import streamlit as st
-from src.database.config import supabase
+from src.database.config import supabase, supabase_admin
 from src.database.auth import get_current_role, is_admin_or_manager
 
 
@@ -39,7 +39,7 @@ def _revoke_access(user_id: str, bus_number: str):
 
 def _add_user(email: str, password: str, role: str):
     """Create new user via Supabase Admin API"""
-    res = supabase.auth.admin.create_user({
+    res = supabase_admin.auth.admin.create_user({
         "email":            email,
         "password":         password,
         "email_confirm":    True,
@@ -54,7 +54,7 @@ def _add_user(email: str, password: str, role: str):
 
 
 def _delete_user(user_id: str):
-    supabase.auth.admin.delete_user(user_id)
+    supabase_admin.auth.admin.delete_user(user_id)
     supabase.table("user_roles").delete().eq("user_id", user_id).execute()
     supabase.table("vehicle_access").delete().eq("user_id", user_id).execute()
 
