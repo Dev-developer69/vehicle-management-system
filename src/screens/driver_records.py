@@ -2,11 +2,12 @@ import streamlit as st
 import pandas as pd
 from src.ui.home_base_layout import home_layout
 from src.database.db import get_salary_check
+from src.database.auth import get_accessible_vehicles, is_admin_or_manager
 
 
 def driver_records():
-    if st.button('Home page',type='secondary', width='stretch', icon=':material/home:', shortcut='control+backspace'):
-        st.session_state['login_state']= None
+    if st.button('Home page', type='secondary', width='stretch', icon=':material/home:', shortcut='control+backspace'):
+        st.session_state['login_state'] = None
         st.rerun()
     home_layout()
     salary_check_view()
@@ -26,7 +27,6 @@ def driver_records():
 
 def salary_check_view():
     st.markdown("### Salary Check 📊")
-
     col1, col2, col3 = st.columns([2, 2, 1])
     with col1:
         from_date = st.date_input("From", value=None, key="sc_from", format="YYYY-MM-DD")
@@ -35,9 +35,14 @@ def salary_check_view():
     with col3:
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button("🔄 Load", key="sc_load", type='primary', width='stretch'):
+            # Admin/manager → sab buses (None = no filter)
+            # Subordinate   → sirf apni assigned buses
+            allowed = None if is_admin_or_manager() else get_accessible_vehicles()
+
             st.session_state["salary_check_df"] = get_salary_check(
                 from_date=str(from_date) if from_date else None,
                 to_date=str(to_date) if to_date else None,
+                allowed_buses=allowed,
             )
 
     if "salary_check_df" in st.session_state:
