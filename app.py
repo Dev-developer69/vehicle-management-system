@@ -20,9 +20,40 @@ from src.vehicle_records.vehicle_31 import page_3131, expense_3131
 from src.vehicle_records.vehicle_89 import page_7389, expense_7389
 from src.vehicle_records.vehicle_50 import page_2350, expense_2350
 from src.database.auth import (
-    login_page, is_logged_in,
+    login_page, is_logged_in, get_current_role,
     get_accessible_vehicles, is_admin_or_manager
 )
+from src.database.config import supabase
+
+
+def render_sidebar():
+    with st.sidebar:
+        user = st.session_state.get("user")
+        role = get_current_role()
+        role_emoji = {"admin": "👑", "manager": "🧑‍💼", "subordinate": "👤"}.get(role, "👤")
+        st.markdown(f"{role_emoji} **{user.email if user else ''}**")
+        st.markdown(f"`{role.upper()}`")
+        st.divider()
+
+        if is_admin_or_manager():
+            if st.button("👥 Access Manager", key="sb_access_mgr", use_container_width=True):
+                st.session_state['login_state'] = 'access_manager'
+                st.rerun()
+
+        if st.button("🏠 Home", key="sb_home", use_container_width=True):
+            st.session_state['login_state'] = None
+            st.rerun()
+
+        st.divider()
+        if st.button("🚪 Logout", key="sb_logout", use_container_width=True):
+            try:
+                supabase.auth.sign_out()
+            except Exception:
+                pass
+            for key in ["user", "access_token", "login_state", "role"]:
+                st.session_state.pop(key, None)
+            st.rerun()
+
 
 def main():
     if 'login_state' not in st.session_state:
@@ -31,6 +62,9 @@ def main():
     if not is_logged_in():
         login_page()
         return
+
+    # Sidebar har page pe
+    render_sidebar()
 
     # ── Routing ──
     match st.session_state['login_state']:
