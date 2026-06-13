@@ -49,11 +49,6 @@ def render_sidebar():
         st.markdown(f"`{role.upper()}`")
         st.divider()
 
-        if is_admin_or_manager():
-            if st.button("👥 Access Manager", key="sb_access_mgr", use_container_width=True):
-                st.session_state['login_state'] = 'access_manager'
-                st.rerun()
-
         if st.button("🏠 Home", key="sb_home", use_container_width=True):
             st.session_state['login_state'] = None
             st.rerun()
