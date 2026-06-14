@@ -7,6 +7,7 @@ from src.database.config import supabase
 # ══════════════════════════════════════════════
 
 def get_scheduled_km(bus_number: str) -> int:
+    """Bus ka defined scheduled KM fetch karo vehicle_scheduled_km table se"""
     res = supabase.table("vehicle_scheduled_km") \
         .select("scheduled_km") \
         .eq("bus_number", bus_number) \
@@ -14,7 +15,7 @@ def get_scheduled_km(bus_number: str) -> int:
         .execute()
     if res.data:
         return int(res.data[0]["scheduled_km"] or 446)
-    return 446  
+    return 446  # fallback if bus not configured in vehicle_scheduled_km
 
 
 def save_vehicle_records(bus_number: str, df: pd.DataFrame) -> None:
@@ -38,8 +39,8 @@ def save_vehicle_records(bus_number: str, df: pd.DataFrame) -> None:
             "actual_km":        0 if on_leave else row["Actual KM"],
             "diesel":           0.0 if on_leave else float(row.get("Diesel") or 0),
             "income":           0   if on_leave else int(row.get("Income") or 0),
-            "updated_by":       current_email,       
-            "updated_by_role":  current_role,       
+            "updated_by":       current_email,       # ← kaun ne save kiya
+            "updated_by_role":  current_role,        # ← uska role
             "remark":           str(row.get("Remark") or ""),
         })
 
