@@ -74,7 +74,7 @@ def salary_check_view():
             total = {
                 "Sr No": "",
                 "Driver Name": "TOTAL",
-                "Conductor Name": "",
+                "Bus Number": "",
                 "Duties": df["Duties"].sum(),
                 "Salary Given": df["Salary Given"].sum(),
             }
