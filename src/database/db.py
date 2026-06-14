@@ -27,8 +27,8 @@ def save_vehicle_records(bus_number: str, df: pd.DataFrame) -> None:
             "actual_km":        0 if on_leave else row["Actual KM"],
             "diesel":           0.0 if on_leave else float(row.get("Diesel") or 0),
             "income":           0   if on_leave else int(row.get("Income") or 0),
-            "updated_by":       current_email,
-            "updated_by_role":  current_role,
+            "updated_by":       current_email,       # ← kaun ne save kiya
+            "updated_by_role":  current_role,        # ← uska role
         })
 
     edited_dates = df["Date"].astype(str).unique().tolist()
@@ -66,21 +66,11 @@ def get_vehicle_records(bus_number: str) -> pd.DataFrame:
         "income":         "Income",
     })
 
+    # fallback if status column not yet in DB
     if "Status" not in df.columns:
         df["Status"] = "Present"
 
     return df[["Date", "Status", "Driver Name", "Conductor Name", "Scheduled KM", "Actual KM", "Diesel", "Income"]]
-
-
-def get_scheduled_km(bus_number: str) -> float:
-    """Bus ke liye scheduled KM fetch karo database se"""
-    res = supabase.table("vehicle_scheduled_km") \
-        .select("scheduled_km") \
-        .eq("bus_number", bus_number) \
-        .execute()
-    if res.data:
-        return float(res.data[0]["scheduled_km"])
-    return 0.0
 
 
 # ══════════════════════════════════════════════
@@ -203,20 +193,17 @@ def delete_vehicle_expense(expense_id: str) -> None:
 # SALARY CHECK
 # ══════════════════════════════════════════════
 
-def get_salary_check(
-    from_date: str = None,
-    to_date: str = None,
-    allowed_buses: list = None,
-) -> pd.DataFrame:
-    query = supabase.table("salary_check").select("*")
-
-    if allowed_buses is not None:
-        query = query.in_("bus_number", allowed_buses)
+def get_salary_check(from_date: str = None, to_date: str = None, bus_numbers: list = None) -> pd.DataFrame:
+    query = supabase.table("vehicle_records").select(
+        "driver_name, conductor_name, date, bus_number"
+    )
 
     if from_date:
         query = query.gte("date", from_date)
     if to_date:
         query = query.lte("date", to_date)
+    if bus_numbers:
+        query = query.in_("bus_number", bus_numbers)
 
     res = query.execute()
 
@@ -225,18 +212,33 @@ def get_salary_check(
 
     df = pd.DataFrame(res.data)
 
-    if not df.empty and "driver_name" in df.columns:
-        df = df.groupby(["driver_name", "conductor_name"], as_index=False).agg(
-            duties=("duties", "sum"),
-            total_salary=("total_salary", "max"),
-        ).reset_index(drop=True)
-        df.insert(0, "driver_id", range(1, len(df) + 1))
+    # Filter out On Leave / invalid
+    df = df[df["driver_name"].notna()]
+    df = df[df["driver_name"].str.strip().str.lower() != "no"]
+    df = df[df["driver_name"].str.strip().str.lower() != "test"]
 
-    df = df.rename(columns={
-        "driver_id":      "Sr No",
-        "driver_name":    "Driver Name",
-        "conductor_name": "Conductor Name",
-        "duties":         "Duties",
-        "total_salary":   "Salary Given",
-    })
-    return df[["Sr No", "Driver Name", "Conductor Name", "Duties", "Salary Given"]]
+    # Group by driver
+    grouped = df.groupby(df["driver_name"].str.strip().str.lower()).agg(
+        driver_name=("driver_name", "first"),
+        conductor_name=("conductor_name", "first"),
+        duties=("date", "nunique"),
+    ).reset_index(drop=True)
+
+    # Get salary
+    sal_res = supabase.table("driver_salary").select("driver_name, salary").execute()
+    sal_df  = pd.DataFrame(sal_res.data) if sal_res.data else pd.DataFrame(columns=["driver_name", "salary"])
+
+    if not sal_df.empty:
+        sal_df["driver_name_lower"] = sal_df["driver_name"].str.strip().str.lower()
+        sal_sum = sal_df.groupby("driver_name_lower")["salary"].sum().reset_index()
+        grouped["driver_name_lower"] = grouped["driver_name"].str.strip().str.lower()
+        grouped = grouped.merge(sal_sum, on="driver_name_lower", how="left")
+        grouped["salary"] = grouped["salary"].fillna(0)
+    else:
+        grouped["salary"] = 0
+
+    grouped = grouped[["driver_name", "conductor_name", "duties", "salary"]]
+    grouped.columns = ["Driver Name", "Conductor Name", "Duties", "Salary Given"]
+    grouped.insert(0, "Sr No", range(1, len(grouped) + 1))
+
+    return grouped
