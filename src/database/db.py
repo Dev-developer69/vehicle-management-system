@@ -6,6 +6,19 @@ from src.database.config import supabase
 # VEHICLE RECORDS
 # ══════════════════════════════════════════════
 
+def get_scheduled_km(bus_number: str) -> int:
+    """Latest scheduled KM fetch karo us bus ke liye"""
+    res = supabase.table("vehicle_records") \
+        .select("scheduled_km") \
+        .eq("bus_number", bus_number) \
+        .order("date", desc=True) \
+        .limit(1) \
+        .execute()
+    if res.data:
+        return int(res.data[0]["scheduled_km"] or 446)
+    return 446  # default
+
+
 def save_vehicle_records(bus_number: str, df: pd.DataFrame) -> None:
     from src.database.auth import get_current_role
     import streamlit as st
@@ -29,6 +42,7 @@ def save_vehicle_records(bus_number: str, df: pd.DataFrame) -> None:
             "income":           0   if on_leave else int(row.get("Income") or 0),
             "updated_by":       current_email,       # ← kaun ne save kiya
             "updated_by_role":  current_role,        # ← uska role
+            "remark":           str(row.get("Remark") or ""),
         })
 
     edited_dates = df["Date"].astype(str).unique().tolist()
@@ -64,13 +78,15 @@ def get_vehicle_records(bus_number: str) -> pd.DataFrame:
         "actual_km":      "Actual KM",
         "diesel":         "Diesel",
         "income":         "Income",
+        "remark":         "Remark",
     })
 
-    # fallback if status column not yet in DB
     if "Status" not in df.columns:
         df["Status"] = "Present"
+    if "Remark" not in df.columns:
+        df["Remark"] = ""
 
-    return df[["Date", "Status", "Driver Name", "Conductor Name", "Scheduled KM", "Actual KM", "Diesel", "Income"]]
+    return df[["Date", "Status", "Driver Name", "Conductor Name", "Scheduled KM", "Actual KM", "Diesel", "Income", "Remark"]]
 
 
 # ══════════════════════════════════════════════
