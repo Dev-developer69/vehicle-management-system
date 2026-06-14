@@ -40,7 +40,7 @@ def home_layout():
             @import url('https://fonts.googleapis.com/css2?family=Climate+Crisis:YEAR@1979&display=swap');
 
             .stApp {
-                background: #1C1C2E !important;
+                background: #B71C1C !important;
             }
 
             #MainMenu, header {
