@@ -72,6 +72,17 @@ def get_vehicle_records(bus_number: str) -> pd.DataFrame:
     return df[["Date", "Status", "Driver Name", "Conductor Name", "Scheduled KM", "Actual KM", "Diesel", "Income"]]
 
 
+def get_scheduled_km(bus_number: str) -> float:
+    """Bus ke liye scheduled KM fetch karo database se"""
+    res = supabase.table("vehicle_scheduled_km") \
+        .select("scheduled_km") \
+        .eq("bus_number", bus_number) \
+        .execute()
+    if res.data:
+        return float(res.data[0]["scheduled_km"])
+    return 0.0
+
+
 # ══════════════════════════════════════════════
 # DRIVER SALARY
 # ══════════════════════════════════════════════
@@ -199,7 +210,6 @@ def get_salary_check(
 ) -> pd.DataFrame:
     query = supabase.table("salary_check").select("*")
 
-    # Subordinate ke liye sirf assigned buses ka data
     if allowed_buses is not None:
         query = query.in_("bus_number", allowed_buses)
 
@@ -214,6 +224,14 @@ def get_salary_check(
         return pd.DataFrame(columns=["Sr No", "Driver Name", "Conductor Name", "Duties", "Salary Given"])
 
     df = pd.DataFrame(res.data)
+
+    if not df.empty and "driver_name" in df.columns:
+        df = df.groupby(["driver_name", "conductor_name"], as_index=False).agg(
+            duties=("duties", "sum"),
+            total_salary=("total_salary", "max"),
+        ).reset_index(drop=True)
+        df.insert(0, "driver_id", range(1, len(df) + 1))
+
     df = df.rename(columns={
         "driver_id":      "Sr No",
         "driver_name":    "Driver Name",
