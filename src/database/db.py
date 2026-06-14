@@ -212,7 +212,7 @@ def delete_vehicle_expense(expense_id: str) -> None:
 
 def get_salary_check(from_date: str = None, to_date: str = None, bus_numbers: list = None) -> pd.DataFrame:
     query = supabase.table("vehicle_records").select(
-        "driver_name, conductor_name, date, bus_number"
+        "driver_name, bus_number, date"
     )
 
     if from_date:
@@ -225,37 +225,36 @@ def get_salary_check(from_date: str = None, to_date: str = None, bus_numbers: li
     res = query.execute()
 
     if not res.data:
-        return pd.DataFrame(columns=["Sr No", "Driver Name", "Conductor Name", "Duties", "Salary Given"])
+        return pd.DataFrame(columns=["Sr No", "Driver Name", "Bus Number", "Duties", "Salary Given"])
 
     df = pd.DataFrame(res.data)
-
-    # Filter out On Leave / invalid
     df = df[df["driver_name"].notna()]
-    df = df[df["driver_name"].str.strip().str.lower() != "no"]
-    df = df[df["driver_name"].str.strip().str.lower() != "test"]
+    df = df[df["driver_name"].str.strip().str.lower().isin(["no", "test"]) == False]
 
-    # Group by driver
-    grouped = df.groupby(df["driver_name"].str.strip().str.lower()).agg(
+    # Group by driver + bus
+    grouped = df.groupby(
+        [df["driver_name"].str.strip().str.lower(), "bus_number"]
+    ).agg(
         driver_name=("driver_name", "first"),
-        conductor_name=("conductor_name", "first"),
+        bus_number=("bus_number", "first"),
         duties=("date", "nunique"),
     ).reset_index(drop=True)
 
-    # Get salary
-    sal_res = supabase.table("driver_salary").select("driver_name, salary").execute()
-    sal_df  = pd.DataFrame(sal_res.data) if sal_res.data else pd.DataFrame(columns=["driver_name", "salary"])
+    # Get salary — bus_number match karke
+    sal_res = supabase.table("driver_salary").select("driver_name, salary, bus_number").execute()
+    sal_df  = pd.DataFrame(sal_res.data) if sal_res.data else pd.DataFrame(columns=["driver_name", "salary", "bus_number"])
 
     if not sal_df.empty:
-        sal_df["driver_name_lower"] = sal_df["driver_name"].str.strip().str.lower()
-        sal_sum = sal_df.groupby("driver_name_lower")["salary"].sum().reset_index()
-        grouped["driver_name_lower"] = grouped["driver_name"].str.strip().str.lower()
-        grouped = grouped.merge(sal_sum, on="driver_name_lower", how="left")
+        sal_df["key"] = sal_df["driver_name"].str.strip().str.lower() + "_" + sal_df["bus_number"].fillna("")
+        sal_sum = sal_df.groupby("key")["salary"].sum().reset_index()
+        grouped["key"] = grouped["driver_name"].str.strip().str.lower() + "_" + grouped["bus_number"].fillna("")
+        grouped = grouped.merge(sal_sum, on="key", how="left")
         grouped["salary"] = grouped["salary"].fillna(0)
     else:
         grouped["salary"] = 0
 
-    grouped = grouped[["driver_name", "conductor_name", "duties", "salary"]]
-    grouped.columns = ["Driver Name", "Conductor Name", "Duties", "Salary Given"]
+    grouped = grouped[["driver_name", "bus_number", "duties", "salary"]]
+    grouped.columns = ["Driver Name", "Bus Number", "Duties", "Salary Given"]
     grouped.insert(0, "Sr No", range(1, len(grouped) + 1))
 
     return grouped
