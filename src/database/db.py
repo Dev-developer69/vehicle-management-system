@@ -93,24 +93,25 @@ def get_vehicle_records(bus_number: str) -> pd.DataFrame:
 # DRIVER SALARY
 # ══════════════════════════════════════════════
 
-def save_driver_salary(df: pd.DataFrame) -> None:
+def save_driver_salary(df: pd.DataFrame, bus_number: str = "") -> None:
     records = [
         {
             "driver_name": row["Driver Name"],
             "date":        str(row["Date"]),
             "salary":      float(row["Salary"] or 0),
             "transaction": row["Transaction"] or "",
+            "bus_number":  bus_number,
         }
         for _, row in df.iterrows()
     ]
     supabase.table("driver_salary").insert(records).execute()
 
 
-def get_driver_salary() -> pd.DataFrame:
-    res = supabase.table("driver_salary") \
-        .select("*") \
-        .order("date", desc=True) \
-        .execute()
+def get_driver_salary(bus_number: str = "") -> pd.DataFrame:
+    query = supabase.table("driver_salary").select("*").order("date", desc=True)
+    if bus_number:
+        query = query.eq("bus_number", bus_number)
+    res = query.execute()
 
     if not res.data:
         return pd.DataFrame(columns=["id", "Date", "Driver Name", "Salary", "Transaction"])
