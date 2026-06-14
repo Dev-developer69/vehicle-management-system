@@ -63,7 +63,7 @@ def stats_grid():
         with col:
             st.markdown(f"""
                 <div style="
-                    background: rgba(255,255,255,0.15);
+                    background: #14A085;
                     border-radius: 12px;
                     padding: 20px;
                     text-align: center;
