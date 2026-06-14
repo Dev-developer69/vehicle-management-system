@@ -1,7 +1,7 @@
 import calendar
 import streamlit as st
 import pandas as pd
-from datetime import date
+from datetime import date, timedelta
 from fpdf import FPDF
 
 from src.database.db import (
@@ -12,6 +12,7 @@ from src.database.db import (
     get_driver_salary,
     get_vehicle_expenses,
     get_salary_check,
+    get_scheduled_km,
     update_vehicle_expense,
     delete_vehicle_expense,
     update_driver_salary,
@@ -75,17 +76,15 @@ def _generate_pdf(df: pd.DataFrame, total_row: pd.DataFrame, bus_number: str, mo
     pdf.add_page()
     pdf.set_auto_page_break(auto=True, margin=10)
 
-    # Title
     pdf.set_font("Helvetica", "B", 14)
     month_name = date(2000, month, 1).strftime("%B")
     pdf.cell(0, 10, f"Vehicle Records - {bus_number}  |  {month_name} ({half})", ln=True, align="C")
     pdf.ln(3)
 
-    cols = list(df.columns)
+    cols   = list(df.columns)
     page_w = pdf.w - 2 * pdf.l_margin
     col_w  = page_w / len(cols)
 
-    # Header row
     pdf.set_fill_color(52, 73, 94)
     pdf.set_text_color(255, 255, 255)
     pdf.set_font("Helvetica", "B", 8)
@@ -93,7 +92,6 @@ def _generate_pdf(df: pd.DataFrame, total_row: pd.DataFrame, bus_number: str, mo
         pdf.cell(col_w, 8, str(col), border=1, align="C", fill=True)
     pdf.ln()
 
-    # Data rows
     pdf.set_text_color(0, 0, 0)
     pdf.set_font("Helvetica", "", 8)
     for i, row in df.iterrows():
@@ -103,7 +101,6 @@ def _generate_pdf(df: pd.DataFrame, total_row: pd.DataFrame, bus_number: str, mo
             pdf.cell(col_w, 7, str(row[col]) if pd.notna(row[col]) else "", border=1, align="C", fill=fill)
         pdf.ln()
 
-    # Total row
     pdf.set_fill_color(230, 240, 255)
     pdf.set_font("Helvetica", "B", 8)
     for col in cols:
@@ -119,21 +116,29 @@ def _generate_pdf(df: pd.DataFrame, total_row: pd.DataFrame, bus_number: str, mo
 # ──────────────────────────────────────────────
 def editable_grid(bus_number: str):
     numeric_cols = ["Scheduled KM", "Actual KM", "Diesel", "Avg", "Income"]
-    key         = f"grid_{bus_number}"
-    ed_key      = f"editor_{bus_number}"
-    fetch_key   = f"fetched_{bus_number}"
-    confirm_key = f"show_confirm_{bus_number}"
-    pending_key = f"pending_df_{bus_number}"
+    key          = f"grid_{bus_number}"
+    ed_key       = f"editor_{bus_number}"
+    fetch_key    = f"fetched_{bus_number}"
+    confirm_key  = f"show_confirm_{bus_number}"
+    pending_key  = f"pending_df_{bus_number}"
+    sched_km_key = f"sched_km_{bus_number}"
+
+    # Fetch scheduled KM from DB once per session
+    if sched_km_key not in st.session_state:
+        st.session_state[sched_km_key] = get_scheduled_km(bus_number)
+    scheduled_km = st.session_state[sched_km_key]
 
     if key not in st.session_state:
         st.session_state[key] = pd.DataFrame({
             "Date":           [date.today()],
+            "Status":         ["Present"],
             "Driver Name":    [None],
             "Conductor Name": [None],
-            "Scheduled KM":   [466],
+            "Scheduled KM":   [scheduled_km],
             "Actual KM":      [0],
             "Diesel":         [0.00],
             "Income":         [0],
+            "Remark":         [""],
         })
 
     st.markdown(f"### Vehicle Records {bus_number} 🚐")
@@ -145,18 +150,31 @@ def editable_grid(bus_number: str):
         hide_index=True,
         key=ed_key,
         column_config={
-            "Date":           st.column_config.DateColumn("Date", default=date.today()),
+            "Date":           st.column_config.DateColumn("Date", default = date.today() - timedelta(days=1)),
+            "Status":         st.column_config.SelectboxColumn(
+                                  "Status",
+                                  options=["Present", "On Leave"],
+                                  default="Present",
+                              ),
             "Driver Name":    st.column_config.TextColumn("Driver Name"),
             "Conductor Name": st.column_config.TextColumn("Conductor Name"),
-            "Scheduled KM":   st.column_config.NumberColumn("Scheduled KM", min_value=0, default=466),
+            "Scheduled KM":   st.column_config.NumberColumn("Scheduled KM", min_value=0, default=scheduled_km),
             "Actual KM":      st.column_config.NumberColumn("Actual KM", min_value=0, default=0),
             "Diesel":         st.column_config.NumberColumn("Diesel", min_value=0.0, default=0.0, step=0.01, format="%.2f"),
             "Income":         st.column_config.NumberColumn("Income", min_value=0, default=0),
+            "Remark":         st.column_config.TextColumn("Remark"),
         },
     )
 
     editor_state = st.session_state.get(ed_key, {})
     edited_df    = _apply_editor_state(st.session_state[key], editor_state)
+
+    # On Leave rows mein Schedule KM, Actual KM, Diesel, Income zero karo
+    on_leave_mask = edited_df["Status"] == "On Leave"
+    edited_df.loc[on_leave_mask, 'Scheduled KM'] = 0 
+    edited_df.loc[on_leave_mask, "Actual KM"] = 0
+    edited_df.loc[on_leave_mask, "Diesel"]    = 0.0
+    edited_df.loc[on_leave_mask, "Income"]    = 0
 
     # ── Save / Confirm buttons ──
     if st.session_state.get(confirm_key):
@@ -192,8 +210,8 @@ def editable_grid(bus_number: str):
                 st.session_state[fetch_key] = get_vehicle_records(bus_number)
             fetched_df = st.session_state[fetch_key]
 
-            new_dates      = set(cleaned_df["Date"].astype(str).tolist())
-            existing_dates = set(fetched_df["Date"].astype(str).tolist()) if not fetched_df.empty else set()
+            new_dates       = set(cleaned_df["Date"].astype(str).tolist())
+            existing_dates  = set(fetched_df["Date"].astype(str).tolist()) if not fetched_df.empty else set()
             duplicate_dates = new_dates & existing_dates
 
             if duplicate_dates:
@@ -262,13 +280,14 @@ def editable_grid(bus_number: str):
             pd.to_numeric(display_df["Diesel"], errors="coerce").replace(0, float("nan"))
         ).round(2)
 
-        # Guard: add Income column if DB doesn't return it yet
         if "Income" not in display_df.columns:
             display_df["Income"] = 0
+        if "Remark" not in display_df.columns:
+            display_df["Remark"] = ""
 
         display_df = display_df[[
-            "Date", "Driver Name", "Conductor Name",
-            "Scheduled KM", "Actual KM", "Diesel", "Avg", "Income"
+            "Date", "Status", "Driver Name", "Conductor Name",
+            "Scheduled KM", "Actual KM", "Diesel", "Avg", "Income", "Remark"
         ]]
 
         st.dataframe(display_df, use_container_width=True, hide_index=True)
@@ -276,7 +295,7 @@ def editable_grid(bus_number: str):
         st.dataframe(total_row, use_container_width=True, hide_index=True)
 
         # ── PDF Download ──
-        pdf_bytes = _generate_pdf(display_df, total_row, bus_number, month, half)
+        pdf_bytes  = _generate_pdf(display_df, total_row, bus_number, month, half)
         month_name = date(2000, month, 1).strftime("%B")
         st.download_button(
             label="📥 Download PDF",
