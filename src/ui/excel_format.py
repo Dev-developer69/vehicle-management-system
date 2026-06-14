@@ -1,7 +1,7 @@
 import calendar
 import streamlit as st
 import pandas as pd
-from datetime import date, timedelta
+from datetime import date
 from fpdf import FPDF
 
 from src.database.db import (
@@ -69,7 +69,7 @@ def build_total_row(df: pd.DataFrame, numeric_cols: list, label_col: str = "Driv
 
 
 # ──────────────────────────────────────────────
-# HELPER: Generate PDF from DataFrame
+# HELPER: Generate PDF — Vehicle Records
 # ──────────────────────────────────────────────
 def _generate_pdf(df: pd.DataFrame, total_row: pd.DataFrame, bus_number: str, month: int, half: str) -> bytes:
     pdf = FPDF(orientation="L", unit="mm", format="A4")
@@ -112,6 +112,72 @@ def _generate_pdf(df: pd.DataFrame, total_row: pd.DataFrame, bus_number: str, mo
 
 
 # ──────────────────────────────────────────────
+# HELPER: Generate PDF — Expenses
+# ──────────────────────────────────────────────
+def _generate_expenses_pdf(df: pd.DataFrame, bus_number: str, month: int, period: str) -> bytes:
+    pdf = FPDF(orientation="L", unit="mm", format="A4")
+    pdf.add_page()
+    pdf.set_auto_page_break(auto=True, margin=10)
+
+    pdf.set_font("Helvetica", "B", 14)
+    month_name = date(2000, month, 1).strftime("%B")
+    pdf.cell(0, 10, f"Vehicle Expenses - {bus_number}  |  {month_name} ({period})", ln=True, align="C")
+    pdf.ln(3)
+
+    cols   = list(df.columns)
+    page_w = pdf.w - 2 * pdf.l_margin
+    col_w  = page_w / len(cols)
+
+    # Header
+    pdf.set_fill_color(52, 73, 94)
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_font("Helvetica", "B", 9)
+    for col in cols:
+        pdf.cell(col_w, 8, str(col), border=1, align="C", fill=True)
+    pdf.ln()
+
+    # Rows
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_font("Helvetica", "", 9)
+    for i, row in df.iterrows():
+        fill = i % 2 == 0
+        pdf.set_fill_color(245, 245, 245) if fill else pdf.set_fill_color(255, 255, 255)
+        for col in cols:
+            pdf.cell(col_w, 7, str(row[col]) if pd.notna(row[col]) else "", border=1, align="C", fill=fill)
+        pdf.ln()
+
+    # Total row
+    total_amount = pd.to_numeric(df["Amount"], errors="coerce").sum()
+    pdf.set_fill_color(230, 240, 255)
+    pdf.set_font("Helvetica", "B", 9)
+    for col in cols:
+        if col == "Category":
+            val = "TOTAL"
+        elif col == "Amount":
+            val = f"{total_amount:,.0f}"
+        else:
+            val = ""
+        pdf.cell(col_w, 8, str(val), border=1, align="C", fill=True)
+    pdf.ln()
+
+    return bytes(pdf.output())
+
+
+# ──────────────────────────────────────────────
+# HELPER: Date range filter
+# ──────────────────────────────────────────────
+def _get_date_range(year: int, month: int, period: str):
+    if period == "1-15":
+        return pd.Timestamp(year, month, 1), pd.Timestamp(year, month, 15)
+    elif period == "16-31":
+        last_day = calendar.monthrange(year, month)[1]
+        return pd.Timestamp(year, month, 16), pd.Timestamp(year, month, last_day)
+    else:  # 01-31
+        last_day = calendar.monthrange(year, month)[1]
+        return pd.Timestamp(year, month, 1), pd.Timestamp(year, month, last_day)
+
+
+# ──────────────────────────────────────────────
 # 1. VEHICLE RECORDS
 # ──────────────────────────────────────────────
 def editable_grid(bus_number: str):
@@ -150,7 +216,7 @@ def editable_grid(bus_number: str):
         hide_index=True,
         key=ed_key,
         column_config={
-            "Date":           st.column_config.DateColumn("Date", default = date.today() - timedelta(days=1)),
+            "Date":           st.column_config.DateColumn("Date", default=date.today()),
             "Status":         st.column_config.SelectboxColumn(
                                   "Status",
                                   options=["Present", "On Leave"],
@@ -169,11 +235,10 @@ def editable_grid(bus_number: str):
     editor_state = st.session_state.get(ed_key, {})
     edited_df    = _apply_editor_state(st.session_state[key], editor_state)
 
-    # On Leave rows mein Schedule KM, Actual KM, Diesel, Income zero karo
+    # On Leave rows mein Actual KM, Diesel, Income zero karo
     on_leave_mask = edited_df["Status"] == "On Leave"
-    edited_df.loc[on_leave_mask, 'Scheduled KM'] = 0 
+    edited_df.loc[on_leave_mask, 'Scheduled KM'] = 0
     edited_df.loc[on_leave_mask, "Actual KM"] = 0
-    edited_df.loc[on_leave_mask, "Diesel"]    = 0.0
     edited_df.loc[on_leave_mask, "Income"]    = 0
 
     # ── Save / Confirm buttons ──
@@ -260,14 +325,8 @@ def editable_grid(bus_number: str):
         display_df = fetched_df.copy()
         display_df["Date"] = pd.to_datetime(display_df["Date"])
 
-        year = date.today().year
-        if half == "1-15":
-            start = pd.Timestamp(year, month, 1)
-            end   = pd.Timestamp(year, month, 15)
-        else:
-            start    = pd.Timestamp(year, month, 16)
-            last_day = calendar.monthrange(year, month)[1]
-            end      = pd.Timestamp(year, month, last_day)
+        year  = date.today().year
+        start, end = _get_date_range(year, month, half)
 
         display_df = display_df[
             (display_df["Date"] >= start) &
@@ -294,7 +353,6 @@ def editable_grid(bus_number: str):
         total_row = build_total_row(display_df, numeric_cols, label_col="Driver Name")
         st.dataframe(total_row, use_container_width=True, hide_index=True)
 
-        # ── PDF Download ──
         pdf_bytes  = _generate_pdf(display_df, total_row, bus_number, month, half)
         month_name = date(2000, month, 1).strftime("%B")
         st.download_button(
@@ -359,7 +417,6 @@ def driver_salary(bus_number: str = ""):
         st.session_state.pop(fetch_key, None)
         st.rerun()
 
-    # ── Saved Records display ──
     st.markdown("### Saved Salary Records 📋")
     if fetch_key not in st.session_state:
         st.session_state[fetch_key] = get_driver_salary()
@@ -460,22 +517,52 @@ def expenses(bus_number: str = ""):
         st.session_state.pop(fetch_key, None)
         st.rerun()
 
-    # ── Saved Expenses display ──
+    # ── Saved Expenses display with date filter ──
     st.markdown("### Saved Expenses 📋")
     if fetch_key not in st.session_state:
         st.session_state[fetch_key] = get_vehicle_expenses(bus_number)
 
     fetched_df = st.session_state[fetch_key]
 
-    col_r, col_ref = st.columns([5, 1])
-    with col_ref:
-        if st.button("🔄 Refresh", key=f"ref_exp_{bus_number}"):
+    col1, col2, col3 = st.columns([2, 2, 1])
+    with col1:
+        exp_month = st.selectbox(
+            "Month",
+            options=list(range(1, 13)),
+            index=date.today().month - 1,
+            format_func=lambda x: date(2000, x, 1).strftime("%B"),
+            key=f"exp_month_{bus_number}",
+        )
+    with col2:
+        exp_period = st.radio(
+            "Period",
+            ["1-15", "16-31", "01-31"],
+            index=2,
+            horizontal=True,
+            key=f"exp_period_{bus_number}",
+        )
+    with col3:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("🔄 Refresh", key=f"ref_exp_{bus_number}", use_container_width=True):
             st.session_state.pop(fetch_key, None)
             st.rerun()
 
     if not fetched_df.empty:
+        display_exp = fetched_df.copy()
+        display_exp["Date"] = pd.to_datetime(display_exp["Date"])
+
+        year = date.today().year
+        start, end = _get_date_range(year, exp_month, exp_period)
+
+        display_exp = display_exp[
+            (display_exp["Date"] >= start) &
+            (display_exp["Date"] <= end)
+        ].copy()
+
+        display_exp["Date"] = display_exp["Date"].dt.strftime("%Y-%m-%d")
+
         st.data_editor(
-            fetched_df,
+            display_exp,
             use_container_width=True,
             hide_index=True,
             num_rows="dynamic",
@@ -493,16 +580,38 @@ def expenses(bus_number: str = ""):
             exp_editor_state = st.session_state.get(f"edit_exp_{bus_number}", {})
 
             for row_idx, changes in exp_editor_state.get("edited_rows", {}).items():
-                expense_id = fetched_df.iloc[row_idx]["id"]
+                expense_id = display_exp.iloc[row_idx]["id"]
                 update_vehicle_expense(expense_id, changes)
 
             for row_idx in sorted(exp_editor_state.get("deleted_rows", []), reverse=True):
-                expense_id = fetched_df.iloc[row_idx]["id"]
+                expense_id = display_exp.iloc[row_idx]["id"]
                 delete_vehicle_expense(expense_id)
 
             st.success("✅ Updated!")
             st.session_state.pop(fetch_key, None)
             st.rerun()
+
+        # Total row
+        total_amount = pd.to_numeric(display_exp["Amount"], errors="coerce").sum()
+        st.markdown(f"""
+        <div style='background:#2D2D5E;border-radius:8px;padding:12px 20px;margin-top:8px;'>
+            <span style='color:#aaa;'>Total: </span>
+            <span style='color:#7B8CFF;font-size:1.2rem;font-weight:bold;'>₹{total_amount:,.0f}</span>
+        </div>""", unsafe_allow_html=True)
+
+        # PDF Download
+        month_name = date(2000, exp_month, 1).strftime("%B")
+        pdf_data   = _generate_expenses_pdf(
+            display_exp[["Date", "Category", "Amount", "Description"]],
+            bus_number, exp_month, exp_period
+        )
+        st.download_button(
+            label="📥 Download PDF",
+            data=pdf_data,
+            file_name=f"expenses_{bus_number}_{month_name}_{exp_period.replace('-','_')}.pdf",
+            mime="application/pdf",
+            key=f"exp_pdf_{bus_number}",
+        )
     else:
         st.info("No records found.")
 
