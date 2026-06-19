@@ -559,6 +559,7 @@ def diesel_view(bus_number: str = ""):
         return
 
     # ✅ Editable table — sirf Rate column editable, baki read-only
+    display_df["Rate (₹/L)"] = pd.to_numeric(display_df["Rate (₹/L)"], errors="coerce").fillna(90.0)
     ed_key = f"diesel_editor_{bus_number}"
     st.data_editor(
         df[["Date", "Diesel", "Rate (₹/L)"]],
@@ -570,6 +571,7 @@ def diesel_view(bus_number: str = ""):
             "Diesel":      st.column_config.NumberColumn("Diesel (L)", disabled=True, format="%.2f"),
             "Rate (₹/L)":  st.column_config.NumberColumn("Rate (₹/L)", min_value=0.0,
                                                            step=0.01, format="%.2f"),
+            display_df["Amount (₹)"] = (display_df["Diesel"] * display_df["Rate (₹/L)"]).round(2),
         }
     )
 
