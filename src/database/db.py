@@ -7,15 +7,16 @@ from src.database.config import supabase
 # ══════════════════════════════════════════════
 
 def get_scheduled_km(bus_number: str) -> int:
-    """Bus ka defined scheduled KM fetch karo vehicle_scheduled_km table se"""
-    res = supabase.table("vehicle_scheduled_km") \
+    """Latest scheduled KM fetch karo us bus ke liye"""
+    res = supabase.table("vehicle_records") \
         .select("scheduled_km") \
         .eq("bus_number", bus_number) \
+        .order("date", desc=True) \
         .limit(1) \
         .execute()
     if res.data:
         return int(res.data[0]["scheduled_km"] or 446)
-    return 446  # fallback if bus not configured in vehicle_scheduled_km
+    return 446  # default
 
 
 def save_vehicle_records(bus_number: str, df: pd.DataFrame) -> None:
@@ -42,6 +43,7 @@ def save_vehicle_records(bus_number: str, df: pd.DataFrame) -> None:
             "updated_by":       current_email,       # ← kaun ne save kiya
             "updated_by_role":  current_role,        # ← uska role
             "remark":           str(row.get("Remark") or ""),
+            "next_period":      bool(row.get("Next", False)),
         })
 
     edited_dates = df["Date"].astype(str).unique().tolist()
@@ -78,14 +80,17 @@ def get_vehicle_records(bus_number: str) -> pd.DataFrame:
         "diesel":         "Diesel",
         "income":         "Income",
         "remark":         "Remark",
+        "next_period":    "Next",
     })
 
     if "Status" not in df.columns:
         df["Status"] = "Present"
     if "Remark" not in df.columns:
         df["Remark"] = ""
+    if "Next" not in df.columns:
+        df["Next"] = False
 
-    return df[["Date", "Status", "Driver Name", "Conductor Name", "Scheduled KM", "Actual KM", "Diesel", "Income", "Remark"]]
+    return df[["Date", "Status", "Driver Name", "Conductor Name", "Scheduled KM", "Actual KM", "Diesel", "Income", "Remark", "Next"]]
 
 
 # ══════════════════════════════════════════════
@@ -228,7 +233,7 @@ def get_salary_check(from_date: str = None, to_date: str = None, bus_numbers: li
 
     df = pd.DataFrame(res.data)
     df = df[df["driver_name"].notna()]
-    df = df[df["driver_name"].str.strip().str.lower().isin(["no", "test", "none", ""]) == False]
+    df = df[~df["driver_name"].str.strip().str.lower().isin(["no", "test", "none", ""])]
 
     # Group by driver + bus
     grouped = df.groupby(
@@ -239,7 +244,7 @@ def get_salary_check(from_date: str = None, to_date: str = None, bus_numbers: li
         duties=("date", "nunique"),
     ).reset_index(drop=True)
 
-    # Get salary — bus_number match karke
+    # Get salary — bus_number match kark
     sal_res = supabase.table("driver_salary").select("driver_name, salary, bus_number").execute()
     sal_df  = pd.DataFrame(sal_res.data) if sal_res.data else pd.DataFrame(columns=["driver_name", "salary", "bus_number"])
 
