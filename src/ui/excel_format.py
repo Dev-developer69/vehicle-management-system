@@ -539,12 +539,12 @@ def diesel_view(bus_number: str = ""):
         st.markdown("<br>", unsafe_allow_html=True)
         load = st.button("🔄 Load", key=f"diesel_load_{bus_number}", use_container_width=True)
 
-    # ✅ Universal rate input — poore table pe apply, per row override bhi possible
+    # ✅ rate input — poore table pe apply, per row override bhi possible
     rate_key = f"diesel_rate_{bus_number}"
     if rate_key not in st.session_state:
         st.session_state[rate_key] = 90.00
     universal_rate = st.number_input(
-        "⛽ Universal Rate (₹/L) — change karo toh poori table update hogi",
+        "⛽ Set rate for whole table ",
         min_value=0.0, step=0.01, format="%.2f",
         value=st.session_state[rate_key],
         key=f"diesel_rate_input_{bus_number}"
@@ -569,7 +569,6 @@ def diesel_view(bus_number: str = ""):
         st.info("No diesel records found for this period.")
         return
 
-    # ✅ Universal rate poore table pe apply — per row override bhi ho sakta hai
     df = df.copy()
     df["Rate (₹/L)"] = universal_rate
 
