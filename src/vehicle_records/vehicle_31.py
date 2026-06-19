@@ -48,9 +48,14 @@ def expense_3131():
 
     if st.button('Driver Salary',type='tertiary', width='stretch', icon=':material/home:'):
         st.session_state['expense_tab'] = 'driver'
+    
+    if st.button('Diesel View', type='tertiary', width='stretch', icon=':material/local_gas_station:'):
+        st.session_state['expense_tab'] = 'diesel'
 
 
     if st.session_state['expense_tab'] == 'vehicle':
         expenses(bus_number='3131')
     elif st.session_state['expense_tab'] == 'driver':
-        driver_salary(bus_number='3131')
+        driver_salary(bus_number='3131'),
+    elif st.session_state['expense_tab'] == 'diesel':
+        diesel_view(bus_number='3131')
