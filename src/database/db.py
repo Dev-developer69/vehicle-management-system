@@ -39,6 +39,7 @@ def save_vehicle_records(bus_number: str, df: pd.DataFrame) -> None:
             "scheduled_km":     row["Scheduled KM"],
             "actual_km":        0 if on_leave else row["Actual KM"],
             "diesel":           0.0 if on_leave else float(row.get("Diesel") or 0),
+            "diesel_km":        0   if on_leave else int(row.get("Diesel KM") or 0),
             "income":           0   if on_leave else int(row.get("Income") or 0),
             "updated_by":       current_email,       # ← kaun ne save kiya
             "updated_by_role":  current_role,        # ← uska role
@@ -78,6 +79,7 @@ def get_vehicle_records(bus_number: str) -> pd.DataFrame:
         "scheduled_km":   "Scheduled KM",
         "actual_km":      "Actual KM",
         "diesel":         "Diesel",
+        "diesel_km":      "Diesel KM",
         "income":         "Income",
         "remark":         "Remark",
         "next_period":    "Next",
@@ -89,8 +91,10 @@ def get_vehicle_records(bus_number: str) -> pd.DataFrame:
         df["Remark"] = ""
     if "Next" not in df.columns:
         df["Next"] = False
+    if "Diesel KM" not in df.columns:
+        df["Diesel KM"] = 0
 
-    return df[["Date", "Status", "Driver Name", "Conductor Name", "Scheduled KM", "Actual KM", "Diesel", "Income", "Remark", "Next"]]
+    return df[["Date", "Status", "Driver Name", "Conductor Name", "Scheduled KM", "Actual KM", "Diesel", "Diesel KM", "Income", "Remark", "Next"]]
 
 
 # ══════════════════════════════════════════════
