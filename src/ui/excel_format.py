@@ -146,6 +146,23 @@ def _get_date_range(year, month, period):
 
 
 # ──────────────────────────────────────────────
+# HELPER: Previous period range (for "Next" shift logic)
+# ──────────────────────────────────────────────
+def _shift_period_back(year, month, period):
+    """
+    Agar current view '16-31' hai → previous period '1-15' same month hai.
+    Agar current view '1-15' hai → previous period '16-31' pichle month hai.
+    """
+    if period == "16-31":
+        return pd.Timestamp(year, month, 1), pd.Timestamp(year, month, 15)
+    else:  
+        prev_month = month - 1 if month > 1 else 12
+        prev_year  = year if month > 1 else year - 1
+        last_day   = calendar.monthrange(prev_year, prev_month)[1]
+        return pd.Timestamp(prev_year, prev_month, 16), pd.Timestamp(prev_year, prev_month, last_day)
+
+
+# ──────────────────────────────────────────────
 # 1. VEHICLE RECORDS
 # ──────────────────────────────────────────────
 def editable_grid(bus_number: str):
@@ -172,6 +189,7 @@ def editable_grid(bus_number: str):
             "Diesel":         [0.00],
             "Income":         [0],
             "Remark":         [""],
+            "Next":           [False],
         })
 
     st.markdown(f"### Vehicle Records {bus_number} 🚐")
@@ -191,6 +209,7 @@ def editable_grid(bus_number: str):
             "Diesel":         st.column_config.NumberColumn("Diesel", min_value=0.0, default=0.0, step=0.01, format="%.2f"),
             "Income":         st.column_config.NumberColumn("Income", min_value=0, default=0),
             "Remark":         st.column_config.TextColumn("Remark"),
+            "Next":           st.column_config.CheckboxColumn("Next", default=False, help="Yes = is entry ko next period mein count karo"),
         },
     )
 
@@ -263,8 +282,19 @@ def editable_grid(bus_number: str):
     if not fetched_df.empty:
         display_df = fetched_df.copy()
         display_df["Date"] = pd.to_datetime(display_df["Date"])
+        if "Next" not in display_df.columns:
+            display_df["Next"] = False
+
         start, end = _get_date_range(date.today().year, month, half)
-        display_df = display_df[(display_df["Date"] >= start) & (display_df["Date"] <= end)]
+
+        
+        normal_mask = (display_df["Date"] >= start) & (display_df["Date"] <= end) & (display_df["Next"] == False)
+
+        
+        prev_start, prev_end = _shift_period_back(date.today().year, month, half)
+        shifted_mask = (display_df["Date"] >= prev_start) & (display_df["Date"] <= prev_end) & (display_df["Next"] == True)
+
+        display_df = display_df[normal_mask | shifted_mask]
         display_df["Date"] = display_df["Date"].dt.strftime("%Y-%m-%d")
         display_df["Avg"]  = (
             pd.to_numeric(display_df["Actual KM"], errors="coerce") /
@@ -273,7 +303,7 @@ def editable_grid(bus_number: str):
         if "Income" not in display_df.columns: display_df["Income"] = 0
         if "Remark" not in display_df.columns: display_df["Remark"] = ""
         display_df = display_df[["Date", "Status", "Driver Name", "Conductor Name",
-                                  "Scheduled KM", "Actual KM", "Diesel", "Avg", "Income", "Remark"]]
+                                  "Scheduled KM", "Actual KM", "Diesel", "Avg", "Income", "Remark", "Next"]]
         st.dataframe(display_df, use_container_width=True, hide_index=True)
         total_row = build_total_row(display_df, numeric_cols, label_col="Driver Name")
         st.dataframe(total_row, use_container_width=True, hide_index=True)
@@ -327,7 +357,7 @@ def driver_salary(bus_number: str = ""):
         if cleaned_df.empty:
             st.warning("⚠️ No valid rows to save.")
             return
-        # ← bus_number pass karo
+            
         save_driver_salary(cleaned_df, bus_number=bus_number)
         st.success("✅ Saved!")
         st.session_state.pop(key, None)
