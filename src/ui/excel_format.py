@@ -155,7 +155,7 @@ def _shift_period_back(year, month, period):
     """
     if period == "16-31":
         return pd.Timestamp(year, month, 1), pd.Timestamp(year, month, 15)
-    else:  
+    else:  # period == "1-15" → pichla month ka 16-31
         prev_month = month - 1 if month > 1 else 12
         prev_year  = year if month > 1 else year - 1
         last_day   = calendar.monthrange(prev_year, prev_month)[1]
@@ -166,7 +166,7 @@ def _shift_period_back(year, month, period):
 # 1. VEHICLE RECORDS
 # ──────────────────────────────────────────────
 def editable_grid(bus_number: str):
-    numeric_cols = ["Scheduled KM", "Actual KM", "Diesel", "Avg", "Income"]
+    numeric_cols = ["Scheduled KM", "Actual KM", "Diesel", "Diesel KM", "Avg", "Income"]
     key          = f"grid_{bus_number}"
     ed_key       = f"editor_{bus_number}"
     fetch_key    = f"fetched_{bus_number}"
@@ -187,6 +187,7 @@ def editable_grid(bus_number: str):
             "Scheduled KM":   [scheduled_km],
             "Actual KM":      [0],
             "Diesel":         [0.00],
+            "Diesel KM":      [0],
             "Income":         [0],
             "Remark":         [""],
             "Next":           [False],
@@ -207,6 +208,7 @@ def editable_grid(bus_number: str):
             "Scheduled KM":   st.column_config.NumberColumn("Scheduled KM", min_value=0, default=scheduled_km),
             "Actual KM":      st.column_config.NumberColumn("Actual KM", min_value=0, default=0),
             "Diesel":         st.column_config.NumberColumn("Diesel", min_value=0.0, default=0.0, step=0.01, format="%.2f"),
+            "Diesel KM":      st.column_config.NumberColumn("Diesel KM", min_value=0, default=0, help="Itne diesel se itna km chala"),
             "Income":         st.column_config.NumberColumn("Income", min_value=0, default=0),
             "Remark":         st.column_config.TextColumn("Remark"),
             "Next":           st.column_config.CheckboxColumn("Next", default=False, help="Yes = is entry ko next period mein count karo"),
@@ -287,23 +289,25 @@ def editable_grid(bus_number: str):
 
         start, end = _get_date_range(date.today().year, month, half)
 
-        
+        # Normal rows jo is period mein aate hain (Next == False)
         normal_mask = (display_df["Date"] >= start) & (display_df["Date"] <= end) & (display_df["Next"] == False)
 
-        
+        # Next == True rows jiska actual date PREVIOUS period mein hai, lekin shift karke yahan aane chahiye
         prev_start, prev_end = _shift_period_back(date.today().year, month, half)
         shifted_mask = (display_df["Date"] >= prev_start) & (display_df["Date"] <= prev_end) & (display_df["Next"] == True)
 
         display_df = display_df[normal_mask | shifted_mask]
         display_df["Date"] = display_df["Date"].dt.strftime("%Y-%m-%d")
+        if "Diesel KM" not in display_df.columns:
+            display_df["Diesel KM"] = 0
         display_df["Avg"]  = (
-            pd.to_numeric(display_df["Actual KM"], errors="coerce") /
+            pd.to_numeric(display_df["Diesel KM"], errors="coerce") /
             pd.to_numeric(display_df["Diesel"], errors="coerce").replace(0, float("nan"))
         ).round(2)
         if "Income" not in display_df.columns: display_df["Income"] = 0
         if "Remark" not in display_df.columns: display_df["Remark"] = ""
         display_df = display_df[["Date", "Status", "Driver Name", "Conductor Name",
-                                  "Scheduled KM", "Actual KM", "Diesel", "Avg", "Income", "Remark", "Next"]]
+                                  "Scheduled KM", "Actual KM", "Diesel", "Diesel KM", "Avg", "Income", "Remark", "Next"]]
         st.dataframe(display_df, use_container_width=True, hide_index=True)
         total_row = build_total_row(display_df, numeric_cols, label_col="Driver Name")
         st.dataframe(total_row, use_container_width=True, hide_index=True)
@@ -357,7 +361,7 @@ def driver_salary(bus_number: str = ""):
         if cleaned_df.empty:
             st.warning("⚠️ No valid rows to save.")
             return
-            
+        # ← bus_number pass karo
         save_driver_salary(cleaned_df, bus_number=bus_number)
         st.success("✅ Saved!")
         st.session_state.pop(key, None)
