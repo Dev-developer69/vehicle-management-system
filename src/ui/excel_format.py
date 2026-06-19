@@ -273,23 +273,24 @@ def editable_grid(bus_number: str):
         display_df["Date"] = pd.to_datetime(display_df["Date"])
         if "Next" not in display_df.columns:
             display_df["Next"] = False
-        start, end = _get_date_range(date.today().year, month, half)
-        normal_mask  = (display_df["Date"] >= start) & (display_df["Date"] <= end) & (display_df["Next"] == False)
+        start, end           = _get_date_range(date.today().year, month, half)
+        normal_mask          = (display_df["Date"] >= start) & (display_df["Date"] <= end) & (display_df["Next"] == False)
         prev_start, prev_end = _shift_period_back(date.today().year, month, half)
-        shifted_mask = (display_df["Date"] >= prev_start) & (display_df["Date"] <= prev_end) & (display_df["Next"] == True)
-        display_df   = display_df[normal_mask | shifted_mask]
-        display_df["Date"] = display_df["Date"].dt.strftime("%Y-%m-%d")
+        shifted_mask         = (display_df["Date"] >= prev_start) & (display_df["Date"] <= prev_end) & (display_df["Next"] == True)
+        display_df           = display_df[normal_mask | shifted_mask]
+        display_df["Date"]   = display_df["Date"].dt.strftime("%Y-%m-%d")
         if "Diesel KM" not in display_df.columns:
             display_df["Diesel KM"] = 0
         display_df["Avg"] = (
             pd.to_numeric(display_df["Diesel KM"], errors="coerce") /
             pd.to_numeric(display_df["Diesel"], errors="coerce").replace(0, float("nan"))
         ).round(2)
-        for col in ["Income", "Remark"]:
+        for col, default in [("Income", 0), ("Remark", "")]:
             if col not in display_df.columns:
-                display_df[col] = 0 if col == "Income" else ""
+                display_df[col] = default
         display_df = display_df[["Date", "Status", "Driver Name", "Conductor Name",
-                                  "Scheduled KM", "Actual KM", "Diesel", "Diesel KM", "Avg", "Income", "Remark", "Next"]]
+                                  "Scheduled KM", "Actual KM", "Diesel", "Diesel KM",
+                                  "Avg", "Income", "Remark", "Next"]]
         st.dataframe(display_df, use_container_width=True, hide_index=True)
         total_row = build_total_row(display_df, numeric_cols, label_col="Driver Name")
         st.dataframe(total_row, use_container_width=True, hide_index=True)
@@ -373,7 +374,7 @@ def driver_salary(bus_number: str = ""):
         disp = fetched_df.copy()
         disp["Date"] = pd.to_datetime(disp["Date"])
         start, end   = _get_date_range(date.today().year, sal_month, sal_half)
-        disp = disp[(disp["Date"] >= start) & (disp["Date"] <= end)].copy()
+        disp         = disp[(disp["Date"] >= start) & (disp["Date"] <= end)].copy()
         disp["Date"] = disp["Date"].dt.strftime("%Y-%m-%d")
 
         st.data_editor(
@@ -474,7 +475,7 @@ def expenses(bus_number: str = ""):
     if not fetched_df.empty:
         display_exp = fetched_df.copy()
         display_exp["Date"] = pd.to_datetime(display_exp["Date"])
-        start, end = _get_date_range(date.today().year, exp_month, exp_period)
+        start, end  = _get_date_range(date.today().year, exp_month, exp_period)
         display_exp = display_exp[(display_exp["Date"] >= start) & (display_exp["Date"] <= end)].copy()
         display_exp["Date"] = display_exp["Date"].dt.strftime("%Y-%m-%d")
 
@@ -519,12 +520,11 @@ def expenses(bus_number: str = ""):
 
 
 # ──────────────────────────────────────────────
-# 4. DIESEL VIEW
+# 4. DIESEL VIEW — har row ka alag rate
 # ──────────────────────────────────────────────
 def diesel_view(bus_number: str = ""):
     st.markdown("### Diesel View ⛽")
 
-    # ── Filters ──
     col1, col2, col3 = st.columns([2, 2, 1])
     with col1:
         d_month = st.selectbox("Month", options=list(range(1, 13)),
@@ -539,25 +539,18 @@ def diesel_view(bus_number: str = ""):
         st.markdown("<br>", unsafe_allow_html=True)
         load = st.button("🔄 Load", key=f"diesel_load_{bus_number}", use_container_width=True)
 
-    # Diesel rate — user set kare, 2 decimal tak
-    rate_key = f"diesel_rate_{bus_number}"
-    if rate_key not in st.session_state:
-        st.session_state[rate_key] = 90.00
-    diesel_rate = st.number_input(
-        "⛽ Diesel Rate (₹/L)", min_value=0.0, step=0.01, format="%.2f",
-        value=st.session_state[rate_key],
-        key=f"diesel_rate_input_{bus_number}"
-    )
-    st.session_state[rate_key] = diesel_rate
-
     fetch_key = f"diesel_df_{bus_number}"
     if load or fetch_key not in st.session_state:
         start, end = _get_date_range(date.today().year, d_month, d_period)
-        st.session_state[fetch_key] = get_diesel_summary(
+        raw_df = get_diesel_summary(
             bus_number,
             from_date=start.strftime("%Y-%m-%d"),
             to_date=end.strftime("%Y-%m-%d"),
         )
+        if not raw_df.empty:
+            raw_df["Rate (₹/L)"] = 90.00  # default rate — user change kar sakta hai
+            raw_df["Amount (₹)"] = 0.00
+        st.session_state[fetch_key] = raw_df
 
     df = st.session_state.get(fetch_key, pd.DataFrame())
 
@@ -565,25 +558,42 @@ def diesel_view(bus_number: str = ""):
         st.info("No diesel records found for this period.")
         return
 
-    # ── Table with Amount column ──
-    df = df.copy()
-    df["Amount (₹)"] = (df["Diesel"] * diesel_rate).round(2)
-    total_diesel = df["Diesel"].sum()
-    total_amount = df["Amount (₹)"].sum()
+    # ✅ Editable table — sirf Rate column editable, baki read-only
+    ed_key = f"diesel_editor_{bus_number}"
+    st.data_editor(
+        df[["Date", "Diesel", "Rate (₹/L)"]],
+        use_container_width=True,
+        hide_index=True,
+        key=ed_key,
+        column_config={
+            "Date":        st.column_config.TextColumn("Date", disabled=True),
+            "Diesel":      st.column_config.NumberColumn("Diesel (L)", disabled=True, format="%.2f"),
+            "Rate (₹/L)":  st.column_config.NumberColumn("Rate (₹/L)", min_value=0.0,
+                                                           step=0.01, format="%.2f"),
+        }
+    )
 
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    # ✅ Editor state se updated rates apply karo
+    editor_state = st.session_state.get(ed_key, {})
+    display_df   = df.copy()
+    for row_idx, changes in editor_state.get("edited_rows", {}).items():
+        for col, val in changes.items():
+            if row_idx < len(display_df):
+                display_df.at[row_idx, col] = val
 
-    # ── Summary cards ──
+    display_df["Rate (₹/L)"] = pd.to_numeric(display_df["Rate (₹/L)"], errors="coerce").fillna(90.0)
+    display_df["Amount (₹)"] = (display_df["Diesel"] * display_df["Rate (₹/L)"]).round(2)
+
+    total_diesel = display_df["Diesel"].sum()
+    total_amount = display_df["Amount (₹)"].sum()
+
+    # ── Summary ──
     st.markdown(f"""
     <div style='background:#1e1e3a;border-radius:10px;padding:16px 24px;margin:12px 0;
                 display:flex;gap:40px;flex-wrap:wrap;'>
         <div>
             <div style='color:#aaa;font-size:0.85rem;'>Total Diesel</div>
             <div style='color:#7B8CFF;font-size:1.3rem;font-weight:bold;'>{total_diesel:.2f} L</div>
-        </div>
-        <div>
-            <div style='color:#aaa;font-size:0.85rem;'>Rate</div>
-            <div style='color:#7B8CFF;font-size:1.3rem;font-weight:bold;'>₹{diesel_rate:.2f}/L</div>
         </div>
         <div>
             <div style='color:#aaa;font-size:0.85rem;'>Total Amount</div>
