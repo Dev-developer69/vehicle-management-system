@@ -244,9 +244,14 @@ def get_salary_check(from_date: str = None, to_date: str = None, bus_numbers: li
         duties=("date", "nunique"),
     ).reset_index(drop=True)
 
-    # Get salary — bus_number match kark
-    sal_res = supabase.table("driver_salary").select("driver_name, salary, bus_number").execute()
-    sal_df  = pd.DataFrame(sal_res.data) if sal_res.data else pd.DataFrame(columns=["driver_name", "salary", "bus_number"])
+    # Get salary — bus_number match karke AND date range ke andar
+    sal_query = supabase.table("driver_salary").select("driver_name, salary, bus_number, date")
+    if from_date:
+        sal_query = sal_query.gte("date", from_date)
+    if to_date:
+        sal_query = sal_query.lte("date", to_date)
+    sal_res = sal_query.execute()
+    sal_df  = pd.DataFrame(sal_res.data) if sal_res.data else pd.DataFrame(columns=["driver_name", "salary", "bus_number", "date"])
 
     if not sal_df.empty:
         sal_df["key"] = sal_df["driver_name"].str.strip().str.lower() + "_" + sal_df["bus_number"].fillna("")
