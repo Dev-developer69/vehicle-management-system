@@ -5,18 +5,11 @@ from datetime import date
 from fpdf import FPDF
 
 from src.database.db import (
-    save_vehicle_records,
-    save_driver_salary,
-    save_vehicle_expenses,
-    get_vehicle_records,
-    get_driver_salary,
-    get_vehicle_expenses,
-    get_salary_check,
-    get_scheduled_km,
-    update_vehicle_expense,
-    delete_vehicle_expense,
-    update_driver_salary,
-    delete_driver_salary,
+    save_vehicle_records, save_driver_salary, save_vehicle_expenses,
+    get_vehicle_records, get_driver_salary, get_vehicle_expenses,
+    get_salary_check, get_scheduled_km, get_diesel_summary,
+    update_vehicle_expense, delete_vehicle_expense,
+    update_driver_salary, delete_driver_salary,
 )
 
 
@@ -64,6 +57,33 @@ def build_total_row(df: pd.DataFrame, numeric_cols: list, label_col: str = "Driv
 
 
 # ──────────────────────────────────────────────
+# HELPER: Date range filter
+# ──────────────────────────────────────────────
+def _get_date_range(year, month, period):
+    if period == "1-15":
+        return pd.Timestamp(year, month, 1), pd.Timestamp(year, month, 15)
+    elif period == "16-31":
+        last_day = calendar.monthrange(year, month)[1]
+        return pd.Timestamp(year, month, 16), pd.Timestamp(year, month, last_day)
+    else:
+        last_day = calendar.monthrange(year, month)[1]
+        return pd.Timestamp(year, month, 1), pd.Timestamp(year, month, last_day)
+
+
+# ──────────────────────────────────────────────
+# HELPER: Previous period shift (for Next flag)
+# ──────────────────────────────────────────────
+def _shift_period_back(year, month, period):
+    if period == "16-31":
+        return pd.Timestamp(year, month, 1), pd.Timestamp(year, month, 15)
+    else:
+        prev_month = month - 1 if month > 1 else 12
+        prev_year  = year if month > 1 else year - 1
+        last_day   = calendar.monthrange(prev_year, prev_month)[1]
+        return pd.Timestamp(prev_year, prev_month, 16), pd.Timestamp(prev_year, prev_month, last_day)
+
+
+# ──────────────────────────────────────────────
 # HELPER: Generate PDF — Vehicle Records
 # ──────────────────────────────────────────────
 def _generate_pdf(df, total_row, bus_number, month, half):
@@ -74,7 +94,7 @@ def _generate_pdf(df, total_row, bus_number, month, half):
     month_name = date(2000, month, 1).strftime("%B")
     pdf.cell(0, 10, f"Vehicle Records - {bus_number}  |  {month_name} ({half})", ln=True, align="C")
     pdf.ln(3)
-    cols = list(df.columns)
+    cols   = list(df.columns)
     page_w = pdf.w - 2 * pdf.l_margin
     col_w  = page_w / len(cols)
     pdf.set_fill_color(52, 73, 94); pdf.set_text_color(255, 255, 255)
@@ -107,7 +127,7 @@ def _generate_expenses_pdf(df, bus_number, month, period):
     month_name = date(2000, month, 1).strftime("%B")
     pdf.cell(0, 10, f"Vehicle Expenses - {bus_number}  |  {month_name} ({period})", ln=True, align="C")
     pdf.ln(3)
-    cols = list(df.columns)
+    cols   = list(df.columns)
     page_w = pdf.w - 2 * pdf.l_margin
     col_w  = page_w / len(cols)
     pdf.set_fill_color(52, 73, 94); pdf.set_text_color(255, 255, 255)
@@ -129,37 +149,6 @@ def _generate_expenses_pdf(df, bus_number, month, period):
         pdf.cell(col_w, 8, str(val), border=1, align="C", fill=True)
     pdf.ln()
     return bytes(pdf.output())
-
-
-# ──────────────────────────────────────────────
-# HELPER: Date range filter
-# ──────────────────────────────────────────────
-def _get_date_range(year, month, period):
-    if period == "1-15":
-        return pd.Timestamp(year, month, 1), pd.Timestamp(year, month, 15)
-    elif period == "16-31":
-        last_day = calendar.monthrange(year, month)[1]
-        return pd.Timestamp(year, month, 16), pd.Timestamp(year, month, last_day)
-    else:
-        last_day = calendar.monthrange(year, month)[1]
-        return pd.Timestamp(year, month, 1), pd.Timestamp(year, month, last_day)
-
-
-# ──────────────────────────────────────────────
-# HELPER: Previous period range (for "Next" shift logic)
-# ──────────────────────────────────────────────
-def _shift_period_back(year, month, period):
-    """
-    Agar current view '16-31' hai → previous period '1-15' same month hai.
-    Agar current view '1-15' hai → previous period '16-31' pichle month hai.
-    """
-    if period == "16-31":
-        return pd.Timestamp(year, month, 1), pd.Timestamp(year, month, 15)
-    else:  # period == "1-15" → pichla month ka 16-31
-        prev_month = month - 1 if month > 1 else 12
-        prev_year  = year if month > 1 else year - 1
-        last_day   = calendar.monthrange(prev_year, prev_month)[1]
-        return pd.Timestamp(prev_year, prev_month, 16), pd.Timestamp(prev_year, prev_month, last_day)
 
 
 # ──────────────────────────────────────────────
@@ -208,19 +197,17 @@ def editable_grid(bus_number: str):
             "Scheduled KM":   st.column_config.NumberColumn("Scheduled KM", min_value=0, default=scheduled_km),
             "Actual KM":      st.column_config.NumberColumn("Actual KM", min_value=0, default=0),
             "Diesel":         st.column_config.NumberColumn("Diesel", min_value=0.0, default=0.0, step=0.01, format="%.2f"),
-            "Diesel KM":      st.column_config.NumberColumn("Diesel KM", min_value=0, default=0, help="Itne diesel se itna km chala"),
+            "Diesel KM":      st.column_config.NumberColumn("Diesel KM", min_value=0, default=0),
             "Income":         st.column_config.NumberColumn("Income", min_value=0, default=0),
             "Remark":         st.column_config.TextColumn("Remark"),
-            "Next":           st.column_config.CheckboxColumn("Next", default=False, help="Yes = is entry ko next period mein count karo"),
+            "Next":           st.column_config.CheckboxColumn("Next", default=False),
         },
     )
 
     editor_state  = st.session_state.get(ed_key, {})
     edited_df     = _apply_editor_state(st.session_state[key], editor_state)
     on_leave_mask = edited_df["Status"] == "On Leave"
-    edited_df.loc[on_leave_mask, "Scheduled KM"] = 0
-    edited_df.loc[on_leave_mask, "Actual KM"]    = 0
-    edited_df.loc[on_leave_mask, "Income"]        = 0
+    edited_df.loc[on_leave_mask, ["Scheduled KM", "Actual KM", "Income"]] = 0
 
     if st.session_state.get(confirm_key):
         st.warning("⚠️ Duplicate dates exist. Wanna update?")
@@ -248,7 +235,7 @@ def editable_grid(bus_number: str):
                 return
             if fetch_key not in st.session_state:
                 st.session_state[fetch_key] = get_vehicle_records(bus_number)
-            fetched_df = st.session_state[fetch_key]
+            fetched_df     = st.session_state[fetch_key]
             new_dates      = set(cleaned_df["Date"].astype(str).tolist())
             existing_dates = set(fetched_df["Date"].astype(str).tolist()) if not fetched_df.empty else set()
             if new_dates & existing_dates:
@@ -286,26 +273,21 @@ def editable_grid(bus_number: str):
         display_df["Date"] = pd.to_datetime(display_df["Date"])
         if "Next" not in display_df.columns:
             display_df["Next"] = False
-
         start, end = _get_date_range(date.today().year, month, half)
-
-        # Normal rows jo is period mein aate hain (Next == False)
-        normal_mask = (display_df["Date"] >= start) & (display_df["Date"] <= end) & (display_df["Next"] == False)
-
-        # Next == True rows jiska actual date PREVIOUS period mein hai, lekin shift karke yahan aane chahiye
+        normal_mask  = (display_df["Date"] >= start) & (display_df["Date"] <= end) & (display_df["Next"] == False)
         prev_start, prev_end = _shift_period_back(date.today().year, month, half)
         shifted_mask = (display_df["Date"] >= prev_start) & (display_df["Date"] <= prev_end) & (display_df["Next"] == True)
-
-        display_df = display_df[normal_mask | shifted_mask]
+        display_df   = display_df[normal_mask | shifted_mask]
         display_df["Date"] = display_df["Date"].dt.strftime("%Y-%m-%d")
         if "Diesel KM" not in display_df.columns:
             display_df["Diesel KM"] = 0
-        display_df["Avg"]  = (
+        display_df["Avg"] = (
             pd.to_numeric(display_df["Diesel KM"], errors="coerce") /
             pd.to_numeric(display_df["Diesel"], errors="coerce").replace(0, float("nan"))
         ).round(2)
-        if "Income" not in display_df.columns: display_df["Income"] = 0
-        if "Remark" not in display_df.columns: display_df["Remark"] = ""
+        for col in ["Income", "Remark"]:
+            if col not in display_df.columns:
+                display_df[col] = 0 if col == "Income" else ""
         display_df = display_df[["Date", "Status", "Driver Name", "Conductor Name",
                                   "Scheduled KM", "Actual KM", "Diesel", "Diesel KM", "Avg", "Income", "Remark", "Next"]]
         st.dataframe(display_df, use_container_width=True, hide_index=True)
@@ -320,7 +302,7 @@ def editable_grid(bus_number: str):
 
 
 # ──────────────────────────────────────────────
-# 2. DRIVER SALARY  ← bus_number se filter
+# 2. DRIVER SALARY
 # ──────────────────────────────────────────────
 def driver_salary(bus_number: str = ""):
     key       = f"driver_salary_{bus_number}"
@@ -361,7 +343,6 @@ def driver_salary(bus_number: str = ""):
         if cleaned_df.empty:
             st.warning("⚠️ No valid rows to save.")
             return
-        # ← bus_number pass karo
         save_driver_salary(cleaned_df, bus_number=bus_number)
         st.success("✅ Saved!")
         st.session_state.pop(key, None)
@@ -369,7 +350,6 @@ def driver_salary(bus_number: str = ""):
         st.rerun()
 
     st.markdown("### Saved Salary Records 📋")
-
     col1, col2, col3 = st.columns([2, 2, 1])
     with col1:
         sal_month = st.selectbox("Month", options=list(range(1, 13)), index=date.today().month - 1,
@@ -386,23 +366,18 @@ def driver_salary(bus_number: str = ""):
             st.rerun()
 
     if fetch_key not in st.session_state:
-        # ← bus_number se filter karke fetch karo
         st.session_state[fetch_key] = get_driver_salary(bus_number=bus_number)
     fetched_df = st.session_state[fetch_key]
 
     if not fetched_df.empty:
-        # Date filter
         disp = fetched_df.copy()
         disp["Date"] = pd.to_datetime(disp["Date"])
-        start, end = _get_date_range(date.today().year, sal_month, sal_half)
+        start, end   = _get_date_range(date.today().year, sal_month, sal_half)
         disp = disp[(disp["Date"] >= start) & (disp["Date"] <= end)].copy()
         disp["Date"] = disp["Date"].dt.strftime("%Y-%m-%d")
 
         st.data_editor(
-            disp,
-            use_container_width=True,
-            hide_index=True,
-            num_rows="dynamic",
+            disp, use_container_width=True, hide_index=True, num_rows="dynamic",
             key=f"edit_sal_{bus_number}",
             column_config={
                 "id":          None,
@@ -414,10 +389,10 @@ def driver_salary(bus_number: str = ""):
         )
 
         if st.button("💾 Update Salary", key=f"update_sal_{bus_number}"):
-            sal_editor_state = st.session_state.get(f"edit_sal_{bus_number}", {})
-            for row_idx, changes in sal_editor_state.get("edited_rows", {}).items():
+            sal_state = st.session_state.get(f"edit_sal_{bus_number}", {})
+            for row_idx, changes in sal_state.get("edited_rows", {}).items():
                 update_driver_salary(disp.iloc[row_idx]["id"], changes)
-            for row_idx in sorted(sal_editor_state.get("deleted_rows", []), reverse=True):
+            for row_idx in sorted(sal_state.get("deleted_rows", []), reverse=True):
                 delete_driver_salary(disp.iloc[row_idx]["id"])
             st.success("✅ Updated!")
             st.session_state.pop(fetch_key, None)
@@ -516,10 +491,10 @@ def expenses(bus_number: str = ""):
         )
 
         if st.button("💾 Update Expenses", key=f"update_exp_{bus_number}"):
-            exp_editor_state = st.session_state.get(f"edit_exp_{bus_number}", {})
-            for row_idx, changes in exp_editor_state.get("edited_rows", {}).items():
+            exp_state = st.session_state.get(f"edit_exp_{bus_number}", {})
+            for row_idx, changes in exp_state.get("edited_rows", {}).items():
                 update_vehicle_expense(display_exp.iloc[row_idx]["id"], changes)
-            for row_idx in sorted(exp_editor_state.get("deleted_rows", []), reverse=True):
+            for row_idx in sorted(exp_state.get("deleted_rows", []), reverse=True):
                 delete_vehicle_expense(display_exp.iloc[row_idx]["id"])
             st.success("✅ Updated!")
             st.session_state.pop(fetch_key, None)
@@ -544,7 +519,114 @@ def expenses(bus_number: str = ""):
 
 
 # ──────────────────────────────────────────────
-# 4. SALARY CHECK
+# 4. DIESEL VIEW
+# ──────────────────────────────────────────────
+def diesel_view(bus_number: str = ""):
+    st.markdown("### Diesel View ⛽")
+
+    # ── Filters ──
+    col1, col2, col3 = st.columns([2, 2, 1])
+    with col1:
+        d_month = st.selectbox("Month", options=list(range(1, 13)),
+                               index=date.today().month - 1,
+                               format_func=lambda x: date(2000, x, 1).strftime("%B"),
+                               key=f"diesel_month_{bus_number}")
+    with col2:
+        d_period = st.radio("Period", ["1-15", "16-31", "01-31"],
+                            index=2, horizontal=True,
+                            key=f"diesel_period_{bus_number}")
+    with col3:
+        st.markdown("<br>", unsafe_allow_html=True)
+        load = st.button("🔄 Load", key=f"diesel_load_{bus_number}", use_container_width=True)
+
+    # Diesel rate — user set kare, 2 decimal tak
+    rate_key = f"diesel_rate_{bus_number}"
+    if rate_key not in st.session_state:
+        st.session_state[rate_key] = 90.00
+    diesel_rate = st.number_input(
+        "⛽ Diesel Rate (₹/L)", min_value=0.0, step=0.01, format="%.2f",
+        value=st.session_state[rate_key],
+        key=f"diesel_rate_input_{bus_number}"
+    )
+    st.session_state[rate_key] = diesel_rate
+
+    fetch_key = f"diesel_df_{bus_number}"
+    if load or fetch_key not in st.session_state:
+        start, end = _get_date_range(date.today().year, d_month, d_period)
+        st.session_state[fetch_key] = get_diesel_summary(
+            bus_number,
+            from_date=start.strftime("%Y-%m-%d"),
+            to_date=end.strftime("%Y-%m-%d"),
+        )
+
+    df = st.session_state.get(fetch_key, pd.DataFrame())
+
+    if df.empty:
+        st.info("No diesel records found for this period.")
+        return
+
+    # ── Table with Amount column ──
+    df = df.copy()
+    df["Amount (₹)"] = (df["Diesel"] * diesel_rate).round(2)
+    total_diesel = df["Diesel"].sum()
+    total_amount = df["Amount (₹)"].sum()
+
+    st.dataframe(df, use_container_width=True, hide_index=True)
+
+    # ── Summary cards ──
+    st.markdown(f"""
+    <div style='background:#1e1e3a;border-radius:10px;padding:16px 24px;margin:12px 0;
+                display:flex;gap:40px;flex-wrap:wrap;'>
+        <div>
+            <div style='color:#aaa;font-size:0.85rem;'>Total Diesel</div>
+            <div style='color:#7B8CFF;font-size:1.3rem;font-weight:bold;'>{total_diesel:.2f} L</div>
+        </div>
+        <div>
+            <div style='color:#aaa;font-size:0.85rem;'>Rate</div>
+            <div style='color:#7B8CFF;font-size:1.3rem;font-weight:bold;'>₹{diesel_rate:.2f}/L</div>
+        </div>
+        <div>
+            <div style='color:#aaa;font-size:0.85rem;'>Total Amount</div>
+            <div style='color:#FFB347;font-size:1.3rem;font-weight:bold;'>₹{total_amount:,.2f}</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── Payment Status ──
+    st.markdown("#### Payment Status")
+    pay_col1, pay_col2 = st.columns(2)
+    with pay_col1:
+        paid_amount = st.number_input(
+            "Amount Paid (₹)", min_value=0.0, step=0.01, format="%.2f",
+            value=st.session_state.get(f"diesel_paid_{bus_number}", 0.0),
+            key=f"diesel_paid_input_{bus_number}"
+        )
+        st.session_state[f"diesel_paid_{bus_number}"] = paid_amount
+    with pay_col2:
+        payment_done = st.checkbox(
+            "✅ Payment Done",
+            value=st.session_state.get(f"diesel_pay_check_{bus_number}", False),
+            key=f"diesel_pay_chk_{bus_number}"
+        )
+        st.session_state[f"diesel_pay_check_{bus_number}"] = payment_done
+
+    remaining = total_amount - paid_amount
+    if payment_done or remaining <= 0:
+        st.markdown("""
+        <div style='background:#1B5E20;border-radius:10px;padding:14px 24px;margin-top:10px;'>
+            <span style='color:#69F0AE;font-size:1.1rem;font-weight:bold;'>✅ Fully Paid</span>
+        </div>""", unsafe_allow_html=True)
+    else:
+        st.markdown(f"""
+        <div style='background:#4a1010;border-radius:10px;padding:14px 24px;margin-top:10px;
+                    display:flex;justify-content:space-between;align-items:center;'>
+            <span style='color:#FF5252;font-size:1.1rem;font-weight:bold;'>⚠️ Payment Pending</span>
+            <span style='color:#FFB347;font-size:1.2rem;font-weight:bold;'>Remaining: ₹{remaining:,.2f}</span>
+        </div>""", unsafe_allow_html=True)
+
+
+# ──────────────────────────────────────────────
+# 5. SALARY CHECK
 # ──────────────────────────────────────────────
 def salary_check_view():
     st.markdown("### Salary Check 📊")
