@@ -7,16 +7,13 @@ from src.database.config import supabase
 # ══════════════════════════════════════════════
 
 def get_scheduled_km(bus_number: str) -> int:
-    """Latest scheduled KM fetch karo us bus ke liye"""
-    res = supabase.table("vehicle_records") \
+    res = supabase.table("vehicle_scheduled_km") \
         .select("scheduled_km") \
         .eq("bus_number", bus_number) \
-        .order("date", desc=True) \
-        .limit(1) \
         .execute()
     if res.data:
-        return int(res.data[0]["scheduled_km"] or 446)
-    return 446  # default
+        return int(res.data[0]["scheduled_km"] or 466)
+    return 466
 
 
 def save_vehicle_records(bus_number: str, df: pd.DataFrame) -> None:
