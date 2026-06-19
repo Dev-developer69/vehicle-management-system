@@ -539,6 +539,18 @@ def diesel_view(bus_number: str = ""):
         st.markdown("<br>", unsafe_allow_html=True)
         load = st.button("🔄 Load", key=f"diesel_load_{bus_number}", use_container_width=True)
 
+    # ✅ Universal rate input — poore table pe apply, per row override bhi possible
+    rate_key = f"diesel_rate_{bus_number}"
+    if rate_key not in st.session_state:
+        st.session_state[rate_key] = 90.00
+    universal_rate = st.number_input(
+        "⛽ Universal Rate (₹/L) — change karo toh poori table update hogi",
+        min_value=0.0, step=0.01, format="%.2f",
+        value=st.session_state[rate_key],
+        key=f"diesel_rate_input_{bus_number}"
+    )
+    st.session_state[rate_key] = universal_rate
+
     fetch_key = f"diesel_df_{bus_number}"
     if load or fetch_key not in st.session_state:
         start, end = _get_date_range(date.today().year, d_month, d_period)
@@ -548,8 +560,7 @@ def diesel_view(bus_number: str = ""):
             to_date=end.strftime("%Y-%m-%d"),
         )
         if not raw_df.empty:
-            raw_df["Rate (₹/L)"] = 90.00  # default rate — user change kar sakta hai
-            raw_df["Amount (₹)"] = 0.00
+            raw_df["Rate (₹/L)"] = universal_rate
         st.session_state[fetch_key] = raw_df
 
     df = st.session_state.get(fetch_key, pd.DataFrame())
@@ -558,8 +569,10 @@ def diesel_view(bus_number: str = ""):
         st.info("No diesel records found for this period.")
         return
 
-    # ✅ Editable table — sirf Rate column editable, baki read-only
-    display_df["Rate (₹/L)"] = pd.to_numeric(display_df["Rate (₹/L)"], errors="coerce").fillna(90.0)
+    # ✅ Universal rate poore table pe apply — per row override bhi ho sakta hai
+    df = df.copy()
+    df["Rate (₹/L)"] = universal_rate
+
     ed_key = f"diesel_editor_{bus_number}"
     st.data_editor(
         df[["Date", "Diesel", "Rate (₹/L)"]],
@@ -567,15 +580,14 @@ def diesel_view(bus_number: str = ""):
         hide_index=True,
         key=ed_key,
         column_config={
-            "Date":        st.column_config.TextColumn("Date", disabled=True),
-            "Diesel":      st.column_config.NumberColumn("Diesel (L)", disabled=True, format="%.2f"),
-            "Rate (₹/L)":  st.column_config.NumberColumn("Rate (₹/L)", min_value=0.0,
+            "Date":       st.column_config.TextColumn("Date", disabled=True),
+            "Diesel":     st.column_config.NumberColumn("Diesel (L)", disabled=True, format="%.2f"),
+            "Rate (₹/L)": st.column_config.NumberColumn("Rate (₹/L)", min_value=0.0,
                                                            step=0.01, format="%.2f"),
-            display_df["Amount (₹)"] = (display_df["Diesel"] * display_df["Rate (₹/L)"]).round(2),
         }
     )
 
-    # ✅ Editor state se updated rates apply karo
+    # Per-row override apply karo
     editor_state = st.session_state.get(ed_key, {})
     display_df   = df.copy()
     for row_idx, changes in editor_state.get("edited_rows", {}).items():
@@ -583,8 +595,15 @@ def diesel_view(bus_number: str = ""):
             if row_idx < len(display_df):
                 display_df.at[row_idx, col] = val
 
-    display_df["Rate (₹/L)"] = pd.to_numeric(display_df["Rate (₹/L)"], errors="coerce").fillna(90.0)
+    display_df["Rate (₹/L)"] = pd.to_numeric(display_df["Rate (₹/L)"], errors="coerce").fillna(universal_rate)
     display_df["Amount (₹)"] = (display_df["Diesel"] * display_df["Rate (₹/L)"]).round(2)
+
+    # ✅ Full table with Amount column
+    st.dataframe(
+        display_df[["Date", "Diesel", "Rate (₹/L)", "Amount (₹)"]],
+        use_container_width=True,
+        hide_index=True,
+    )
 
     total_diesel = display_df["Diesel"].sum()
     total_amount = display_df["Amount (₹)"].sum()
