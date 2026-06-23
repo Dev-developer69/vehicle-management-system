@@ -290,3 +290,27 @@ def save_diesel_rate_payment(bus_number: str, month: int, period: str,
         "paid_amount":  paid_amount,
         "payment_done": payment_done,
     }, on_conflict="bus_number,month,period").execute()
+
+
+# ══════════════════════════════════════════════
+# DIESEL PER-DATE ROW RATE (overrides universal rate)
+# ══════════════════════════════════════════════
+
+def get_diesel_row_rates(bus_number: str, dates: list) -> dict:
+    """date -> rate mapping return karta hai, sirf un dates ke liye jinke custom rate save hain"""
+    if not dates:
+        return {}
+    res = supabase.table("diesel_row_rates") \
+        .select("date, rate") \
+        .eq("bus_number", bus_number) \
+        .in_("date", dates) \
+        .execute()
+    return {row["date"]: float(row["rate"]) for row in res.data} if res.data else {}
+
+
+def save_diesel_row_rate(bus_number: str, row_date: str, rate: float) -> None:
+    supabase.table("diesel_row_rates").upsert({
+        "bus_number": bus_number,
+        "date":       row_date,
+        "rate":       rate,
+    }, on_conflict="bus_number,date").execute()
