@@ -261,20 +261,32 @@ def get_salary_check(from_date: str = None, to_date: str = None, bus_numbers: li
 
 
 # ══════════════════════════════════════════════
-# DIESEL RATE (persisted per bus)
+# DIESEL RATE + PAYMENT (per bus, month, period)
 # ══════════════════════════════════════════════
 
-def get_diesel_rate(bus_number: str) -> float:
+def get_diesel_rate_payment(bus_number: str, month: int, period: str) -> dict:
     res = supabase.table("diesel_rates") \
-        .select("rate") \
+        .select("rate, paid_amount, payment_done") \
         .eq("bus_number", bus_number) \
+        .eq("month", month) \
+        .eq("period", period) \
         .execute()
     if res.data:
-        return float(res.data[0]["rate"])
-    return 90.00
+        return {
+            "rate":         float(res.data[0]["rate"] or 90.0),
+            "paid_amount":  float(res.data[0]["paid_amount"] or 0),
+            "payment_done": bool(res.data[0]["payment_done"]),
+        }
+    return {"rate": 90.00, "paid_amount": 0.0, "payment_done": False}
 
 
-def save_diesel_rate(bus_number: str, rate: float) -> None:
-    supabase.table("diesel_rates") \
-        .upsert({"bus_number": bus_number, "rate": rate}) \
-        .execute()
+def save_diesel_rate_payment(bus_number: str, month: int, period: str,
+                              rate: float, paid_amount: float, payment_done: bool) -> None:
+    supabase.table("diesel_rates").upsert({
+        "bus_number":   bus_number,
+        "month":        month,
+        "period":       period,
+        "rate":         rate,
+        "paid_amount":  paid_amount,
+        "payment_done": payment_done,
+    }, on_conflict="bus_number,month,period").execute()
