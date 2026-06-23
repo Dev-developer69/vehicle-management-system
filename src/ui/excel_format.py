@@ -11,6 +11,7 @@ from src.database.db import (
     update_vehicle_expense, delete_vehicle_expense,
     update_driver_salary, delete_driver_salary,
     get_diesel_rate_payment, save_diesel_rate_payment,
+    get_diesel_row_rates, save_diesel_row_rate,
 )
 
 
@@ -564,6 +565,10 @@ def diesel_view(bus_number: str = ""):
         )
         if not raw_df.empty:
             raw_df["Rate (₹/L)"] = universal_rate
+            # ✅ Per-date saved custom rates apply karo (override universal rate)
+            row_rates = get_diesel_row_rates(bus_number, raw_df["Date"].astype(str).tolist())
+            if row_rates:
+                raw_df["Rate (₹/L)"] = raw_df["Date"].astype(str).map(row_rates).fillna(universal_rate)
         st.session_state[fetch_key] = raw_df
 
     df = st.session_state.get(fetch_key, pd.DataFrame())
@@ -573,7 +578,8 @@ def diesel_view(bus_number: str = ""):
         return
 
     df = df.copy()
-    df["Rate (₹/L)"] = universal_rate
+    if "Rate (₹/L)" not in df.columns:
+        df["Rate (₹/L)"] = universal_rate
 
     ed_key = f"diesel_editor_{bus_number}"
     st.data_editor(
@@ -589,13 +595,22 @@ def diesel_view(bus_number: str = ""):
         }
     )
 
-    # Per-row override apply karo
+    # Per-row override apply + DB me persist karo
     editor_state = st.session_state.get(ed_key, {})
     display_df   = df.copy()
+    row_rate_changed = False
     for row_idx, changes in editor_state.get("edited_rows", {}).items():
         for col, val in changes.items():
             if row_idx < len(display_df):
                 display_df.at[row_idx, col] = val
+                if col == "Rate (₹/L)":
+                    row_date = str(display_df.at[row_idx, "Date"])
+                    save_diesel_row_rate(bus_number, row_date, float(val))
+                    row_rate_changed = True
+
+    if row_rate_changed:
+        # session state ko bhi update kar do taki dobara save na ho aur consistent rahe
+        st.session_state[fetch_key] = display_df.copy()
 
     display_df["Rate (₹/L)"] = pd.to_numeric(display_df["Rate (₹/L)"], errors="coerce").fillna(universal_rate)
     display_df["Amount (₹)"] = (display_df["Diesel"] * display_df["Rate (₹/L)"]).round(2)
@@ -682,6 +697,8 @@ def diesel_view(bus_number: str = ""):
             <span style='color:#FF5252;font-size:1.1rem;font-weight:bold;'>⚠️ Payment Pending</span>
             <span style='color:#FFB347;font-size:1.2rem;font-weight:bold;'>Remaining: ₹{remaining:,.2f}</span>
         </div>""", unsafe_allow_html=True)
+
+
 # ──────────────────────────────────────────────
 # 5. SALARY CHECK
 # ──────────────────────────────────────────────
