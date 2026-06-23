@@ -539,17 +539,21 @@ def diesel_view(bus_number: str = ""):
         st.markdown("<br>", unsafe_allow_html=True)
         load = st.button("🔄 Load", key=f"diesel_load_{bus_number}", use_container_width=True)
 
-    # ✅ rate input — poore table pe apply, per row override bhi possible
+    # ✅ rate input — DB se load, DB me persist
     rate_key = f"diesel_rate_{bus_number}"
     if rate_key not in st.session_state:
-        st.session_state[rate_key] = 90.00
+        st.session_state[rate_key] = get_diesel_rate(bus_number)
+
     universal_rate = st.number_input(
         "⛽ Set rate for whole table ",
         min_value=0.0, step=0.01, format="%.2f",
         value=st.session_state[rate_key],
         key=f"diesel_rate_input_{bus_number}"
     )
-    st.session_state[rate_key] = universal_rate
+
+    if universal_rate != st.session_state[rate_key]:
+        st.session_state[rate_key] = universal_rate
+        save_diesel_rate(bus_number, universal_rate)
 
     fetch_key = f"diesel_df_{bus_number}"
     if load or fetch_key not in st.session_state:
@@ -653,7 +657,6 @@ def diesel_view(bus_number: str = ""):
             <span style='color:#FF5252;font-size:1.1rem;font-weight:bold;'>⚠️ Payment Pending</span>
             <span style='color:#FFB347;font-size:1.2rem;font-weight:bold;'>Remaining: ₹{remaining:,.2f}</span>
         </div>""", unsafe_allow_html=True)
-
 
 # ──────────────────────────────────────────────
 # 5. SALARY CHECK
