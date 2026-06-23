@@ -265,7 +265,7 @@ def get_salary_check(from_date: str = None, to_date: str = None, bus_numbers: li
 # ══════════════════════════════════════════════
 
 def get_diesel_rate_payment(bus_number: str, month: int, period: str) -> dict:
-    res = supabase.table("diesel_rates") \
+    res = supabase.table("diesel_details") \
         .select("rate, paid_amount, payment_done") \
         .eq("bus_number", bus_number) \
         .eq("month", month) \
@@ -282,7 +282,7 @@ def get_diesel_rate_payment(bus_number: str, month: int, period: str) -> dict:
 
 def save_diesel_rate_payment(bus_number: str, month: int, period: str,
                               rate: float, paid_amount: float, payment_done: bool) -> None:
-    supabase.table("diesel_rates").upsert({
+    supabase.table("diesel_details").upsert({
         "bus_number":   bus_number,
         "month":        month,
         "period":       period,
