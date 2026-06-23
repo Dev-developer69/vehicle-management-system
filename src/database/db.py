@@ -258,3 +258,23 @@ def get_salary_check(from_date: str = None, to_date: str = None, bus_numbers: li
     grouped.columns = ["Driver Name", "Bus Number", "Duties", "Salary Given"]
     grouped.insert(0, "Sr No", range(1, len(grouped) + 1))
     return grouped
+
+
+# ══════════════════════════════════════════════
+# DIESEL RATE (persisted per bus)
+# ══════════════════════════════════════════════
+
+def get_diesel_rate(bus_number: str) -> float:
+    res = supabase.table("diesel_rates") \
+        .select("rate") \
+        .eq("bus_number", bus_number) \
+        .execute()
+    if res.data:
+        return float(res.data[0]["rate"])
+    return 90.00
+
+
+def save_diesel_rate(bus_number: str, rate: float) -> None:
+    supabase.table("diesel_rates") \
+        .upsert({"bus_number": bus_number, "rate": rate}) \
+        .execute()
