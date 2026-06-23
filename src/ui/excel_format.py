@@ -10,6 +10,7 @@ from src.database.db import (
     get_salary_check, get_scheduled_km, get_diesel_summary,
     update_vehicle_expense, delete_vehicle_expense,
     update_driver_salary, delete_driver_salary,
+    get_diesel_rate, save_diesel_rate,
 )
 
 
