@@ -10,7 +10,7 @@ from src.database.db import (
     get_salary_check, get_scheduled_km, get_diesel_summary,
     update_vehicle_expense, delete_vehicle_expense,
     update_driver_salary, delete_driver_salary,
-    get_diesel_rate, save_diesel_rate,
+    get_diesel_rate_payment, save_diesel_rate_payment,
 )
 
 
@@ -540,21 +540,19 @@ def diesel_view(bus_number: str = ""):
         st.markdown("<br>", unsafe_allow_html=True)
         load = st.button("🔄 Load", key=f"diesel_load_{bus_number}", use_container_width=True)
 
-    # ✅ rate input — DB se load, DB me persist
-    rate_key = f"diesel_rate_{bus_number}"
-    if rate_key not in st.session_state:
-        st.session_state[rate_key] = get_diesel_rate(bus_number)
+    # ✅ DB se rate + payment load karo (bus + month + period wise)
+    state_key = f"diesel_state_{bus_number}_{d_month}_{d_period}"
+    if state_key not in st.session_state or load:
+        st.session_state[state_key] = get_diesel_rate_payment(bus_number, d_month, d_period)
+
+    saved = st.session_state[state_key]
 
     universal_rate = st.number_input(
         "⛽ Set rate for whole table ",
         min_value=0.0, step=0.01, format="%.2f",
-        value=st.session_state[rate_key],
-        key=f"diesel_rate_input_{bus_number}"
+        value=saved["rate"],
+        key=f"diesel_rate_input_{bus_number}_{d_month}_{d_period}"
     )
-
-    if universal_rate != st.session_state[rate_key]:
-        st.session_state[rate_key] = universal_rate
-        save_diesel_rate(bus_number, universal_rate)
 
     fetch_key = f"diesel_df_{bus_number}"
     if load or fetch_key not in st.session_state:
@@ -627,23 +625,49 @@ def diesel_view(bus_number: str = ""):
     </div>
     """, unsafe_allow_html=True)
 
-    # ── Payment Status ──
+    # ── Payment Status (editable + saved per bus+month+period) ──
     st.markdown("#### Payment Status")
+
+    edit_mode_key = f"diesel_pay_edit_{bus_number}_{d_month}_{d_period}"
+    if edit_mode_key not in st.session_state:
+        st.session_state[edit_mode_key] = False
+
+    is_locked = saved["payment_done"] and not st.session_state[edit_mode_key]
+
     pay_col1, pay_col2 = st.columns(2)
     with pay_col1:
         paid_amount = st.number_input(
             "Amount Paid (₹)", min_value=0.0, step=0.01, format="%.2f",
-            value=st.session_state.get(f"diesel_paid_{bus_number}", 0.0),
-            key=f"diesel_paid_input_{bus_number}"
+            value=saved["paid_amount"],
+            disabled=is_locked,
+            key=f"diesel_paid_input_{bus_number}_{d_month}_{d_period}"
         )
-        st.session_state[f"diesel_paid_{bus_number}"] = paid_amount
     with pay_col2:
         payment_done = st.checkbox(
             "✅ Payment Done",
-            value=st.session_state.get(f"diesel_pay_check_{bus_number}", False),
-            key=f"diesel_pay_chk_{bus_number}"
+            value=saved["payment_done"],
+            disabled=is_locked,
+            key=f"diesel_pay_chk_{bus_number}_{d_month}_{d_period}"
         )
-        st.session_state[f"diesel_pay_check_{bus_number}"] = payment_done
+
+    btn_col1, btn_col2 = st.columns([1, 1])
+    with btn_col1:
+        if st.button("💾 Save Rate & Payment", key=f"diesel_save_{bus_number}_{d_month}_{d_period}",
+                     use_container_width=True):
+            save_diesel_rate_payment(bus_number, d_month, d_period,
+                                      universal_rate, paid_amount, payment_done)
+            st.session_state[state_key] = {
+                "rate": universal_rate, "paid_amount": paid_amount, "payment_done": payment_done
+            }
+            st.session_state[edit_mode_key] = False
+            st.success("✅ Saved!")
+            st.rerun()
+    with btn_col2:
+        if saved["payment_done"] and not st.session_state[edit_mode_key]:
+            if st.button("✏️ Edit Payment", key=f"diesel_edit_{bus_number}_{d_month}_{d_period}",
+                         use_container_width=True):
+                st.session_state[edit_mode_key] = True
+                st.rerun()
 
     remaining = total_amount - paid_amount
     if payment_done or remaining <= 0:
@@ -658,7 +682,6 @@ def diesel_view(bus_number: str = ""):
             <span style='color:#FF5252;font-size:1.1rem;font-weight:bold;'>⚠️ Payment Pending</span>
             <span style='color:#FFB347;font-size:1.2rem;font-weight:bold;'>Remaining: ₹{remaining:,.2f}</span>
         </div>""", unsafe_allow_html=True)
-
 # ──────────────────────────────────────────────
 # 5. SALARY CHECK
 # ──────────────────────────────────────────────
