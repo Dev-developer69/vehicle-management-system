@@ -1,5 +1,6 @@
 import pandas as pd
 from src.database.config import supabase
+from src.database.config import supabase, supabase_admin
 
 
 # ══════════════════════════════════════════════
@@ -296,11 +297,38 @@ def save_diesel_rate_payment(bus_number: str, month: int, period: str,
 # DIESEL PER-DATE ROW RATE (overrides universal rate)
 # ══════════════════════════════════════════════
 
+def get_diesel_rate_payment(bus_number: str, month: int, period: str) -> dict:
+    res = supabase_admin.table("diesel_details") \
+        .select("rate, paid_amount, payment_done") \
+        .eq("bus_number", bus_number) \
+        .eq("month", month) \
+        .eq("period", period) \
+        .execute()
+    if res.data:
+        return {
+            "rate":         float(res.data[0]["rate"] or 90.0),
+            "paid_amount":  float(res.data[0]["paid_amount"] or 0),
+            "payment_done": bool(res.data[0]["payment_done"]),
+        }
+    return {"rate": 90.00, "paid_amount": 0.0, "payment_done": False}
+
+
+def save_diesel_rate_payment(bus_number: str, month: int, period: str,
+                              rate: float, paid_amount: float, payment_done: bool) -> None:
+    supabase_admin.table("diesel_details").upsert({
+        "bus_number":   bus_number,
+        "month":        month,
+        "period":       period,
+        "rate":         rate,
+        "paid_amount":  paid_amount,
+        "payment_done": payment_done,
+    }, on_conflict="bus_number,month,period").execute()
+
+
 def get_diesel_row_rates(bus_number: str, dates: list) -> dict:
-    """date -> rate mapping return karta hai, sirf un dates ke liye jinke custom rate save hain"""
     if not dates:
         return {}
-    res = supabase.table("diesel_row_rates") \
+    res = supabase_admin.table("diesel_row_rates") \
         .select("date, rate") \
         .eq("bus_number", bus_number) \
         .in_("date", dates) \
@@ -309,7 +337,7 @@ def get_diesel_row_rates(bus_number: str, dates: list) -> dict:
 
 
 def save_diesel_row_rate(bus_number: str, row_date: str, rate: float) -> None:
-    supabase.table("diesel_row_rates").upsert({
+    supabase_admin.table("diesel_row_rates").upsert({
         "bus_number": bus_number,
         "date":       row_date,
         "rate":       rate,
