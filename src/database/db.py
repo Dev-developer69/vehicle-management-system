@@ -15,6 +15,16 @@ def get_scheduled_km(bus_number: str) -> int:
         return int(res.data[0]["scheduled_km"] or 466)
     return 466
 
+def _safe_int(val):
+    """None/NaN/empty-safe int conversion."""
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return None
+    try:
+        if isinstance(val, str) and val.strip() == "":
+            return None
+        return int(float(val))
+    except (ValueError, TypeError):
+        return None
 
 def save_vehicle_records(bus_number: str, df: pd.DataFrame) -> None:
     from src.database.auth import get_current_role
@@ -44,8 +54,8 @@ def save_vehicle_records(bus_number: str, df: pd.DataFrame) -> None:
             "scheduled_km":    0 if on_leave else row.get("Scheduled KM", 0),
             "actual_km":       0 if on_leave else row.get("Actual KM", 0),
             "diesel": None if on_leave else (float(row.get("Diesel")) if pd.notna(row.get("Diesel")) else None),
-            "diesel_km":       None   if on_leave else int(row.get("Diesel KM") or None),
-            "income":          None   if on_leave else int(row.get("Income") or None),
+            "diesel_km": None if on_leave else _safe_int(row.get("Diesel KM")),
+            "income":    None if on_leave else _safe_int(row.get("Income")),
             "updated_by":      current_email,
             "updated_by_role": current_role,
             "remark":          str(row.get("Remark") or ""),
