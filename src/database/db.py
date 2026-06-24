@@ -15,6 +15,16 @@ def get_scheduled_km(bus_number: str) -> int:
         return int(res.data[0]["scheduled_km"] or 466)
     return 466
 
+
+# saved data mai se kisi row ko dlt krne ka function
+def delete_vehicle_record(bus_number: str, date_str: str) -> None:
+    supabase.table("vehicle_records") \
+        .delete() \
+        .eq("bus_number", bus_number) \
+        .eq("date", date_str) \
+        .execute()
+
+
 def _safe_int(val):
     """None/NaN/empty-safe int conversion."""
     if val is None or (isinstance(val, float) and pd.isna(val)):
