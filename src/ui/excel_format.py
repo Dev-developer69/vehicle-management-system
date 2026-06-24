@@ -233,6 +233,9 @@ def editable_grid(bus_number: str):
                 edited_df["Driver Name"].notna() &
                 (edited_df["Driver Name"].astype(str).str.strip() != "")
             ].copy()
+            if cleaned_df.empty:
+                st.warning("⚠️ No valid rows to save.")
+                return
             if fetch_key not in st.session_state:
                 st.session_state[fetch_key] = get_vehicle_records(bus_number)
             fetched_df     = st.session_state[fetch_key]
