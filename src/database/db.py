@@ -43,7 +43,7 @@ def save_vehicle_records(bus_number: str, df: pd.DataFrame) -> None:
             "conductor_name":  row.get("Conductor Name"),
             "scheduled_km":    0 if on_leave else row.get("Scheduled KM", 0),
             "actual_km":       0 if on_leave else row.get("Actual KM", 0),
-            "diesel": None if on_leave else (float(row.get("Diesel")) if pd.notna(row.get("Diesel")) else None)
+            "diesel": None if on_leave else (float(row.get("Diesel")) if pd.notna(row.get("Diesel")) else None),
             "diesel_km":       None   if on_leave else int(row.get("Diesel KM") or None),
             "income":          None   if on_leave else int(row.get("Income") or None),
             "updated_by":      current_email,
