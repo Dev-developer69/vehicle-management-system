@@ -9,9 +9,10 @@ from src.database.db import (
     get_vehicle_records, get_driver_salary, get_vehicle_expenses,
     get_salary_check, get_scheduled_km, get_diesel_summary,
     update_vehicle_expense, delete_vehicle_expense,
-    update_driver_salary, delete_driver_salary,
+    update_driver_salary, delete_driver_salary,delete_vehicle_record,
     get_diesel_rate_payment, save_diesel_rate_payment,
     get_diesel_row_rates, save_diesel_row_rate,
+
 )
 
 
@@ -252,6 +253,17 @@ def editable_grid(bus_number: str):
                 st.rerun()
 
     st.markdown("### Saved Records 📋")
+
+
+    # ── Delete row by date ──
+    with st.expander("🗑️ Delete a record by date"):
+        del_date = st.date_input("Select date to delete", value=date.today(), key=f"del_date_{bus_number}")
+        if st.button("Delete this record", key=f"del_btn_{bus_number}"):
+            delete_vehicle_record(bus_number, str(del_date))
+            st.success(f"✅ Deleted record for {del_date}")
+            st.session_state.pop(fetch_key, None)
+            st.rerun()
+    
     if fetch_key not in st.session_state:
         st.session_state[fetch_key] = get_vehicle_records(bus_number)
     fetched_df = st.session_state[fetch_key]
