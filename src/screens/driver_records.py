@@ -119,7 +119,10 @@ def salary_check_view():
                 sal_from = f"{year}-{sal_month:02d}-16"
                 sal_to   = f"{year}-{sal_month:02d}-{last_day}"
 
-            df_sal = get_driver_salary()
+            # ✅ FIX: sirf accessible vehicles ke drivers dikhao
+            accessible = get_accessible_vehicles()
+            df_sal = get_driver_salary(bus_numbers=accessible)
+
             if not df_sal.empty:
                 df_sal["Date"] = pd.to_datetime(df_sal["Date"])
                 df_sal = df_sal[
