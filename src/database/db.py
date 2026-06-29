@@ -16,7 +16,6 @@ def get_scheduled_km(bus_number: str) -> int:
     return 466
 
 
-# saved data mai se kisi row ko dlt krne ka function
 def delete_vehicle_record(bus_number: str, date_str: str) -> None:
     supabase.table("vehicle_records") \
         .delete() \
@@ -36,6 +35,7 @@ def _safe_int(val):
     except (ValueError, TypeError):
         return None
 
+
 def save_vehicle_records(bus_number: str, df: pd.DataFrame) -> None:
     from src.database.auth import get_current_role
     import streamlit as st
@@ -48,7 +48,6 @@ def save_vehicle_records(bus_number: str, df: pd.DataFrame) -> None:
         date_str = str(row["Date"])
         on_leave = str(row.get("Status", "Present")).strip() == "On Leave"
 
-        # Pehle existing record fetch karo
         existing = supabase.table("vehicle_records") \
             .select("*") \
             .eq("bus_number", bus_number) \
@@ -73,7 +72,6 @@ def save_vehicle_records(bus_number: str, df: pd.DataFrame) -> None:
         }
 
         if existing.data:
-            # Record exist karta hai — sirf filled values update karo, baki purani rakho
             old = existing.data[0]
 
             def keep(new_val, old_val, empty_vals):
@@ -89,8 +87,8 @@ def save_vehicle_records(bus_number: str, df: pd.DataFrame) -> None:
                 "next_period":     new_data["next_period"],
                 "driver_name":     keep(new_data["driver_name"],    old.get("driver_name"),    [None, "", "None","none"]),
                 "conductor_name":  keep(new_data["conductor_name"], old.get("conductor_name"), [None, "", "None","none"]),
-                "scheduled_km":    new_data["scheduled_km"],  
-                "actual_km":       new_data["actual_km"],   
+                "scheduled_km":    new_data["scheduled_km"],
+                "actual_km":       new_data["actual_km"],
                 "diesel":          keep(new_data["diesel"],         old.get("diesel"),          [None]),
                 "diesel_km":       keep(new_data["diesel_km"],      old.get("diesel_km"),       [None]),
                 "income":          keep(new_data["income"],         old.get("income"),          [None]),
@@ -101,7 +99,6 @@ def save_vehicle_records(bus_number: str, df: pd.DataFrame) -> None:
                 .eq("date", date_str) \
                 .execute()
         else:
-            # Naya record — direct insert
             supabase.table("vehicle_records").insert(new_data).execute()
 
 
@@ -364,6 +361,8 @@ def get_salary_check(from_date: str = None, to_date: str = None, bus_numbers: li
         sal_query = sal_query.gte("date", from_date)
     if to_date:
         sal_query = sal_query.lte("date", to_date)
+    if bus_numbers:
+        sal_query = sal_query.in_("bus_number", bus_numbers)  # ✅ FIX: ye line add ki
     sal_res = sal_query.execute()
     sal_df  = pd.DataFrame(sal_res.data) if sal_res.data else pd.DataFrame(
         columns=["driver_name", "salary", "bus_number", "date"])
@@ -381,6 +380,7 @@ def get_salary_check(from_date: str = None, to_date: str = None, bus_numbers: li
     grouped.columns = ["Driver Name", "Bus Number", "Duties", "Salary Given"]
     grouped.insert(0, "Sr No", range(1, len(grouped) + 1))
     return grouped
+
 
 def log_error(function_name: str, error_message: str, bus_number: str = "", extra_data: str = "") -> None:
     try:
