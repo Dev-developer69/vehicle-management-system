@@ -121,7 +121,8 @@ def salary_check_view():
 
             # ✅ FIX: sirf accessible vehicles ke drivers dikhao
             accessible = get_accessible_vehicles()
-            df_sal = get_driver_salary(bus_numbers=accessible)
+            bus_number = accessible[0] if accessible else ""
+            df_sal = get_driver_salary(bus_number=bus_number)
 
             if not df_sal.empty:
                 df_sal["Date"] = pd.to_datetime(df_sal["Date"])
