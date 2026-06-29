@@ -242,8 +242,9 @@ def save_driver_salary(df: pd.DataFrame, bus_number: str = "") -> None:
     try:
         supabase.table("driver_salary").insert(records).execute()
     except Exception as e:
+        log_error("save_driver_salary", str(e), bus_number=bus_number, extra_data=str(records))
         import streamlit as st
-        st.error(f"⚠️ Save failed: {e}")
+        st.error("⚠️ Save failed — error logged. Try again or contact support.")
 
 
 def get_driver_salary(bus_number: str = "") -> pd.DataFrame:
