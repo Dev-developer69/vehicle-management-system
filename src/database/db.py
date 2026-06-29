@@ -221,17 +221,29 @@ def save_diesel_row_rate(bus_number: str, row_date: str, rate: float) -> None:
 # ══════════════════════════════════════════════
 
 def save_driver_salary(df: pd.DataFrame, bus_number: str = "") -> None:
-    records = [
-        {
-            "driver_name": row["Driver Name"],
+    records = []
+    for _, row in df.iterrows():
+        try:
+            salary_val = float(str(row["Salary"]).replace(",", "").strip() or 0)
+        except (ValueError, TypeError):
+            salary_val = 0.0
+
+        records.append({
+            "driver_name": str(row["Driver Name"]).strip(),
             "date":        str(row["Date"]),
-            "salary":      float(row["Salary"] or 0),
-            "transaction": row["Transaction"] or "",
+            "salary":      salary_val,
+            "transaction": str(row["Transaction"] or ""),
             "bus_number":  bus_number,
-        }
-        for _, row in df.iterrows()
-    ]
-    supabase.table("driver_salary").insert(records).execute()
+        })
+
+    if not records:
+        return
+
+    try:
+        supabase.table("driver_salary").insert(records).execute()
+    except Exception as e:
+        import streamlit as st
+        st.error(f"⚠️ Save failed: {e}")
 
 
 def get_driver_salary(bus_number: str = "") -> pd.DataFrame:
