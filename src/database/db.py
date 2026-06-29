@@ -228,11 +228,15 @@ def save_driver_salary(df: pd.DataFrame, bus_number: str = "") -> None:
         except (ValueError, TypeError):
             salary_val = 0.0
 
+        txn_val = str(row.get("Transaction") or "").strip().lower()
+        if txn_val not in ("cash", "online"):
+            txn_val = "cash"
+
         records.append({
             "driver_name": str(row["Driver Name"]).strip(),
             "date":        str(row["Date"]),
             "salary":      salary_val,
-            "transaction": str(row["Transaction"] or ""),
+            "transaction": txn_val,
             "bus_number":  bus_number,
         })
 
