@@ -334,18 +334,18 @@ def driver_salary(bus_number: str = ""):
 
     st.markdown("### Driver Salary 💰")
     st.data_editor(
-        st.session_state[key],
-        num_rows="dynamic",
-        use_container_width=True,
-        hide_index=True,
-        key=ed_key,
-        column_config={
-            "Date":        st.column_config.DateColumn("Date", default=date.today()),
-            "Driver Name": st.column_config.TextColumn("Driver Name"),
-            "Salary":      st.column_config.NumberColumn("Salary", min_value=0, default=0),
-            "Transaction": st.column_config.TextColumn("Transaction"),
-        },
-    )
+    st.session_state[key],
+    num_rows="dynamic",
+    use_container_width=True,
+    hide_index=True,
+    key=ed_key,
+    column_config={
+        "Date":        st.column_config.DateColumn("Date", default=date.today()),
+        "Driver Name": st.column_config.TextColumn("Driver Name"),
+        "Salary":      st.column_config.NumberColumn("Salary", min_value=0, default=0),
+        "Transaction": st.column_config.SelectboxColumn("Transaction", options=["cash", "online"], default="cash"),
+    },
+)
 
     editor_state = st.session_state.get(ed_key, {})
     edited_df    = _apply_editor_state(st.session_state[key], editor_state)
