@@ -376,3 +376,14 @@ def get_salary_check(from_date: str = None, to_date: str = None, bus_numbers: li
     grouped.columns = ["Driver Name", "Bus Number", "Duties", "Salary Given"]
     grouped.insert(0, "Sr No", range(1, len(grouped) + 1))
     return grouped
+
+def log_error(function_name: str, error_message: str, bus_number: str = "", extra_data: str = "") -> None:
+    try:
+        supabase_admin.table("error_logs").insert({
+            "function_name": function_name,
+            "bus_number":    bus_number,
+            "error_message": str(error_message),
+            "extra_data":    extra_data,
+        }).execute()
+    except Exception:
+        pass  # logging fail ho jaye to bhi app crash na ho
