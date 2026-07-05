@@ -855,44 +855,61 @@ def _extract_supplier_from_image(image_bytes: bytes, mime_type: str) -> list:
 # 6. PRODUCTS PAGE
 # ──────────────────────────────────────────────
 def products_page():
+    from src.database.config import supabase
+    from src.database.auth import get_current_role
+
+    role = get_current_role()
+    user = st.session_state.get("user")
+
+    # Admin/Manager — sab access
+    if role in ('admin', 'manager'):
+        can_products = can_suppliers = can_requirements = True
+    else:
+        res = supabase.table("user_roles") \
+            .select("products_view, suppliers_view, requirements_view") \
+            .eq("user_id", user.id).execute()
+        flags = res.data[0] if res.data else {}
+        can_products     = bool(flags.get("products_view",     False))
+        can_suppliers    = bool(flags.get("suppliers_view",    False))
+        can_requirements = bool(flags.get("requirements_view", False))
+
     st.markdown("""
     <div style='display:flex;align-items:center;gap:12px;margin-bottom:1.5rem;'>
         <div style='width:42px;height:42px;background:var(--bg-accent,#e8f0fe);border-radius:10px;
                     display:flex;align-items:center;justify-content:center;font-size:22px;'>📦</div>
         <div>
             <div style='font-size:1.2rem;font-weight:500;'>Products Manager</div>
+            <div style='font-size:0.75rem;color:gray;'>Admin and Manager access only</div>
         </div>
     </div>
     """, unsafe_allow_html=True)
 
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button('Home page',type='secondary', width='stretch', icon=':material/home:', shortcut='control+backspace'):
-            st.session_state['login_state']= None
-            st.rerun()
+    # ── Allowed tabs ──
+    nav_key      = "pm_active_tab"
+    allowed_tabs = []
+    if can_products:     allowed_tabs.append(("🛒  Product Details",  "products"))
+    if can_suppliers:    allowed_tabs.append(("🏭  Supplier Details", "suppliers"))
+    if can_requirements: allowed_tabs.append(("📋  Requirements",     "requirements"))
 
-    # ── Nav buttons ──
-    col1, col2, col3 = st.columns(3)
-    tabs = {"🛒 Product Details": "products", "🏭 Supplier Details": "suppliers", "📋 Requirements": "requirements"}
-    nav_key = "pm_active_tab"
-    if nav_key not in st.session_state:
-        st.session_state[nav_key] = "products"
+    if not allowed_tabs:
+        st.warning("⚠️ Koi tab access nahi hai. Admin se contact karo.")
+        return
 
-    with col1:
-        if st.button("🛒  Product Details", use_container_width=True,
-                     type="primary" if st.session_state[nav_key] == "products" else "secondary",
-                     key="pm_tab_products"):
-            st.session_state[nav_key] = "products"; st.rerun()
-    with col2:
-        if st.button("🏭  Supplier Details", use_container_width=True,
-                     type="primary" if st.session_state[nav_key] == "suppliers" else "secondary",
-                     key="pm_tab_suppliers"):
-            st.session_state[nav_key] = "suppliers"; st.rerun()
-    with col3:
-        if st.button("📋  Requirements", use_container_width=True,
-                     type="primary" if st.session_state[nav_key] == "requirements" else "secondary",
-                     key="pm_tab_requirements"):
-            st.session_state[nav_key] = "requirements"; st.rerun()
+    if nav_key not in st.session_state or \
+       st.session_state[nav_key] not in [t[1] for t in allowed_tabs]:
+        st.session_state[nav_key] = allowed_tabs[0][1]
+
+    cols = st.columns(len(allowed_tabs))
+    for i, (label, key) in enumerate(allowed_tabs):
+        with cols[i]:
+            if st.button(
+                label,
+                use_container_width=True,
+                type="primary" if st.session_state[nav_key] == key else "secondary",
+                key=f"pm_tab_{key}",
+            ):
+                st.session_state[nav_key] = key
+                st.rerun()
 
     st.markdown("<hr style='margin:0.75rem 0 1.25rem;opacity:0.15;'>", unsafe_allow_html=True)
 
@@ -900,8 +917,8 @@ def products_page():
         _product_details_tab()
     elif st.session_state[nav_key] == "suppliers":
         _supplier_details_tab()
-    else:
-        _requirements_tab() 
+    elif st.session_state[nav_key] == "requirements":
+        _requirements_tab()
 
 
 def _product_details_tab():

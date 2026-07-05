@@ -3,9 +3,10 @@ from src.database.config import supabase, supabase_admin
 from src.database.auth import get_current_role, is_admin_or_manager
 from src.ui.home_base_layout import home_layout
 
-# ──────────────────────────────────────────────
+
+# ══════════════════════════════════════════════
 # DB HELPERS
-# ──────────────────────────────────────────────
+# ══════════════════════════════════════════════
 def _get_all_users():
     res = supabase.table("user_roles").select("*").execute()
     return res.data or []
@@ -43,10 +44,13 @@ def _add_user(email: str, password: str, role: str):
     })
     user_id = res.user.id
     supabase.table("user_roles").upsert({
-        "user_id":        user_id,
-        "email":          email,
-        "role":           role,
-        "products_access": False,
+        "user_id":           user_id,
+        "email":             email,
+        "role":              role,
+        "products_access":   False,
+        "products_view":     False,
+        "suppliers_view":    False,
+        "requirements_view": False,
     }, on_conflict="user_id").execute()
     return user_id
 
@@ -61,22 +65,31 @@ def _update_role(user_id: str, new_role: str):
     supabase.table("user_roles").update({"role": new_role}).eq("user_id", user_id).execute()
 
 
-def _get_product_manager_access(user_id: str) -> bool:
-    res = supabase.table("user_roles").select("products_access") \
+def _get_product_access_flags(user_id: str) -> dict:
+    res = supabase.table("user_roles") \
+        .select("products_access, products_view, suppliers_view, requirements_view") \
         .eq("user_id", user_id).execute()
     if res.data:
-        return bool(res.data[0].get("products_access", False))
-    return False
+        return {
+            "products_access":   bool(res.data[0].get("products_access", False)),
+            "products_view":     bool(res.data[0].get("products_view", False)),
+            "suppliers_view":    bool(res.data[0].get("suppliers_view", False)),
+            "requirements_view": bool(res.data[0].get("requirements_view", False)),
+        }
+    return {
+        "products_access": False, "products_view": False,
+        "suppliers_view": False,  "requirements_view": False,
+    }
 
 
-def _set_product_manager_access(user_id: str, has_access: bool):
-    supabase.table("user_roles").update({"products_access": has_access}) \
-        .eq("user_id", user_id).execute()
+def _set_product_access_flags(user_id: str, flags: dict):
+    supabase.table("user_roles").update(flags).eq("user_id", user_id).execute()
 
 
-# ──────────────────────────────────────────────
+# ══════════════════════════════════════════════
 # ACCESS MANAGER PAGE
-# ──────────────────────────────────────────────
+# ══════════════════════════════════════════════
+
 def access_manager_page():
     home_layout()
     col1, col2 = st.columns(2)
@@ -116,30 +129,58 @@ def access_manager_page():
                         )
 
                         # ── Products Manager Access ──
-                        prod_access = _get_product_manager_access(u["user_id"])
-                        new_prod_access = st.checkbox(
-                            "📦 Products Manager Access",
-                            value=prod_access,
-                            key=f"prod_acc_{u['user_id']}",
+                        flags = _get_product_access_flags(u["user_id"])
+                        st.markdown("**📦 Products Manager Access:**")
+                        pa = st.checkbox(
+                            "Products Manager khol sakte hain",
+                            value=flags["products_access"],
+                            key=f"pa_{u['user_id']}",
                         )
+                        if pa:
+                            c1, c2, c3 = st.columns(3)
+                            with c1:
+                                pv = st.checkbox("🛒 Product Details",
+                                                  value=flags["products_view"],
+                                                  key=f"pv_{u['user_id']}")
+                            with c2:
+                                sv = st.checkbox("🏭 Supplier Details",
+                                                  value=flags["suppliers_view"],
+                                                  key=f"sv_{u['user_id']}")
+                            with c3:
+                                rv = st.checkbox("📋 Requirements",
+                                                  value=flags["requirements_view"],
+                                                  key=f"rv_{u['user_id']}")
+                        else:
+                            pv = sv = rv = False
 
                         c1, c2 = st.columns([1, 1])
                         with c1:
                             if st.button("💾 Update Role", key=f"upd_{u['user_id']}"):
                                 _update_role(u["user_id"], new_role)
-                                _set_product_manager_access(u["user_id"], new_prod_access)
-                                st.success("✅ Role & access updated!")
+                                _set_product_access_flags(u["user_id"], {
+                                    "products_access":   pa,
+                                    "products_view":     pv,
+                                    "suppliers_view":    sv,
+                                    "requirements_view": rv,
+                                })
+                                st.success("✅ Updated!")
                                 st.rerun()
                         with c2:
                             if u["user_id"] != current_user.id:
                                 if st.button("🗑️ Delete User", key=f"del_{u['user_id']}"):
                                     _delete_user(u["user_id"])
-                                    st.success("✅ User deleted!")
+                                    st.success("✅ Deleted!")
                                     st.rerun()
                     else:
+                        flags = _get_product_access_flags(u["user_id"])
                         st.markdown(f"**Role:** `{u['role'].upper()}`")
-                        prod_access = _get_product_manager_access(u["user_id"])
-                        st.markdown(f"**📦 Products Access:** {'✅ Yes' if prod_access else '❌ No'}")
+                        st.markdown(f"**📦 Products Access:** {'✅' if flags['products_access'] else '❌'}")
+                        if flags["products_access"]:
+                            st.markdown(
+                                f"🛒 Products: {'✅' if flags['products_view'] else '❌'}  "
+                                f"🏭 Suppliers: {'✅' if flags['suppliers_view'] else '❌'}  "
+                                f"📋 Requirements: {'✅' if flags['requirements_view'] else '❌'}"
+                            )
 
         st.divider()
         st.markdown("### ➕ Add New User")
@@ -147,7 +188,7 @@ def access_manager_page():
         with c1:
             new_email = st.text_input("Email", key="new_email")
         with c2:
-            new_pass  = st.text_input("Password", type="password", key="new_pass")
+            new_pass = st.text_input("Password", type="password", key="new_pass")
         with c3:
             if role == "admin":
                 new_role = st.selectbox("Role", ["subordinate", "manager", "admin"], key="new_role")
@@ -155,7 +196,18 @@ def access_manager_page():
                 new_role = "subordinate"
                 st.markdown("<br>**Role:** Subordinate", unsafe_allow_html=True)
 
-        new_prod_access_create = st.checkbox("📦 Products Manager Access", key="new_prod_access")
+        st.markdown("**📦 Products Manager Access (new user):**")
+        new_pa = st.checkbox("Products Manager khol sakte hain", key="new_pa")
+        if new_pa:
+            nc1, nc2, nc3 = st.columns(3)
+            with nc1:
+                new_pv = st.checkbox("🛒 Product Details",  key="new_pv")
+            with nc2:
+                new_sv = st.checkbox("🏭 Supplier Details", key="new_sv")
+            with nc3:
+                new_rv = st.checkbox("📋 Requirements",     key="new_rv")
+        else:
+            new_pv = new_sv = new_rv = False
 
         if st.button("➕ Create User", type="primary"):
             if not new_email or not new_pass:
@@ -163,8 +215,12 @@ def access_manager_page():
             else:
                 try:
                     uid = _add_user(new_email, new_pass, new_role)
-                    if new_prod_access_create:
-                        _set_product_manager_access(uid, True)
+                    _set_product_access_flags(uid, {
+                        "products_access":   new_pa,
+                        "products_view":     new_pv,
+                        "suppliers_view":    new_sv,
+                        "requirements_view": new_rv,
+                    })
                     st.success(f"✅ User `{new_email}` created as `{new_role}`!")
                     st.rerun()
                 except Exception as e:
