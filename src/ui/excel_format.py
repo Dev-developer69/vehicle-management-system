@@ -783,7 +783,6 @@ def products_page():
                     display:flex;align-items:center;justify-content:center;font-size:22px;'>📦</div>
         <div>
             <div style='font-size:1.2rem;font-weight:500;'>Products Manager</div>
-            <div style='font-size:0.75rem;color:gray;'>Admin and Manager access only</div>
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -829,7 +828,7 @@ def products_page():
 
 def _product_details_tab():
     # ── Search + List ──
-    search = st.text_input("🔍 Search product", key="prod_search", placeholder="Product name likho...")
+    search = st.text_input("🔍 Search product", key="prod_search", placeholder="type product name...")
     if "products_df" not in st.session_state:
         st.session_state["products_df"] = get_products()
     df = st.session_state["products_df"]
@@ -842,7 +841,7 @@ def _product_details_tab():
                 use_container_width=True, hide_index=True,
             )
         with st.expander("🗑️ Delete a product"):
-            del_name = st.selectbox("Product select karo", filtered["Name"].tolist(), key="del_prod_select")
+            del_name = st.selectbox("Select a product", filtered["Name"].tolist(), key="del_prod_select")
             if st.button("Delete", key="del_prod_btn", type="primary"):
                 pid = filtered[filtered["Name"] == del_name]["id"].values[0]
                 delete_product(pid)
@@ -850,7 +849,7 @@ def _product_details_tab():
                 st.session_state.pop("products_df", None)
                 st.rerun()
     else:
-        st.info("Koi product nahi mila.")
+        st.info("NO PRODUCT FOUND.")
 
     st.markdown("---")
 
@@ -865,21 +864,21 @@ def _product_details_tab():
     # Image uploader reset key
             img_reset_key = st.session_state.get("img_reset_key", 0)
     
-            uploaded = st.file_uploader("Bill ya product ki image upload karo",
+            uploaded = st.file_uploader("Upload image/Bill",
                                         type=["jpg","jpeg","png","webp"],
                                         key=f"prod_img_{img_reset_key}")
             if uploaded:
                 if "img_products_list" not in st.session_state:
-                    with st.spinner("Image se products read ho rahe hain..."):
+                    with st.spinner("Fetching products from image..."):
                         products_list = _extract_from_image(uploaded.read(), uploaded.type)
                     if products_list:
                         st.session_state["img_products_list"] = products_list
                     else:
-                        st.warning("⚠️ Koi product nahi mila image mein.")
+                        st.warning("⚠️ NO PRODUCT FOUND")
 
             if "img_products_list" in st.session_state:
                 products_list = st.session_state["img_products_list"]
-                st.success(f"✅ {len(products_list)} products mile — edit karke save karo")
+                st.success(f"✅ {len(products_list)} Product found - if changes needed then change and save")
 
                 sup_df = get_suppliers()
                 sup_options = {"(None)": None}
@@ -887,7 +886,7 @@ def _product_details_tab():
 
                 c1, c2 = st.columns(2)
                 with c1:
-                    p_sup = st.selectbox("Supplier (sab items ke liye)",
+                    p_sup = st.selectbox("Suppliers",
                                         list(sup_options.keys()), key="img_sup")
                 with c2:
                     p_date = st.date_input("Purchase Date", value=date.today(), key="img_date")
@@ -985,8 +984,8 @@ def _supplier_details_tab():
             st.dataframe(filtered_sup[["Name","Phone","Address"]],
                          use_container_width=True, hide_index=True)
 
-        st.markdown("#### 📦 Supplier ke Products")
-        sel_sup = st.selectbox("Supplier select karo", filtered_sup["Name"].tolist(), key="sup_sel_view")
+        st.markdown("#### 📦 Supplier's products ")
+        sel_sup = st.selectbox("Select Supplier", filtered_sup["Name"].tolist(), key="sup_sel_view")
         if sel_sup:
             sid = filtered_sup[filtered_sup["Name"] == sel_sup]["id"].values[0]
             sup_prods = get_supplier_products(sid)
@@ -994,7 +993,7 @@ def _supplier_details_tab():
                 with st.container(border=True):
                     st.dataframe(sup_prods, use_container_width=True, hide_index=True)
             else:
-                st.info("Is supplier se abhi koi product nahi liya.")
+                st.info("NO PRODUCTS PURCHASED..")
 
         with st.expander("🗑️ Delete a supplier"):
             del_sup = st.selectbox("Select karo", filtered_sup["Name"].tolist(), key="del_sup_sel")
@@ -1005,7 +1004,7 @@ def _supplier_details_tab():
                 st.session_state.pop("suppliers_df", None)
                 st.rerun()
     else:
-        st.info("Koi supplier nahi mila.")
+        st.info("NO SUPPLIER FOUND.")
 
     st.markdown("---")
 
@@ -1035,7 +1034,7 @@ def _supplier_details_tab():
 
 
 def _requirements_tab():
-    st.caption("✅ Fulfilled requirements 7 din baad auto-delete ho jaate hain.")
+    st.caption("✅ Fulfilled requirements Auto delete after 7 days .")
 
     if "req_df" not in st.session_state:
         st.session_state["req_df"] = get_requirements()
@@ -1096,7 +1095,7 @@ def _requirements_tab():
                             st.session_state.pop(f"fmodal_{row['id']}", None)
                             st.rerun()
     else:
-        st.info("Abhi koi requirement nahi hai.")
+        st.info("No requirement .")
 
     st.markdown("---")
 
