@@ -127,108 +127,34 @@ def access_manager_page():
                             index=["admin", "manager", "subordinate"].index(u["role"]),
                             key=f"role_{u['user_id']}",
                         )
-
-                        # ── Products Manager Access ──
-                        flags = _get_product_access_flags(u["user_id"])
-                        st.markdown("**📦 Products Manager Access:**")
-                        pa = st.checkbox(
-                            "Products Manager khol sakte hain",
-                            value=flags["products_access"],
-                            key=f"pa_{u['user_id']}",
-                        )
-                        if pa:
-                            c1, c2, c3 = st.columns(3)
-                            with c1:
-                                pv = st.checkbox("🛒 Product Details",
-                                                  value=flags["products_view"],
-                                                  key=f"pv_{u['user_id']}")
-                            with c2:
-                                sv = st.checkbox("🏭 Supplier Details",
-                                                  value=flags["suppliers_view"],
-                                                  key=f"sv_{u['user_id']}")
-                            with c3:
-                                rv = st.checkbox("📋 Requirements",
-                                                  value=flags["requirements_view"],
-                                                  key=f"rv_{u['user_id']}")
-                        else:
-                            pv = sv = rv = False
-
-                        c1, c2 = st.columns([1, 1])
-                        with c1:
-                            if st.button("💾 Update Role", key=f"upd_{u['user_id']}"):
-                                _update_role(u["user_id"], new_role)
-                                _set_product_access_flags(u["user_id"], {
-                                    "products_access":   pa,
-                                    "products_view":     pv,
-                                    "suppliers_view":    sv,
-                                    "requirements_view": rv,
-                                })
-                                st.success("✅ Updated!")
-                                st.rerun()
-                        with c2:
-                            if u["user_id"] != current_user.id:
-                                if st.button("🗑️ Delete User", key=f"del_{u['user_id']}"):
-                                    _delete_user(u["user_id"])
-                                    st.success("✅ Deleted!")
-                                    st.rerun()
-                    else:
-                        flags = _get_product_access_flags(u["user_id"])
-                        st.markdown(f"**Role:** `{u['role'].upper()}`")
-                        st.markdown(f"**📦 Products Access:** {'✅' if flags['products_access'] else '❌'}")
-                        if flags["products_access"]:
-                            st.markdown(
-                                f"🛒 Products: {'✅' if flags['products_view'] else '❌'}  "
-                                f"🏭 Suppliers: {'✅' if flags['suppliers_view'] else '❌'}  "
-                                f"📋 Requirements: {'✅' if flags['requirements_view'] else '❌'}"
-                            )
-
         st.divider()
         st.markdown("### ➕ Add New User")
-        c1, c2, c3 = st.columns([2, 2, 1])
-        with c1:
-            new_email = st.text_input("Email", key="new_email")
-        with c2:
-            new_pass = st.text_input("Password", type="password", key="new_pass")
-        with c3:
-            if role == "admin":
-                new_role = st.selectbox("Role", ["subordinate", "manager", "admin"], key="new_role")
-            else:
-                new_role = "subordinate"
-                st.markdown("<br>**Role:** Subordinate", unsafe_allow_html=True)
+c1, c2, c3 = st.columns([2, 2, 1])
+with c1:
+    new_email = st.text_input("Email", key="new_email")
+with c2:
+    new_pass = st.text_input("Password", type="password", key="new_pass")
+with c3:
+    if role == "admin":
+        new_role = st.selectbox("Role", ["subordinate", "manager", "admin"], key="new_role")
+    else:
+        new_role = "subordinate"
+        st.markdown("<br>**Role:** Subordinate", unsafe_allow_html=True)
 
-        st.markdown("**📦 Products Manager Access (new user):**")
-        new_pa = st.checkbox("Products Manager khol sakte hain", key="new_pa")
-        if new_pa:
-            nc1, nc2, nc3 = st.columns(3)
-            with nc1:
-                new_pv = st.checkbox("🛒 Product Details",  key="new_pv")
-            with nc2:
-                new_sv = st.checkbox("🏭 Supplier Details", key="new_sv")
-            with nc3:
-                new_rv = st.checkbox("📋 Requirements",     key="new_rv")
-        else:
-            new_pv = new_sv = new_rv = False
-
-        if st.button("➕ Create User", type="primary"):
-            if not new_email or not new_pass:
-                st.warning("⚠️ Email aur password bharo.")
-            else:
-                try:
-                    uid = _add_user(new_email, new_pass, new_role)
-                    _set_product_access_flags(uid, {
-                        "products_access":   new_pa,
-                        "products_view":     new_pv,
-                        "suppliers_view":    new_sv,
-                        "requirements_view": new_rv,
-                    })
-                    st.success(f"✅ User `{new_email}` created as `{new_role}`!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"❌ Error: {e}")
-
+if st.button("➕ Create User", type="primary"):
+    if not new_email or not new_pass:
+        st.warning("⚠️ Email aur password bharo.")
+    else:
+        try:
+            uid = _add_user(new_email, new_pass, new_role)
+            st.success(f"✅ User `{new_email}` created as `{new_role}`!")
+            st.rerun()
+        except Exception as e:
+            st.error(f"❌ Error: {e}")
     # ── TAB 2: Vehicle Access ──
+
     with tab2:
-        st.markdown("### Assign Vehicles to Subordinates")
+        st.markdown("### Assign Vehicles & Access to Subordinates")
 
         users     = _get_all_users()
         subs      = [u for u in users if u["role"] == "subordinate"]
@@ -238,15 +164,12 @@ def access_manager_page():
             st.info("Koi subordinate nahi hai. Pehle user add karo.")
             return
 
-        if not all_buses:
-            st.info("Koi vehicle nahi mila.")
-            return
-
         for u in subs:
             with st.expander(f"🧑 {u['email']}"):
-                current_buses = _get_user_vehicles(u["user_id"])
-                st.markdown(f"**Currently assigned:** {', '.join(current_buses) if current_buses else 'None'}")
 
+                # ── Vehicle Access ──
+                st.markdown("**🚌 Vehicle Access**")
+                current_buses = _get_user_vehicles(u["user_id"])
                 c1, c2 = st.columns([3, 1])
                 with c1:
                     to_grant = st.multiselect(
@@ -255,14 +178,52 @@ def access_manager_page():
                         default=current_buses,
                         key=f"va_{u['user_id']}",
                     )
-                with c2:
-                    st.markdown("<br>", unsafe_allow_html=True)
-                    if st.button("💾 Save", key=f"save_va_{u['user_id']}"):
-                        for bus in to_grant:
-                            if bus not in current_buses:
-                                _grant_access(u["user_id"], bus, current_user.id)
-                        for bus in current_buses:
-                            if bus not in to_grant:
-                                _revoke_access(u["user_id"], bus)
-                        st.success("✅ Access updated!")
-                        st.rerun()
+
+                st.markdown("---")
+
+                # ── Products Access ──
+                st.markdown("**📦 Products Manager Access**")
+                flags = _get_product_access_flags(u["user_id"])
+
+                pa = st.checkbox(
+                    "Products Manager khol sakte hain",
+                    value=flags["products_access"],
+                    key=f"pa2_{u['user_id']}",
+                )
+                if pa:
+                    pc1, pc2, pc3 = st.columns(3)
+                    with pc1:
+                        pv = st.checkbox("🛒 Product Details",
+                                        value=flags["products_view"],
+                                        key=f"pv2_{u['user_id']}")
+                    with pc2:
+                        sv = st.checkbox("🏭 Supplier Details",
+                                        value=flags["suppliers_view"],
+                                        key=f"sv2_{u['user_id']}")
+                    with pc3:
+                        rv = st.checkbox("📋 Requirements",
+                                        value=flags["requirements_view"],
+                                        key=f"rv2_{u['user_id']}")
+                else:
+                    pv = sv = rv = False
+
+                st.markdown("<br>", unsafe_allow_html=True)
+                if st.button("💾 Save All", key=f"save_va_{u['user_id']}", 
+                            type="primary", use_container_width=True):
+                    # Vehicle access save
+                    for bus in to_grant:
+                        if bus not in current_buses:
+                            _grant_access(u["user_id"], bus, current_user.id)
+                    for bus in current_buses:
+                        if bus not in to_grant:
+                            _revoke_access(u["user_id"], bus)
+
+                    # Products access save
+                    _set_product_access_flags(u["user_id"], {
+                        "products_access":   pa,
+                        "products_view":     pv,
+                        "suppliers_view":    sv,
+                        "requirements_view": rv,
+                    })
+                    st.success("✅ Access updated!")
+                    st.rerun()
