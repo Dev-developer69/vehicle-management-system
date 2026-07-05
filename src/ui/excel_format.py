@@ -741,37 +741,115 @@ def salary_check_view():
 # ──────────────────────────────────────────────
 # HELPER: Image → Product data via Claude API
 # ──────────────────────────────────────────────
+# def _extract_from_image(image_bytes: bytes, mime_type: str) -> list:
+#     try:
+#         import anthropic, base64, json, re
+#         client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
+#         b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
+#         msg = client.messages.create(
+#             model="claude-sonnet-4-6",
+#             max_tokens=1000,
+#             messages=[{
+#                 "role": "user",
+#                 "content": [
+#                     {"type": "image", "source": {"type": "base64", "media_type": mime_type, "data": b64}},
+#                     {"type": "text", "text": (
+#                         "Extract ALL products/items from this bill or image. "
+#                         "Return ONLY a JSON array of objects, each with keys: "
+#                         "name (string), price (number or null), mrp (number or null). "
+#                         "price = rate/unit price, not total amount. "
+#                         "No explanation, no markdown, just raw JSON array. "
+#                         "Example: [{\"name\": \"Item A\", \"price\": 350, \"mrp\": null}]"
+#                     )},
+#                 ],
+#             }],
+#         )
+#         raw = re.sub(r"```json|```", "", msg.content[0].text.strip()).strip()
+#         parsed = json.loads(raw)
+#         if isinstance(parsed, dict):
+#             parsed = [parsed]
+#         return parsed if isinstance(parsed, list) else []
+#     except Exception as e:
+#         st.error(f"Image read failed: {e}")
+#         return []
+
 def _extract_from_image(image_bytes: bytes, mime_type: str) -> list:
     try:
-        import anthropic, base64, json, re
-        client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
+        import base64, json, re
+        from groq import Groq
+
+        client = Groq(api_key=st.secrets["GROQ_API_KEY"])
         b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
-        msg = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=1000,
+
+        response = client.chat.completions.create(
+            model="meta-llama/llama-4-scout-17b-16e-instruct",
             messages=[{
                 "role": "user",
                 "content": [
-                    {"type": "image", "source": {"type": "base64", "media_type": mime_type, "data": b64}},
+                    {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{b64}"}},
                     {"type": "text", "text": (
                         "Extract ALL products/items from this bill or image. "
-                        "Return ONLY a JSON array of objects, each with keys: "
+                        "Return ONLY a JSON array with keys: "
                         "name (string), price (number or null), mrp (number or null). "
-                        "price = rate/unit price, not total amount. "
-                        "No explanation, no markdown, just raw JSON array. "
-                        "Example: [{\"name\": \"Item A\", \"price\": 350, \"mrp\": null}]"
-                    )},
-                ],
+                        "price = rate/unit price, not total. "
+                        "No explanation, no markdown, just raw JSON array."
+                    )}
+                ]
             }],
+            max_tokens=1000,
         )
-        raw = re.sub(r"```json|```", "", msg.content[0].text.strip()).strip()
+
+        raw = re.sub(r"```json|```", "", response.choices[0].message.content.strip()).strip()
         parsed = json.loads(raw)
         if isinstance(parsed, dict):
             parsed = [parsed]
         return parsed if isinstance(parsed, list) else []
+
     except Exception as e:
         st.error(f"Image read failed: {e}")
         return []
+    
+
+def _extract_supplier_from_image(image_bytes: bytes, mime_type: str) -> list:
+    try:
+        import base64, json, re
+        from groq import Groq
+
+        client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+        b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
+
+        response = client.chat.completions.create(
+            model="meta-llama/llama-4-scout-17b-16e-instruct",
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{b64}"}},
+                    {"type": "text", "text": (
+                        "Extract supplier/business details from ALL business cards in this image. "
+                        "For each card: use COMPANY/BUSINESS name as name (not person's name). "
+                        "If no company name, use person's name. "
+                        "Save ALL phone numbers from each card as comma-separated string in phone field. "
+                        "Return ONLY a JSON array, one object per card with keys: "
+                        "name (company name), phone (all numbers comma-separated as string), address (full address). "
+                        "If any field not found set it to null. "
+                        "No explanation, no markdown, just raw JSON array. "
+                        "Example: [{\"name\": \"Rohit Textile Inc\", \"phone\": \"+91 9582297932, +91 9871221331\", \"address\": \"GF 2892/5, Singhara Chowk, Sadar Bazar, Delhi-110006\"}]"
+                    )},
+                ],
+            }],
+            max_tokens=500,
+        )
+
+        raw = re.sub(r"```json|```", "", response.choices[0].message.content.strip()).strip()
+        parsed = json.loads(raw)
+        if isinstance(parsed, dict):
+            parsed = [parsed]
+        return parsed if isinstance(parsed, list) else []
+
+    except Exception as e:
+        st.error(f"Image read failed: {e}")
+        return []
+
 
 # ──────────────────────────────────────────────
 # 6. PRODUCTS PAGE
@@ -783,7 +861,6 @@ def products_page():
                     display:flex;align-items:center;justify-content:center;font-size:22px;'>📦</div>
         <div>
             <div style='font-size:1.2rem;font-weight:500;'>Products Manager</div>
-            <div style='font-size:0.75rem;color:gray;'>Admin and Manager access only</div>
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -829,7 +906,7 @@ def products_page():
 
 def _product_details_tab():
     # ── Search + List ──
-    search = st.text_input("🔍 Search product", key="prod_search", placeholder="Product name likho...")
+    search = st.text_input("🔍 Search product", key="prod_search", placeholder="type product name...")
     if "products_df" not in st.session_state:
         st.session_state["products_df"] = get_products()
     df = st.session_state["products_df"]
@@ -842,7 +919,7 @@ def _product_details_tab():
                 use_container_width=True, hide_index=True,
             )
         with st.expander("🗑️ Delete a product"):
-            del_name = st.selectbox("Product select karo", filtered["Name"].tolist(), key="del_prod_select")
+            del_name = st.selectbox("Select a product", filtered["Name"].tolist(), key="del_prod_select")
             if st.button("Delete", key="del_prod_btn", type="primary"):
                 pid = filtered[filtered["Name"] == del_name]["id"].values[0]
                 delete_product(pid)
@@ -850,7 +927,7 @@ def _product_details_tab():
                 st.session_state.pop("products_df", None)
                 st.rerun()
     else:
-        st.info("Koi product nahi mila.")
+        st.info("NO PRODUCT FOUND.")
 
     st.markdown("---")
 
@@ -865,21 +942,21 @@ def _product_details_tab():
     # Image uploader reset key
             img_reset_key = st.session_state.get("img_reset_key", 0)
     
-            uploaded = st.file_uploader("Bill ya product ki image upload karo",
+            uploaded = st.file_uploader("Upload image/Bill",
                                         type=["jpg","jpeg","png","webp"],
                                         key=f"prod_img_{img_reset_key}")
             if uploaded:
                 if "img_products_list" not in st.session_state:
-                    with st.spinner("Image se products read ho rahe hain..."):
+                    with st.spinner("Fetching products from image..."):
                         products_list = _extract_from_image(uploaded.read(), uploaded.type)
                     if products_list:
                         st.session_state["img_products_list"] = products_list
                     else:
-                        st.warning("⚠️ Koi product nahi mila image mein.")
+                        st.warning("⚠️ NO PRODUCT FOUND")
 
             if "img_products_list" in st.session_state:
                 products_list = st.session_state["img_products_list"]
-                st.success(f"✅ {len(products_list)} products mile — edit karke save karo")
+                st.success(f"✅ {len(products_list)} Product found - if changes needed then change and save")
 
                 sup_df = get_suppliers()
                 sup_options = {"(None)": None}
@@ -887,7 +964,7 @@ def _product_details_tab():
 
                 c1, c2 = st.columns(2)
                 with c1:
-                    p_sup = st.selectbox("Supplier (sab items ke liye)",
+                    p_sup = st.selectbox("Suppliers",
                                         list(sup_options.keys()), key="img_sup")
                 with c2:
                     p_date = st.date_input("Purchase Date", value=date.today(), key="img_date")
@@ -982,7 +1059,7 @@ def _supplier_details_tab():
 
     if not filtered_sup.empty:
         with st.container(border=True):
-            st.dataframe(filtered_sup[["Name","Phone","Address"]],
+            st.dataframe(filtered_sup[["Name", "Phone", "Address"]],
                          use_container_width=True, hide_index=True)
 
         st.markdown("#### 📦 Supplier ke Products")
@@ -1011,31 +1088,128 @@ def _supplier_details_tab():
 
     with st.container(border=True):
         st.markdown("#### ➕ Add Supplier")
-        s_name = st.text_input("Supplier Name", key="s_name")
-        c1, c2 = st.columns(2)
-        with c1:
-            s_phone = st.text_input("Phone", key="s_phone")
-        with c2:
+
+        sup_mode = st.radio("Input mode", ["✏️ Manual", "📷 From Card/Image"],
+                            horizontal=True, key="sup_input_mode")
+
+        # ── FROM IMAGE ──
+        if sup_mode == "📷 From Card/Image":
+            sup_img_reset = st.session_state.get("sup_img_reset", 0)
+            sup_uploaded = st.file_uploader(
+                "Business card ya supplier info ki image upload karo",
+                type=["jpg", "jpeg", "png", "webp"],
+                key=f"sup_img_{sup_img_reset}"
+            )
+
+            if sup_uploaded:
+                if "sup_extracted" not in st.session_state:
+                    with st.spinner("Image se supplier details read ho rahi hain..."):
+                        result = _extract_supplier_from_image(sup_uploaded.read(), sup_uploaded.type)
+                        if isinstance(result, dict):
+                            result = [result]
+                        if not isinstance(result, list):
+                            result = []
+                        # sirf dicts rakho
+                        result = [s for s in result if isinstance(s, dict)]
+                        st.session_state["sup_extracted"] = result
+
+            if "sup_extracted" in st.session_state:
+                sup_list = st.session_state["sup_extracted"]
+
+                if sup_list:
+                    st.success(f"✅ {len(sup_list)} supplier(s) mile — edit karke save karo")
+
+                    sup_edit_df = pd.DataFrame([{
+                        "Name":    s.get("name", "") or "",
+                        "Phone":   str(s.get("phone", "") or ""),
+                        "Address": s.get("address", "") or "",
+                    } for s in sup_list])
+
+                    edited_sup = st.data_editor(
+                        sup_edit_df,
+                        use_container_width=True,
+                        hide_index=True,
+                        num_rows="dynamic",
+                        key="sup_editor",
+                        column_config={
+                            "Name":    st.column_config.TextColumn("Name"),
+                            "Phone":   st.column_config.TextColumn("Phone *"),
+                            "Address": st.column_config.TextColumn("Address"),
+                        }
+                    )
+
+                    sc1, sc2 = st.columns([3, 1])
+                    with sc1:
+                        if st.button("💾 Save All Suppliers", use_container_width=True,
+                                     key="save_sup_img_btn", type="primary"):
+                            saved, skipped, duplicate, no_phone = 0, 0, 0, 0
+                            for _, row in edited_sup.iterrows():
+                                name = str(row["Name"]).strip()
+                                if not name:
+                                    skipped += 1
+                                    continue
+                                result, reason = save_supplier(
+                                    name, str(row["Phone"]), str(row["Address"])
+                                )
+                                if result:
+                                    saved += 1
+                                elif reason == "duplicate":
+                                    duplicate += 1
+                                elif reason == "no_phone":
+                                    no_phone += 1
+
+                            msg = f"✅ {saved} saved!"
+                            if duplicate: msg += f" | ⚠️ {duplicate} duplicate skip"
+                            if no_phone:  msg += f" | ❌ {no_phone} phone nahi tha skip"
+                            if skipped:   msg += f" | {skipped} empty rows skip"
+                            st.success(msg)
+                            st.session_state.pop("sup_extracted", None)
+                            st.session_state.pop("suppliers_df", None)
+                            st.session_state["sup_img_reset"] = sup_img_reset + 1
+                            st.rerun()
+                    with sc2:
+                        if st.button("🗑️ Clear", use_container_width=True, key="clear_sup_img"):
+                            st.session_state.pop("sup_extracted", None)
+                            st.session_state["sup_img_reset"] = sup_img_reset + 1
+                            st.rerun()
+                else:
+                    st.warning("⚠️ Image se data nahi mila, manually fill karo.")
+
+        # ── MANUAL ──
+        if sup_mode == "✏️ Manual":
+            c1, c2 = st.columns(2)
+            with c1:
+                s_name  = st.text_input("Supplier Name", key="s_name")
+            with c2:
+                s_phone = st.text_input("Phone *", key="s_phone")
+
             s_address = st.text_input("Address", key="s_address")
 
-        bc1, bc2 = st.columns([3,1])
-        with bc1:
-            if st.button("💾 Save Supplier", use_container_width=True, key="save_sup_btn", type="primary"):
-                if not s_name.strip():
-                    st.warning("⚠️ Supplier name required.")
-                else:
-                    save_supplier(s_name, s_phone, s_address)
-                    st.success(f"✅ Saved: {s_name}")
+            bc1, bc2 = st.columns([3, 1])
+            with bc1:
+                if st.button("💾 Save Supplier", use_container_width=True,
+                             key="save_sup_btn", type="primary"):
+                    if not s_name.strip():
+                        st.warning("⚠️ Supplier name required.")
+                    elif not s_phone.strip():
+                        st.warning("⚠️ Phone number required.")
+                    else:
+                        result, reason = save_supplier(s_name, s_phone, s_address)
+                        if result:
+                            st.success(f"✅ Saved: {s_name}")
+                            st.session_state.pop("suppliers_df", None)
+                            st.rerun()
+                        elif reason == "duplicate":
+                            st.warning(f"⚠️ '{s_name}' already exists.")
+                        elif reason == "no_phone":
+                            st.warning("⚠️ Phone number required.")
+            with bc2:
+                if st.button("🔄 Refresh", use_container_width=True, key="refresh_sup"):
                     st.session_state.pop("suppliers_df", None)
                     st.rerun()
-        with bc2:
-            if st.button("🔄 Refresh", use_container_width=True, key="refresh_sup"):
-                st.session_state.pop("suppliers_df", None)
-                st.rerun()
-
 
 def _requirements_tab():
-    st.caption("✅ Fulfilled requirements 7 din baad auto-delete ho jaate hain.")
+    st.caption("✅ Fulfilled requirements Auto delete after 7 days .")
 
     if "req_df" not in st.session_state:
         st.session_state["req_df"] = get_requirements()
@@ -1096,7 +1270,7 @@ def _requirements_tab():
                             st.session_state.pop(f"fmodal_{row['id']}", None)
                             st.rerun()
     else:
-        st.info("Abhi koi requirement nahi hai.")
+        st.info("No requirement .")
 
     st.markdown("---")
 

@@ -43,9 +43,10 @@ def _add_user(email: str, password: str, role: str):
     })
     user_id = res.user.id
     supabase.table("user_roles").upsert({
-        "user_id": user_id,
-        "email":   email,
-        "role":    role,
+        "user_id":        user_id,
+        "email":          email,
+        "role":           role,
+        "products_access": False,
     }, on_conflict="user_id").execute()
     return user_id
 
@@ -60,6 +61,19 @@ def _update_role(user_id: str, new_role: str):
     supabase.table("user_roles").update({"role": new_role}).eq("user_id", user_id).execute()
 
 
+def _get_product_manager_access(user_id: str) -> bool:
+    res = supabase.table("user_roles").select("products_access") \
+        .eq("user_id", user_id).execute()
+    if res.data:
+        return bool(res.data[0].get("products_access", False))
+    return False
+
+
+def _set_product_manager_access(user_id: str, has_access: bool):
+    supabase.table("user_roles").update({"products_access": has_access}) \
+        .eq("user_id", user_id).execute()
+
+
 # ──────────────────────────────────────────────
 # ACCESS MANAGER PAGE
 # ──────────────────────────────────────────────
@@ -67,11 +81,11 @@ def access_manager_page():
     home_layout()
     col1, col2 = st.columns(2)
     with col1:
-        if st.button('Home page',type='secondary', width='stretch', icon=':material/home:', shortcut='control+backspace'):
-            st.session_state['login_state']= None
+        if st.button('Home page', type='secondary', width='stretch',
+                     icon=':material/home:', shortcut='control+backspace'):
+            st.session_state['login_state'] = None
             st.rerun()
 
-            
     if not is_admin_or_manager():
         st.error("❌ Access denied. Admin ya Manager hi yeh page dekh sakte hain.")
         return
@@ -100,11 +114,21 @@ def access_manager_page():
                             index=["admin", "manager", "subordinate"].index(u["role"]),
                             key=f"role_{u['user_id']}",
                         )
+
+                        # ── Products Manager Access ──
+                        prod_access = _get_product_manager_access(u["user_id"])
+                        new_prod_access = st.checkbox(
+                            "📦 Products Manager Access",
+                            value=prod_access,
+                            key=f"prod_acc_{u['user_id']}",
+                        )
+
                         c1, c2 = st.columns([1, 1])
                         with c1:
                             if st.button("💾 Update Role", key=f"upd_{u['user_id']}"):
                                 _update_role(u["user_id"], new_role)
-                                st.success("✅ Role updated!")
+                                _set_product_manager_access(u["user_id"], new_prod_access)
+                                st.success("✅ Role & access updated!")
                                 st.rerun()
                         with c2:
                             if u["user_id"] != current_user.id:
@@ -112,6 +136,10 @@ def access_manager_page():
                                     _delete_user(u["user_id"])
                                     st.success("✅ User deleted!")
                                     st.rerun()
+                    else:
+                        st.markdown(f"**Role:** `{u['role'].upper()}`")
+                        prod_access = _get_product_manager_access(u["user_id"])
+                        st.markdown(f"**📦 Products Access:** {'✅ Yes' if prod_access else '❌ No'}")
 
         st.divider()
         st.markdown("### ➕ Add New User")
@@ -127,12 +155,16 @@ def access_manager_page():
                 new_role = "subordinate"
                 st.markdown("<br>**Role:** Subordinate", unsafe_allow_html=True)
 
+        new_prod_access_create = st.checkbox("📦 Products Manager Access", key="new_prod_access")
+
         if st.button("➕ Create User", type="primary"):
             if not new_email or not new_pass:
                 st.warning("⚠️ Email aur password bharo.")
             else:
                 try:
-                    _add_user(new_email, new_pass, new_role)
+                    uid = _add_user(new_email, new_pass, new_role)
+                    if new_prod_access_create:
+                        _set_product_manager_access(uid, True)
                     st.success(f"✅ User `{new_email}` created as `{new_role}`!")
                     st.rerun()
                 except Exception as e:

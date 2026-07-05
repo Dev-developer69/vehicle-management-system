@@ -128,10 +128,21 @@ def main():
             else:
                 st.error("❌ You don't have access. Contact Admin.")
         case 'products':
-            if get_current_role() in ('admin', 'manager'):
+
+            role = get_current_role()
+            user = st.session_state.get("user")
+            # admin/manager ko by default access
+            if role in ('admin', 'manager'):
                 products_page()
             else:
-                st.error("❌ Access denied. Admin/Manager only.")
+                # subordinate ke liye products_access check karo
+                res = supabase.table("user_roles").select("products_access") \
+                    .eq("user_id", user.id).execute()
+                has_access = bool(res.data[0].get("products_access", False)) if res.data else False
+                if has_access:
+                    products_page()
+                else:
+                    st.error("❌ Access denied. Admin se Products Manager access maango.")
         case None:
             home_page()
 

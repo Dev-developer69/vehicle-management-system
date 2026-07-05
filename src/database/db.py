@@ -406,10 +406,31 @@ def get_suppliers() -> pd.DataFrame:
     return df.rename(columns={"name": "Name", "phone": "Phone", "address": "Address"})[["id", "Name", "Phone", "Address"]]
 
 
-def save_supplier(name: str, phone: str, address: str) -> None:
+def save_supplier(name: str, phone: str, address: str) -> tuple:
+    """
+    Returns (True, "") if saved
+            (False, "duplicate") if already exists
+            (False, "no_phone") if phone missing
+    """
+    name  = name.strip()
+    phone = phone.strip() if phone else ""
+
+    if not phone:
+        return False, "no_phone"
+
+    existing = supabase_admin.table("suppliers") \
+        .select("id") \
+        .ilike("name", name) \
+        .execute()
+    if existing.data:
+        return False, "duplicate"
+
     supabase_admin.table("suppliers").insert({
-        "name": name.strip(), "phone": phone.strip(), "address": address.strip(),
+        "name":    name,
+        "phone":   phone,
+        "address": address.strip() if address else "",
     }).execute()
+    return True, ""
 
 
 def delete_supplier(supplier_id: str) -> None:
