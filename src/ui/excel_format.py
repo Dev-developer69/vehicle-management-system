@@ -12,9 +12,11 @@ from src.database.db import (
     update_driver_salary, delete_driver_salary,delete_vehicle_record,
     get_diesel_rate_payment, save_diesel_rate_payment,
     get_diesel_row_rates, save_diesel_row_rate,
+    get_suppliers, save_supplier, delete_supplier, get_supplier_products,
+    get_products, save_product, delete_product,
+    get_requirements, save_requirement, fulfill_requirement, delete_requirement,
 
 )
-
 
 # ──────────────────────────────────────────────
 # HELPER: Editor widget state → DataFrame
@@ -734,3 +736,390 @@ def salary_check_view():
             st.dataframe(df, use_container_width=True, hide_index=True)
         else:
             st.info("No data found.")
+
+
+# ──────────────────────────────────────────────
+# HELPER: Image → Product data via Claude API
+# ──────────────────────────────────────────────
+def _extract_from_image(image_bytes: bytes, mime_type: str) -> list:
+    try:
+        import anthropic, base64, json, re
+        client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
+        b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
+        msg = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=1000,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "image", "source": {"type": "base64", "media_type": mime_type, "data": b64}},
+                    {"type": "text", "text": (
+                        "Extract ALL products/items from this bill or image. "
+                        "Return ONLY a JSON array of objects, each with keys: "
+                        "name (string), price (number or null), mrp (number or null). "
+                        "price = rate/unit price, not total amount. "
+                        "No explanation, no markdown, just raw JSON array. "
+                        "Example: [{\"name\": \"Item A\", \"price\": 350, \"mrp\": null}]"
+                    )},
+                ],
+            }],
+        )
+        raw = re.sub(r"```json|```", "", msg.content[0].text.strip()).strip()
+        parsed = json.loads(raw)
+        if isinstance(parsed, dict):
+            parsed = [parsed]
+        return parsed if isinstance(parsed, list) else []
+    except Exception as e:
+        st.error(f"Image read failed: {e}")
+        return []
+
+# ──────────────────────────────────────────────
+# 6. PRODUCTS PAGE
+# ──────────────────────────────────────────────
+def products_page():
+    st.markdown("""
+    <div style='display:flex;align-items:center;gap:12px;margin-bottom:1.5rem;'>
+        <div style='width:42px;height:42px;background:var(--bg-accent,#e8f0fe);border-radius:10px;
+                    display:flex;align-items:center;justify-content:center;font-size:22px;'>📦</div>
+        <div>
+            <div style='font-size:1.2rem;font-weight:500;'>Products Manager</div>
+            <div style='font-size:0.75rem;color:gray;'>Admin and Manager access only</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button('Home page',type='secondary', width='stretch', icon=':material/home:', shortcut='control+backspace'):
+            st.session_state['login_state']= None
+            st.rerun()
+
+    # ── Nav buttons ──
+    col1, col2, col3 = st.columns(3)
+    tabs = {"🛒 Product Details": "products", "🏭 Supplier Details": "suppliers", "📋 Requirements": "requirements"}
+    nav_key = "pm_active_tab"
+    if nav_key not in st.session_state:
+        st.session_state[nav_key] = "products"
+
+    with col1:
+        if st.button("🛒  Product Details", use_container_width=True,
+                     type="primary" if st.session_state[nav_key] == "products" else "secondary",
+                     key="pm_tab_products"):
+            st.session_state[nav_key] = "products"; st.rerun()
+    with col2:
+        if st.button("🏭  Supplier Details", use_container_width=True,
+                     type="primary" if st.session_state[nav_key] == "suppliers" else "secondary",
+                     key="pm_tab_suppliers"):
+            st.session_state[nav_key] = "suppliers"; st.rerun()
+    with col3:
+        if st.button("📋  Requirements", use_container_width=True,
+                     type="primary" if st.session_state[nav_key] == "requirements" else "secondary",
+                     key="pm_tab_requirements"):
+            st.session_state[nav_key] = "requirements"; st.rerun()
+
+    st.markdown("<hr style='margin:0.75rem 0 1.25rem;opacity:0.15;'>", unsafe_allow_html=True)
+
+    if st.session_state[nav_key] == "products":
+        _product_details_tab()
+    elif st.session_state[nav_key] == "suppliers":
+        _supplier_details_tab()
+    else:
+        _requirements_tab() 
+
+
+def _product_details_tab():
+    # ── Search + List ──
+    search = st.text_input("🔍 Search product", key="prod_search", placeholder="Product name likho...")
+    if "products_df" not in st.session_state:
+        st.session_state["products_df"] = get_products()
+    df = st.session_state["products_df"]
+    filtered = df[df["Name"].str.lower().str.contains(search.lower(), na=False)] if search else df
+
+    if not filtered.empty:
+        with st.container(border=True):
+            st.dataframe(
+                filtered[["Name", "MRP", "Latest Price", "Old Price", "Supplier", "Purchased Date"]],
+                use_container_width=True, hide_index=True,
+            )
+        with st.expander("🗑️ Delete a product"):
+            del_name = st.selectbox("Product select karo", filtered["Name"].tolist(), key="del_prod_select")
+            if st.button("Delete", key="del_prod_btn", type="primary"):
+                pid = filtered[filtered["Name"] == del_name]["id"].values[0]
+                delete_product(pid)
+                st.success(f"✅ Deleted: {del_name}")
+                st.session_state.pop("products_df", None)
+                st.rerun()
+    else:
+        st.info("Koi product nahi mila.")
+
+    st.markdown("---")
+
+    # ── Add / Update form ──
+    with st.container(border=True):
+        st.markdown("#### ➕ Add / Update Product")
+
+        mode = st.radio("Input mode", ["✏️ Manual", "📷 From Image"],
+                        horizontal=True, key="prod_input_mode")
+        prefill = {}
+        if mode == "📷 From Image":
+    # Image uploader reset key
+            img_reset_key = st.session_state.get("img_reset_key", 0)
+    
+            uploaded = st.file_uploader("Bill ya product ki image upload karo",
+                                        type=["jpg","jpeg","png","webp"],
+                                        key=f"prod_img_{img_reset_key}")
+            if uploaded:
+                if "img_products_list" not in st.session_state:
+                    with st.spinner("Image se products read ho rahe hain..."):
+                        products_list = _extract_from_image(uploaded.read(), uploaded.type)
+                    if products_list:
+                        st.session_state["img_products_list"] = products_list
+                    else:
+                        st.warning("⚠️ Koi product nahi mila image mein.")
+
+            if "img_products_list" in st.session_state:
+                products_list = st.session_state["img_products_list"]
+                st.success(f"✅ {len(products_list)} products mile — edit karke save karo")
+
+                sup_df = get_suppliers()
+                sup_options = {"(None)": None}
+                sup_options.update({row["Name"]: row["id"] for _, row in sup_df.iterrows()})
+
+                c1, c2 = st.columns(2)
+                with c1:
+                    p_sup = st.selectbox("Supplier (sab items ke liye)",
+                                        list(sup_options.keys()), key="img_sup")
+                with c2:
+                    p_date = st.date_input("Purchase Date", value=date.today(), key="img_date")
+
+                # ── Editable table ──
+                edit_df = pd.DataFrame(products_list)[["name", "price", "mrp"]]
+                edit_df.columns = ["Name", "Price (₹)", "MRP (₹)"]
+                edit_df["Price (₹)"] = pd.to_numeric(edit_df["Price (₹)"], errors="coerce").fillna(0)
+                edit_df["MRP (₹)"]   = pd.to_numeric(edit_df["MRP (₹)"],   errors="coerce").fillna(0)
+
+                edited = st.data_editor(
+                    edit_df,
+                    use_container_width=True,
+                    hide_index=True,
+                    num_rows="dynamic",
+                    key="img_editor",
+                    column_config={
+                        "Name":     st.column_config.TextColumn("Name"),
+                        "Price (₹)": st.column_config.NumberColumn("Price (₹)", min_value=0, step=0.01, format="%.2f"),
+                        "MRP (₹)":   st.column_config.NumberColumn("MRP (₹)",   min_value=0, step=0.01, format="%.2f"),
+                    }
+                )
+
+                if st.button("💾 Save All Products", type="primary",
+                            use_container_width=True, key="save_all_img"):
+                    saved, skipped = 0, 0
+                    for _, row in edited.iterrows():
+                        name = str(row["Name"] or "").strip()
+                        if not name:
+                            skipped += 1
+                            continue
+                        save_product(name, float(row["Price (₹)"]), float(row["MRP (₹)"]),
+                                    sup_options[p_sup], str(p_date))
+                        saved += 1
+                    st.success(f"✅ {saved} products saved!" + (f" ({skipped} skip hue)" if skipped else ""))
+                    # ── Image + list clear ──
+                    st.session_state.pop("img_products_list", None)
+                    st.session_state.pop("products_df", None)
+                    st.session_state["img_reset_key"] = img_reset_key + 1
+                    st.rerun()
+
+                if st.button("🗑️ Clear", key="clear_img_list"):
+                    st.session_state.pop("img_products_list", None)
+                    st.session_state["img_reset_key"] = img_reset_key + 1
+                    st.rerun()
+
+        if mode == "✏️ Manual":
+            sup_df = get_suppliers()
+            sup_options = {"(None)": None}
+            sup_options.update({row["Name"]: row["id"] for _, row in sup_df.iterrows()})
+
+            c1, c2 = st.columns(2)
+            with c1:
+                p_name = st.text_input("Product Name", value=prefill.get("name", ""), key="p_name")
+            with c2:
+                p_sup = st.selectbox("Supplier", list(sup_options.keys()), key="p_sup")
+
+            c3, c4, c5 = st.columns(3)
+            with c3:
+                p_price = st.number_input("Purchased Amount (₹)", min_value=0.0, step=0.01,
+                                        value=float(prefill.get("price") or 0), key="p_price")
+            with c4:
+                p_mrp = st.number_input("MRP (₹)", min_value=0.0, step=0.01,
+                                        value=float(prefill.get("mrp") or 0), key="p_mrp")
+            with c5:
+                p_date = st.date_input("Purchase Date", value=date.today(), key="p_date")
+
+            bc1, bc2 = st.columns([3, 1])
+            with bc1:
+                if st.button("💾 Save Product", use_container_width=True, key="save_prod_btn", type="primary"):
+                    if not p_name.strip():
+                        st.warning("⚠️ Product name required.")
+                    else:
+                        save_product(p_name, p_price, p_mrp, sup_options[p_sup], str(p_date))
+                        st.success(f"✅ Saved: {p_name}")
+                        st.session_state.pop("products_df", None)
+                        st.rerun()
+            with bc2:
+                if st.button("🔄 Refresh", use_container_width=True, key="refresh_prod"):
+                    st.session_state.pop("products_df", None)
+                    st.rerun()
+
+
+def _supplier_details_tab():
+    if "suppliers_df" not in st.session_state:
+        st.session_state["suppliers_df"] = get_suppliers()
+    sup_df = st.session_state["suppliers_df"]
+
+    sup_search = st.text_input("🔍 Search supplier", key="sup_search", placeholder="Supplier ka naam...")
+    filtered_sup = sup_df[sup_df["Name"].str.lower().str.contains(sup_search.lower(), na=False)] \
+        if sup_search else sup_df
+
+    if not filtered_sup.empty:
+        with st.container(border=True):
+            st.dataframe(filtered_sup[["Name","Phone","Address"]],
+                         use_container_width=True, hide_index=True)
+
+        st.markdown("#### 📦 Supplier ke Products")
+        sel_sup = st.selectbox("Supplier select karo", filtered_sup["Name"].tolist(), key="sup_sel_view")
+        if sel_sup:
+            sid = filtered_sup[filtered_sup["Name"] == sel_sup]["id"].values[0]
+            sup_prods = get_supplier_products(sid)
+            if not sup_prods.empty:
+                with st.container(border=True):
+                    st.dataframe(sup_prods, use_container_width=True, hide_index=True)
+            else:
+                st.info("Is supplier se abhi koi product nahi liya.")
+
+        with st.expander("🗑️ Delete a supplier"):
+            del_sup = st.selectbox("Select karo", filtered_sup["Name"].tolist(), key="del_sup_sel")
+            if st.button("Delete Supplier", key="del_sup_btn", type="primary"):
+                sid = filtered_sup[filtered_sup["Name"] == del_sup]["id"].values[0]
+                delete_supplier(sid)
+                st.success(f"✅ Deleted: {del_sup}")
+                st.session_state.pop("suppliers_df", None)
+                st.rerun()
+    else:
+        st.info("Koi supplier nahi mila.")
+
+    st.markdown("---")
+
+    with st.container(border=True):
+        st.markdown("#### ➕ Add Supplier")
+        s_name = st.text_input("Supplier Name", key="s_name")
+        c1, c2 = st.columns(2)
+        with c1:
+            s_phone = st.text_input("Phone", key="s_phone")
+        with c2:
+            s_address = st.text_input("Address", key="s_address")
+
+        bc1, bc2 = st.columns([3,1])
+        with bc1:
+            if st.button("💾 Save Supplier", use_container_width=True, key="save_sup_btn", type="primary"):
+                if not s_name.strip():
+                    st.warning("⚠️ Supplier name required.")
+                else:
+                    save_supplier(s_name, s_phone, s_address)
+                    st.success(f"✅ Saved: {s_name}")
+                    st.session_state.pop("suppliers_df", None)
+                    st.rerun()
+        with bc2:
+            if st.button("🔄 Refresh", use_container_width=True, key="refresh_sup"):
+                st.session_state.pop("suppliers_df", None)
+                st.rerun()
+
+
+def _requirements_tab():
+    st.caption("✅ Fulfilled requirements 7 din baad auto-delete ho jaate hain.")
+
+    if "req_df" not in st.session_state:
+        st.session_state["req_df"] = get_requirements()
+    req_df = st.session_state["req_df"]
+
+    if not req_df.empty:
+        for _, row in req_df.iterrows():
+            with st.container(border=True):
+                c1, c2, c3 = st.columns([4, 1.5, 0.7])
+                with c1:
+                    status_icon = "✅" if row["Fulfilled"] else "⏳"
+                    st.markdown(f"{status_icon} **{row['Product Name']}**")
+                    st.caption(f"Qty: {row['Quantity']}  ·  {row['Remark']}  ·  Added: {row['Created']}")
+                with c2:
+                    if not row["Fulfilled"]:
+                        if st.button("✅ Fulfill", key=f"fulfill_{row['id']}", use_container_width=True):
+                            st.session_state[f"fmodal_{row['id']}"] = True
+                    else:
+                        st.success("Fulfilled")
+                with c3:
+                    if st.button("🗑️", key=f"del_req_{row['id']}", use_container_width=True):
+                        delete_requirement(row["id"])
+                        st.session_state.pop("req_df", None)
+                        st.rerun()
+
+                # Fulfill inline form
+                if st.session_state.get(f"fmodal_{row['id']}"):
+                    st.markdown("---")
+                    st.markdown(f"**Fulfill: {row['Product Name']}**")
+                    sup_df = get_suppliers()
+                    sup_opts = {"(None)": None}
+                    sup_opts.update({r["Name"]: r["id"] for _, r in sup_df.iterrows()})
+
+                    fc1, fc2, fc3 = st.columns(3)
+                    with fc1:
+                        f_price = st.number_input("Purchased Amount (₹)", min_value=0.0,
+                                                   step=0.01, key=f"fp_{row['id']}")
+                    with fc2:
+                        f_mrp = st.number_input("MRP (₹)", min_value=0.0,
+                                                 step=0.01, key=f"fm_{row['id']}")
+                    with fc3:
+                        f_date = st.date_input("Purchase Date", value=date.today(), key=f"fd_{row['id']}")
+
+                    f_sup = st.selectbox("Supplier", list(sup_opts.keys()), key=f"fs_{row['id']}")
+
+                    ok1, ok2 = st.columns(2)
+                    with ok1:
+                        if st.button("✅ Confirm", key=f"fc_{row['id']}", type="primary", use_container_width=True):
+                            fulfill_requirement(row["id"], row["Product Name"],
+                                                f_price, f_mrp, sup_opts[f_sup], str(f_date))
+                            st.session_state.pop(f"fmodal_{row['id']}", None)
+                            st.session_state.pop("req_df", None)
+                            st.session_state.pop("products_df", None)
+                            st.success(f"✅ {row['Product Name']} saved!")
+                            st.rerun()
+                    with ok2:
+                        if st.button("❌ Cancel", key=f"fcancel_{row['id']}", use_container_width=True):
+                            st.session_state.pop(f"fmodal_{row['id']}", None)
+                            st.rerun()
+    else:
+        st.info("Abhi koi requirement nahi hai.")
+
+    st.markdown("---")
+
+    with st.container(border=True):
+        st.markdown("#### ➕ Add Requirement")
+        r_name = st.text_input("Product Name", key="req_name")
+        c1, c2 = st.columns(2)
+        with c1:
+            r_qty = st.text_input("Quantity", key="req_qty")
+        with c2:
+            r_rem = st.text_input("Remark", key="req_remark")
+
+        bc1, bc2 = st.columns([3,1])
+        with bc1:
+            if st.button("💾 Add Requirement", use_container_width=True, key="save_req", type="primary"):
+                if not r_name.strip():
+                    st.warning("⚠️ Product name required.")
+                else:
+                    save_requirement(r_name, r_qty, r_rem)
+                    st.success(f"✅ Added: {r_name}")
+                    st.session_state.pop("req_df", None)
+                    st.rerun()
+        with bc2:
+            if st.button("🔄 Refresh", use_container_width=True, key="refresh_req"):
+                st.session_state.pop("req_df", None)
+                st.rerun()

@@ -33,6 +33,10 @@ def home_page():
             if st.button("👥 Access Manager", type='primary', key='btn_access_mgr', width='stretch'):
                 st.session_state['login_state'] = 'access_manager'
                 st.rerun()
+            
+            if st.button("📦 Products Manager", type='primary', key='btn_products', width='stretch'):
+                st.session_state['login_state'] = 'products'
+                st.rerun()
 
     st.markdown("""
         <div style='

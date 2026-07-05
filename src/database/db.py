@@ -392,3 +392,130 @@ def log_error(function_name: str, error_message: str, bus_number: str = "", extr
         }).execute()
     except Exception:
         pass  # logging fail ho jaye to bhi app crash na ho
+
+
+# ══════════════════════════════════════════════
+# SUPPLIERS
+# ══════════════════════════════════════════════
+
+def get_suppliers() -> pd.DataFrame:
+    res = supabase_admin.table("suppliers").select("*").order("name").execute()
+    if not res.data:
+        return pd.DataFrame(columns=["id", "Name", "Phone", "Address"])
+    df = pd.DataFrame(res.data)
+    return df.rename(columns={"name": "Name", "phone": "Phone", "address": "Address"})[["id", "Name", "Phone", "Address"]]
+
+
+def save_supplier(name: str, phone: str, address: str) -> None:
+    supabase_admin.table("suppliers").insert({
+        "name": name.strip(), "phone": phone.strip(), "address": address.strip(),
+    }).execute()
+
+
+def delete_supplier(supplier_id: str) -> None:
+    supabase_admin.table("suppliers").delete().eq("id", supplier_id).execute()
+
+
+def get_supplier_products(supplier_id: str) -> pd.DataFrame:
+    res = supabase_admin.table("products").select("*") \
+        .eq("supplier_id", supplier_id).order("purchased_date", desc=True).execute()
+    if not res.data:
+        return pd.DataFrame(columns=["Name", "Latest Price", "Old Price", "MRP", "Purchased Date"])
+    df = pd.DataFrame(res.data)
+    return df.rename(columns={
+        "name": "Name", "mrp": "MRP",
+        "latest_price": "Latest Price", "old_price": "Old Price",
+        "purchased_date": "Purchased Date",
+    })[["Name", "Latest Price", "Old Price", "MRP", "Purchased Date"]]
+
+
+# ══════════════════════════════════════════════
+# PRODUCTS
+# ══════════════════════════════════════════════
+
+def get_products(search: str = "") -> pd.DataFrame:
+    res = supabase_admin.table("products").select("*, suppliers(name)").order("name").execute()
+    if not res.data:
+        return pd.DataFrame(columns=["id", "Name", "MRP", "Latest Price", "Old Price", "Supplier", "Purchased Date"])
+    df = pd.DataFrame(res.data)
+    df["Supplier"] = df["suppliers"].apply(lambda x: x["name"] if isinstance(x, dict) else "")
+    df = df.rename(columns={
+        "name": "Name", "mrp": "MRP",
+        "latest_price": "Latest Price", "old_price": "Old Price",
+        "purchased_date": "Purchased Date",
+    })
+    if search:
+        df = df[df["Name"].str.lower().str.contains(search.lower(), na=False)]
+    return df[["id", "Name", "MRP", "Latest Price", "Old Price", "Supplier", "Purchased Date"]]
+
+
+def save_product(name: str, latest_price: float, mrp: float,
+                 supplier_id: str, purchased_date: str) -> None:
+    name = name.strip()
+    existing = supabase_admin.table("products").select("*").eq("name", name).execute()
+    if existing.data:
+        old = existing.data[0]
+        supabase_admin.table("products").update({
+            "old_price":      old.get("latest_price"),
+            "latest_price":   latest_price,
+            "mrp":            mrp if mrp else old.get("mrp"),
+            "supplier_id":    supplier_id if supplier_id else old.get("supplier_id"),
+            "purchased_date": purchased_date,
+        }).eq("name", name).execute()
+    else:
+        supabase_admin.table("products").insert({
+            "name":           name,
+            "mrp":            mrp,
+            "latest_price":   latest_price,
+            "old_price":      None,
+            "supplier_id":    supplier_id if supplier_id else None,
+            "purchased_date": purchased_date,
+        }).execute()
+
+
+def delete_product(product_id: str) -> None:
+    supabase_admin.table("products").delete().eq("id", product_id).execute()
+
+
+# ══════════════════════════════════════════════
+# REQUIREMENTS
+# ══════════════════════════════════════════════
+
+def get_requirements() -> pd.DataFrame:
+    from datetime import datetime, timedelta
+    week_ago = (datetime.utcnow() - timedelta(days=7)).isoformat()
+    supabase_admin.table("product_requirements") \
+        .delete().eq("fulfilled", True).lt("created_at", week_ago).execute()
+
+    res = supabase_admin.table("product_requirements") \
+        .select("*").order("created_at", desc=True).execute()
+    if not res.data:
+        return pd.DataFrame(columns=["id", "Product Name", "Quantity", "Remark", "Fulfilled", "Created"])
+    df = pd.DataFrame(res.data)
+    df = df.rename(columns={
+        "product_name": "Product Name", "quantity": "Quantity",
+        "remark": "Remark", "fulfilled": "Fulfilled", "created_at": "Created",
+    })
+    df["Created"] = pd.to_datetime(df["Created"]).dt.strftime("%Y-%m-%d")
+    return df[["id", "Product Name", "Quantity", "Remark", "Fulfilled", "Created"]]
+
+
+def save_requirement(product_name: str, quantity: str, remark: str) -> None:
+    supabase_admin.table("product_requirements").insert({
+        "product_name": product_name.strip(),
+        "quantity":     quantity.strip(),
+        "remark":       remark.strip(),
+        "fulfilled":    False,
+    }).execute()
+
+
+def fulfill_requirement(req_id: str, product_name: str,
+                         latest_price: float, mrp: float,
+                         supplier_id: str, purchased_date: str) -> None:
+    save_product(product_name, latest_price, mrp, supplier_id, purchased_date)
+    supabase_admin.table("product_requirements") \
+        .update({"fulfilled": True}).eq("id", req_id).execute()
+
+
+def delete_requirement(req_id: str) -> None:
+    supabase_admin.table("product_requirements").delete().eq("id", req_id).execute()

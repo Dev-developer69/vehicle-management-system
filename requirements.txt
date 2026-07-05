@@ -4,3 +4,4 @@ streamlit
 supabase==2.15.0
 bcrypt
 fpdf2
+anthropic
