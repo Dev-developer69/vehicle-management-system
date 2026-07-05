@@ -1,6 +1,6 @@
 import streamlit as st
 from src.ui.home_base_layout import home_layout, image_backgroung
-from src.database.auth import is_admin_or_manager
+from src.database.auth import is_admin_or_manager, get_product_access_flags
 
 def home_page():
     st.header("Welcome to Vehicle Records")
@@ -25,28 +25,30 @@ def home_page():
             st.session_state['login_state'] = 'expenses'
             st.rerun()
 
-    # Access Manager — sirf admin/manager ko dikhega
-    if is_admin_or_manager():
-        st.divider()
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
+    st.divider()
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        # ✅ Admin/Manager — hamesha dikhega
+        if is_admin_or_manager():
             if st.button("👥 Access Manager", type='primary', key='btn_access_mgr', width='stretch'):
                 st.session_state['login_state'] = 'access_manager'
                 st.rerun()
-            
+
+        # ✅ Admin/Manager — hamesha
+        # Subordinate — sirf tab jab products_access = TRUE ho
+        if is_admin_or_manager():
+            show_products = True
+        else:
+            flags = get_product_access_flags()
+            show_products = flags.get("products_access", False)
+
+        if show_products:
             if st.button("📦 Products Manager", type='primary', key='btn_products', width='stretch'):
                 st.session_state['login_state'] = 'products'
                 st.rerun()
 
     st.markdown("""
-        <div style='
-            position: fixed;
-            bottom: 20px;
-            width: 100%;
-            text-align: center;
-            color: white;
-            font-size: 0.9rem;
-        '>
+        <div style='position:fixed;bottom:20px;width:100%;text-align:center;color:white;font-size:0.9rem;'>
             <p>Created with ❤️ by Dev-developer69</p>
         </div>
     """, unsafe_allow_html=True)

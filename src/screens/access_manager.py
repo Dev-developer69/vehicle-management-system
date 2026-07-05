@@ -129,28 +129,28 @@ def access_manager_page():
                         )
         st.divider()
         st.markdown("### ➕ Add New User")
-c1, c2, c3 = st.columns([2, 2, 1])
-with c1:
-    new_email = st.text_input("Email", key="new_email")
-with c2:
-    new_pass = st.text_input("Password", type="password", key="new_pass")
-with c3:
-    if role == "admin":
-        new_role = st.selectbox("Role", ["subordinate", "manager", "admin"], key="new_role")
-    else:
-        new_role = "subordinate"
-        st.markdown("<br>**Role:** Subordinate", unsafe_allow_html=True)
+        c1, c2, c3 = st.columns([2, 2, 1])
+        with c1:
+            new_email = st.text_input("Email", key="new_email")
+        with c2:
+            new_pass = st.text_input("Password", type="password", key="new_pass")
+        with c3:
+            if role == "admin":
+                new_role = st.selectbox("Role", ["subordinate", "manager", "admin"], key="new_role")
+            else:
+                new_role = "subordinate"
+                st.markdown("<br>**Role:** Subordinate", unsafe_allow_html=True)
 
-if st.button("➕ Create User", type="primary"):
-    if not new_email or not new_pass:
-        st.warning("⚠️ Email aur password bharo.")
-    else:
-        try:
-            uid = _add_user(new_email, new_pass, new_role)
-            st.success(f"✅ User `{new_email}` created as `{new_role}`!")
-            st.rerun()
-        except Exception as e:
-            st.error(f"❌ Error: {e}")
+        if st.button("➕ Create User", type="primary"):
+            if not new_email or not new_pass:
+                st.warning("⚠️ Email aur password bharo.")
+            else:
+                try:
+                    uid = _add_user(new_email, new_pass, new_role)
+                    st.success(f"✅ User `{new_email}` created as `{new_role}`!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Error: {e}")
     # ── TAB 2: Vehicle Access ──
 
     with tab2:

@@ -879,7 +879,6 @@ def products_page():
                     display:flex;align-items:center;justify-content:center;font-size:22px;'>📦</div>
         <div>
             <div style='font-size:1.2rem;font-weight:500;'>Products Manager</div>
-            <div style='font-size:0.75rem;color:gray;'>Admin and Manager access only</div>
         </div>
     </div>
     """, unsafe_allow_html=True)

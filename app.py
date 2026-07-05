@@ -142,7 +142,7 @@ def main():
                 if has_access:
                     products_page()
                 else:
-                    st.error("❌ Access denied. Admin se Products Manager access maango.")
+                    st.error("❌ Access denied..")
         case None:
             home_page()
 

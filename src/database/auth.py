@@ -40,6 +40,43 @@ def is_admin_or_manager() -> bool:
     return get_current_role() in ("admin", "manager")
 
 
+def get_product_access_flags() -> dict:
+    """Current user ke product access flags fetch karo"""
+    user = st.session_state.get("user")
+    if not user:
+        return {
+            "products_access":   False,
+            "products_view":     False,
+            "suppliers_view":    False,
+            "requirements_view": False,
+        }
+    # Admin/Manager ko sab access
+    if is_admin_or_manager():
+        return {
+            "products_access":   True,
+            "products_view":     True,
+            "suppliers_view":    True,
+            "requirements_view": True,
+        }
+    # Subordinate — DB se fetch karo
+    res = supabase.table("user_roles") \
+        .select("products_access, products_view, suppliers_view, requirements_view") \
+        .eq("user_id", user.id) \
+        .execute()
+    if res.data:
+        return {
+            "products_access":   bool(res.data[0].get("products_access", False)),
+            "products_view":     bool(res.data[0].get("products_view", False)),
+            "suppliers_view":    bool(res.data[0].get("suppliers_view", False)),
+            "requirements_view": bool(res.data[0].get("requirements_view", False)),
+        }
+    return {
+        "products_access":   False,
+        "products_view":     False,
+        "suppliers_view":    False,
+        "requirements_view": False,
+    }
+
 # ──────────────────────────────────────────────
 # LOGIN PAGE
 # ──────────────────────────────────────────────
