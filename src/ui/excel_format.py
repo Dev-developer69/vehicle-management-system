@@ -1062,8 +1062,8 @@ def _supplier_details_tab():
             st.dataframe(filtered_sup[["Name", "Phone", "Address"]],
                          use_container_width=True, hide_index=True)
 
-        st.markdown("#### 📦 Supplier ke Products")
-        sel_sup = st.selectbox("Supplier select karo", filtered_sup["Name"].tolist(), key="sup_sel_view")
+        st.markdown("#### 📦 Supplier's products ")
+        sel_sup = st.selectbox("Select Supplier", filtered_sup["Name"].tolist(), key="sup_sel_view")
         if sel_sup:
             sid = filtered_sup[filtered_sup["Name"] == sel_sup]["id"].values[0]
             sup_prods = get_supplier_products(sid)
@@ -1071,7 +1071,7 @@ def _supplier_details_tab():
                 with st.container(border=True):
                     st.dataframe(sup_prods, use_container_width=True, hide_index=True)
             else:
-                st.info("Is supplier se abhi koi product nahi liya.")
+                st.info("NO PRODUCTS PURCHASED..")
 
         with st.expander("🗑️ Delete a supplier"):
             del_sup = st.selectbox("Select karo", filtered_sup["Name"].tolist(), key="del_sup_sel")
@@ -1082,7 +1082,7 @@ def _supplier_details_tab():
                 st.session_state.pop("suppliers_df", None)
                 st.rerun()
     else:
-        st.info("Koi supplier nahi mila.")
+        st.info("NO SUPPLIER FOUND.")
 
     st.markdown("---")
 
