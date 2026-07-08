@@ -10,7 +10,7 @@ st.set_page_config(
   #  initial_sidebar_state="expanded"
 )
 
-from src.screens.home_page import home_page
+#from src.screens.home_page import home_page
 from src.screens.driver_records import driver_records
 from src.screens.expanses import expenses
 from src.screens.vehicle_records import vehicle_records
@@ -25,7 +25,7 @@ from src.database.auth import (
     get_accessible_vehicles, is_admin_or_manager
 )
 from src.database.config import supabase
-
+from src.screens.home_page import home_page
 
 def inject_sidebar_shortcut():
     st.markdown("""
