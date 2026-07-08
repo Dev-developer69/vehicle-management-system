@@ -410,37 +410,31 @@ def log_error(function_name: str, error_message: str, bus_number: str = "", extr
 def get_suppliers() -> pd.DataFrame:
     res = supabase_admin.table("suppliers").select("*").order("name").execute()
     if not res.data:
-        return pd.DataFrame(columns=["id", "Name", "Phone", "Address"])
+        return pd.DataFrame(columns=["id", "Name", "Phone", "Address", "Remark"])
     df = pd.DataFrame(res.data)
-    return df.rename(columns={"name": "Name", "phone": "Phone", "address": "Address"})[["id", "Name", "Phone", "Address"]]
+    df = df.rename(columns={
+        "name": "Name", "phone": "Phone",
+        "address": "Address", "remark": "Remark"
+    })
+    df["Remark"] = df["Remark"].fillna("")
+    return df[["id", "Name", "Phone", "Address", "Remark"]]
 
 
-def save_supplier(name: str, phone: str, address: str) -> tuple:
-    """
-    Returns (True, "") if saved
-            (False, "duplicate") if already exists
-            (False, "no_phone") if phone missing
-    """
+def save_supplier(name: str, phone: str, address: str, remark: str = "") -> tuple:
     name  = name.strip()
     phone = phone.strip() if phone else ""
-
     if not phone:
         return False, "no_phone"
-
-    existing = supabase_admin.table("suppliers") \
-        .select("id") \
-        .ilike("name", name) \
-        .execute()
+    existing = supabase_admin.table("suppliers").select("id").ilike("name", name).execute()
     if existing.data:
         return False, "duplicate"
-
     supabase_admin.table("suppliers").insert({
         "name":    name,
         "phone":   phone,
         "address": address.strip() if address else "",
+        "remark":  remark.strip() if remark else "",
     }).execute()
     return True, ""
-
 
 def delete_supplier(supplier_id: str) -> None:
     supabase_admin.table("suppliers").delete().eq("id", supplier_id).execute()
@@ -466,21 +460,27 @@ def get_supplier_products(supplier_id: str) -> pd.DataFrame:
 def get_products(search: str = "") -> pd.DataFrame:
     res = supabase_admin.table("products").select("*, suppliers(name)").order("name").execute()
     if not res.data:
-        return pd.DataFrame(columns=["id", "Name", "MRP", "Latest Price", "Old Price", "Supplier", "Purchased Date"])
+        return pd.DataFrame(columns=["id", "Name", "MRP", "Latest Price", "Old Price",
+                                      "Quantity", "Remark", "Supplier", "Purchased Date"])
     df = pd.DataFrame(res.data)
     df["Supplier"] = df["suppliers"].apply(lambda x: x["name"] if isinstance(x, dict) else "")
     df = df.rename(columns={
         "name": "Name", "mrp": "MRP",
         "latest_price": "Latest Price", "old_price": "Old Price",
         "purchased_date": "Purchased Date",
+        "quantity": "Quantity", "remark": "Remark",
     })
+    df["Quantity"] = df["Quantity"].fillna("")
+    df["Remark"]   = df["Remark"].fillna("")
     if search:
         df = df[df["Name"].str.lower().str.contains(search.lower(), na=False)]
-    return df[["id", "Name", "MRP", "Latest Price", "Old Price", "Supplier", "Purchased Date"]]
+    return df[["id", "Name", "MRP", "Latest Price", "Old Price",
+               "Quantity", "Remark", "Supplier", "Purchased Date"]]
 
 
 def save_product(name: str, latest_price: float, mrp: float,
-                 supplier_id: str, purchased_date: str) -> None:
+                 supplier_id: str, purchased_date: str,
+                 quantity: str = "", remark: str = "") -> None:
     name = name.strip()
     existing = supabase_admin.table("products").select("*").eq("name", name).execute()
     if existing.data:
@@ -491,6 +491,8 @@ def save_product(name: str, latest_price: float, mrp: float,
             "mrp":            mrp if mrp else old.get("mrp"),
             "supplier_id":    supplier_id if supplier_id else old.get("supplier_id"),
             "purchased_date": purchased_date,
+            "quantity":       quantity or old.get("quantity", ""),
+            "remark":         remark or old.get("remark", ""),
         }).eq("name", name).execute()
     else:
         supabase_admin.table("products").insert({
@@ -500,8 +502,9 @@ def save_product(name: str, latest_price: float, mrp: float,
             "old_price":      None,
             "supplier_id":    supplier_id if supplier_id else None,
             "purchased_date": purchased_date,
+            "quantity":       quantity,
+            "remark":         remark,
         }).execute()
-
 
 def delete_product(product_id: str) -> None:
     supabase_admin.table("products").delete().eq("id", product_id).execute()
