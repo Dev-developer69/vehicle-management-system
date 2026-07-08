@@ -218,6 +218,11 @@ def save_diesel_row_rate(bus_number: str, row_date: str, rate: float) -> None:
 # ══════════════════════════════════════════════
 
 def save_driver_salary(df: pd.DataFrame, bus_number: str = "") -> None:
+    import streamlit as st
+    from datetime import datetime, timezone
+    user = st.session_state.get("user")
+    updated_by = user.email if user else "unknown"
+
     records = []
     for _, row in df.iterrows():
         try:
@@ -235,6 +240,8 @@ def save_driver_salary(df: pd.DataFrame, bus_number: str = "") -> None:
             "salary":      salary_val,
             "transaction": txn_val,
             "bus_number":  bus_number,
+            "updated_by":  updated_by,
+            "updated_at":  datetime.now(timezone.utc).isoformat(),
         })
 
     if not records:
@@ -245,7 +252,7 @@ def save_driver_salary(df: pd.DataFrame, bus_number: str = "") -> None:
     except Exception as e:
         log_error("save_driver_salary", str(e), bus_number=bus_number, extra_data=str(records))
         import streamlit as st
-        st.error("⚠️ Save failed — error logged. Try again or contact support.")
+        st.error("⚠️ Save failed — error logged.")
 
 
 def get_driver_salary(bus_number: str = "") -> pd.DataFrame:
@@ -255,7 +262,7 @@ def get_driver_salary(bus_number: str = "") -> pd.DataFrame:
     res = query.execute()
 
     if not res.data:
-        return pd.DataFrame(columns=["id", "Date", "Driver Name", "Salary", "Transaction"])
+        return pd.DataFrame(columns=["id", "Date", "Driver Name", "Salary", "Transaction", "Updated By"])
 
     df = pd.DataFrame(res.data)
     df = df.rename(columns={
@@ -263,8 +270,10 @@ def get_driver_salary(bus_number: str = "") -> pd.DataFrame:
         "driver_name": "Driver Name",
         "salary":      "Salary",
         "transaction": "Transaction",
+        "updated_by":  "Updated By",
     })
-    return df[["id", "Date", "Driver Name", "Salary", "Transaction"]]
+    df["Updated By"] = df["Updated By"].fillna("")
+    return df[["id", "Date", "Driver Name", "Salary", "Transaction", "Updated By"]]
 
 
 def update_driver_salary(record_id: str, updates: dict) -> None:
