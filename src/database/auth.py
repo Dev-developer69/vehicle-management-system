@@ -90,38 +90,39 @@ def login_page():
 
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        email    = st.text_input("📧 Email", placeholder="you@example.com")
-        password = st.text_input("🔒 Password", type="password", placeholder="••••••••")
+        with st.form("login_form"):
+            email    = st.text_input("📧 Email", placeholder="you@example.com")
+            password = st.text_input("🔒 Password", type="password", placeholder="••••••••")
+            submit   = st.form_submit_button("Login", use_container_width=True, type="primary")
 
-        if st.button("Login", type="primary", use_container_width=True):
+        if submit:
             if not email or not password:
                 st.warning("⚠️ Email aur password dono bharo.")
-                return
-            try:
-                res = supabase.auth.sign_in_with_password({
-                    "email":    email,
-                    "password": password,
-                })
-                st.session_state["user"]         = res.user
-                st.session_state["access_token"] = res.session.access_token
-                st.session_state["login_state"]  = None
-                st.session_state.pop("role", None)  # fresh fetch on next load
-                st.rerun()
-            except Exception as e:
-                err = str(e).lower()
-                if "invalid" in err or "credentials" in err:
-                    st.error("❌ Email ya password galat hai.")
-                elif "email not confirmed" in err:
-                    st.error("❌ Email confirm nahi hua — inbox check karo.")
-                else:
-                    st.error(f"❌ Error: {e}")
+            else:
+                try:
+                    res = supabase.auth.sign_in_with_password({
+                        "email":    email,
+                        "password": password,
+                    })
+                    st.session_state["user"]         = res.user
+                    st.session_state["access_token"] = res.session.access_token
+                    st.session_state["login_state"]  = None
+                    st.session_state.pop("role", None)
+                    st.rerun()
+                except Exception as e:
+                    err = str(e).lower()
+                    if "invalid" in err or "credentials" in err:
+                        st.error("❌ Email ya password galat hai.")
+                    elif "email not confirmed" in err:
+                        st.error("❌ Email confirm nahi hua — inbox check karo.")
+                    else:
+                        st.error(f"❌ Error: {e}")
 
         st.markdown("""
             <div style='text-align:center; margin-top: 20px; color: gray; font-size: 0.85rem;'>
                 Doesn't have account? Contact Admin.
             </div>
         """, unsafe_allow_html=True)
-
 
 # ──────────────────────────────────────────────
 # LOGOUT
