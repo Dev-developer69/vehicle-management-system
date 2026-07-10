@@ -23,7 +23,8 @@ from src.vehicle_records.vehicle_50 import page_2350, expense_2350
 from src.ui.excel_format import products_page
 from src.database.auth import (
     login_page, is_logged_in, get_current_role,
-    get_accessible_vehicles, is_admin_or_manager
+    get_accessible_vehicles, is_admin_or_manager,
+    get_maintenance_access,
 )
 from src.database.config import supabase
 from src.screens.home_page import home_page
