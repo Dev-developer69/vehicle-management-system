@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 from datetime import date
-from src.ui.home_base_layout import home_layout
+from src.ui.home_base_layout import home_layout, background
 
 
 from src.database.db import (
@@ -153,6 +153,7 @@ def _maintenance_home():
 # 2. PER-VEHICLE MAINTENANCE GRID
 # ──────────────────────────────────────────────
 def _maintenance_vehicle_page():
+    background()
     bus_number = st.session_state.get("maintenance_selected_vehicle")
 
     if st.button("⬅️ Back to Vehicles", key="maint_back_veh"):
