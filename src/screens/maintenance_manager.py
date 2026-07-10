@@ -163,7 +163,7 @@ def _maintenance_vehicle_page():
             st.session_state['login_state'] = None
             st.rerun()
     with col2:
-        if st.button("⬅️ Back to Vehicles", key="maint_back_veh", width= 'stretch's):
+        if st.button("⬅️ Back to Vehicles", key="maint_back_veh", width='stretch'):
             st.session_state.pop("maintenance_selected_vehicle", None)
             st.rerun()
 
