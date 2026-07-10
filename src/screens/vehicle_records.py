@@ -254,7 +254,10 @@ def quick_overview(bus_list: list):
         donut_cols = st.columns(len(bus_list))
         for i, bus in enumerate(bus_list):
             bus_df = df[df["bus_number"] == bus]
-            driver_days = bus_df.groupby("driver_name")["date"].count().reset_index()
+            driver_days = (
+    bus_df.assign(
+        driver_name=bus_df["driver_name"].str.lower().str.strip()
+    ).groupby("driver_name")["date"].count().reset_index())
             driver_days.columns = ["Driver", "Days"]
             with donut_cols[i]:
                 st.markdown(f"**🚌 {bus}**")
