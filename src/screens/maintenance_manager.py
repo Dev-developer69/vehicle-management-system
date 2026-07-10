@@ -1,6 +1,8 @@
 import streamlit as st
 import pandas as pd
 from datetime import date
+from src.ui.home_base_layout import home_layout
+
 
 from src.database.db import (
     get_maintenance_records, save_maintenance_record, delete_maintenance_record,
@@ -51,8 +53,8 @@ def _highlight_due(row):
 # 1. VEHICLE SELECTOR
 # ──────────────────────────────────────────────
 def _maintenance_home():
-    st.markdown("### 🔧 Maintenance Manager")
-    st.caption("Vehicle chuno maintenance records dekhne/add karne ke liye")
+    st.markdown("### 🔧 Maintenance Manager ")
+    st.caption("Choose Vehicle")
 
     if is_admin_or_manager():
         vehicles = BUS_NUMBERS
@@ -61,16 +63,89 @@ def _maintenance_home():
         vehicles   = [b for b in BUS_NUMBERS if b in accessible]
 
     if not vehicles:
-        st.warning("⚠️ Koi vehicle access nahi hai. Admin se contact karo.")
+        st.warning("⚠️ No Vehicle access. Contact Admin....")
         return
 
-    cols = st.columns(len(vehicles))
-    for i, bus in enumerate(vehicles):
-        with cols[i]:
-            if st.button(f"🚐 {bus}", key=f"maint_veh_{bus}", use_container_width=True):
-                st.session_state["maintenance_selected_vehicle"] = bus
-                st.rerun()
+    # ── Vehicle buttons — 2 per row ──
+        col1, col2 = st.columns(2)
+        with col1:
+        if st.button('Home page', type='secondary', width='stretch', icon=':material/home:', shortcut='control+backspace'):
+            st.session_state['login_state']= None
+            st.rerun()
+    
+    for row_start in range(0, len(vehicles), 2):
+        row_vehicles = vehicles[row_start:row_start + 2]
+        cols = st.columns(2)
+        for i, bus in enumerate(row_vehicles):
+            with cols[i]:
+                if st.button(f"🚐 {bus}", key=f"maint_veh_{bus}", use_container_width=True):
+                    st.session_state["maintenance_selected_vehicle"] = bus
+                    st.rerun()
 
+    st.divider()
+
+    # ── Quick Overview — overdue/due-soon summary across vehicles ──
+    st.markdown("#### 📊 Quick Overview")
+
+    overview_rows = []
+    for bus in vehicles:
+        records_df = get_maintenance_records(bus)
+        overdue_count = 0
+        due_soon_count = 0
+
+        if not records_df.empty:
+            latest_per_type = records_df.groupby("Service Type")["Date"].max().to_dict()
+            for _, r in records_df.iterrows():
+                is_latest = (r["Date"] == latest_per_type[r["Service Type"]])
+                if not is_latest:
+                    continue  # sirf latest occurrence check karo har type ki
+                prev_date, km_since = _compute_row_km(bus, r["Service Type"], r["Date"], True)
+
+                overdue, due_soon = False, False
+                if r["Next Due KM"]:
+                    if km_since >= r["Next Due KM"]:
+                        overdue = True
+                    elif km_since >= 0.9 * r["Next Due KM"]:
+                        due_soon = True
+                if r["Next Due Date"]:
+                    try:
+                        nd = pd.to_datetime(r["Next Due Date"]).date()
+                        if nd < date.today():
+                            overdue = True
+                        elif (nd - date.today()).days <= 7:
+                            due_soon = True
+                    except Exception:
+                        pass
+
+                if overdue:
+                    overdue_count += 1
+                elif due_soon:
+                    due_soon_count += 1
+
+        overview_rows.append({
+            "bus": bus,
+            "total_services": len(records_df),
+            "overdue": overdue_count,
+            "due_soon": due_soon_count,
+        })
+
+    ov_cols = st.columns(len(overview_rows))
+    for i, row in enumerate(overview_rows):
+        with ov_cols[i]:
+            if row["overdue"] > 0:
+                status_color, status_text = "#4d1a1a", f"🔴 {row['overdue']} overdue"
+            elif row["due_soon"] > 0:
+                status_color, status_text = "#4d3d1a", f"🟡 {row['due_soon']} due soon"
+            else:
+                status_color, status_text = "#1a3d1a", "🟢 All clear"
+
+            st.markdown(f"""
+            <div style='background:{status_color};border-radius:10px;padding:14px;text-align:center;'>
+                <div style='color:#ccc;font-size:0.85rem;'>🚐 {row['bus']}</div>
+                <div style='color:white;font-size:0.9rem;font-weight:bold;margin-top:4px;'>{status_text}</div>
+                <div style='color:#aaa;font-size:0.75rem;margin-top:4px;'>{row['total_services']} service records</div>
+            </div>
+            """, unsafe_allow_html=True)
 
 # ──────────────────────────────────────────────
 # 2. PER-VEHICLE MAINTENANCE GRID
@@ -100,7 +175,7 @@ def _maintenance_vehicle_page():
 
         c3, c4 = st.columns(2)
         with c3:
-            m_garage = st.text_input("Garage Name", key=f"m_garage_{bus_number}")
+            m_garage = st.text_input("Garage Name", default='None', key=f"m_garage_{bus_number}")
         with c4:
             m_cost = st.number_input("Cost (₹)", min_value=0.0, step=0.01, key=f"m_cost_{bus_number}")
 
