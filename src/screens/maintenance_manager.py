@@ -177,7 +177,7 @@ def _maintenance_vehicle_page():
 
         c3, c4 = st.columns(2)
         with c3:
-            m_garage = st.text_input("Garage Name", default='None', key=f"m_garage_{bus_number}")
+            m_garage = st.text_input("Garage Name", value='None', key=f"m_garage_{bus_number}")
         with c4:
             m_cost = st.number_input("Cost (₹)", min_value=0.0, step=0.01, key=f"m_cost_{bus_number}")
 
