@@ -273,13 +273,18 @@ def quick_overview(bus_list: list):
 
     # ── Tab 5: Driver Performance ──
     with tab5:
-        driver_perf = df.groupby("driver_name").agg(
-            Total_KM     =("actual_km",      "sum"),
-            Avg_KM_Day   =("actual_km",      "mean"),
-            Days         =("date",           "count"),
-            Avg_Efficiency=("efficiency_pct","mean"),
-            Income       =("income",         "sum"),
-        ).reset_index().rename(columns={"driver_name": "Driver"})
+        driver_perf = (df.assign( driver_name=df["driver_name"].str.strip().str.lower())
+            .groupby("driver_name")
+            .agg(
+                Total_KM=("actual_km", "sum"),
+                Avg_KM_Day=("actual_km", "mean"),
+                Days=("date", "count"),
+                Avg_Efficiency=("efficiency_pct", "mean"),
+                Income=("income", "sum"),
+            )
+            .reset_index()
+            .rename(columns={"driver_name": "Driver"})
+                )
         driver_perf["Avg_KM_Day"]    = driver_perf["Avg_KM_Day"].round(1)
         driver_perf["Avg_Efficiency"] = driver_perf["Avg_Efficiency"].round(1)
         driver_perf = driver_perf.sort_values("Total_KM", ascending=False)
