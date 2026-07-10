@@ -170,11 +170,11 @@ def get_diesel_rate_payment(bus_number: str, month: int, period: str) -> dict:
         .execute()
     if res.data:
         return {
-            "rate":         float(res.data[0]["rate"] or 90.0),
+            "rate":         float(res.data[0]["rate"] or 95.69),
             "paid_amount":  float(res.data[0]["paid_amount"] or 0),
             "payment_done": bool(res.data[0]["payment_done"]),
         }
-    return {"rate": 90.00, "paid_amount": 0.0, "payment_done": False}
+    return {"rate": 95.69, "paid_amount": 0.0, "payment_done": False}
 
 
 def save_diesel_rate_payment(bus_number: str, month: int, period: str,
