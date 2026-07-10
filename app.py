@@ -146,18 +146,10 @@ def main():
                     st.error("❌ Access denied..")
 
         case 'maintenance':
-            role = get_current_role()
-            user = st.session_state.get("user")
-            if role in ('admin', 'manager'):
+            if get_maintenance_access():
                 maintenance_page()
             else:
-                res = supabase.table("user_roles").select("maintenance_access") \
-                    .eq("user_id", user.id).execute()
-                has_access = bool(res.data[0].get("maintenance_access", False)) if res.data else False
-                if has_access:
-                    maintenance_page()
-                else:
-                    st.error("❌ Access denied..")
+                st.error("❌ Access denied..")
         case None:
             home_page()
 
