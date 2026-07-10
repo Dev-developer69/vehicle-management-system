@@ -15,6 +15,7 @@ from src.screens.driver_records import driver_records
 from src.screens.expanses import expenses
 from src.screens.vehicle_records import vehicle_records
 from src.screens.access_manager import access_manager_page
+from src.screens.maintenance_manager import maintenance_page
 from src.vehicle_records.vehicle_0303 import page_0303, expense_0303
 from src.vehicle_records.vehicle_31 import page_3131, expense_3131
 from src.vehicle_records.vehicle_89 import page_7389, expense_7389
@@ -141,6 +142,20 @@ def main():
                 has_access = bool(res.data[0].get("products_access", False)) if res.data else False
                 if has_access:
                     products_page()
+                else:
+                    st.error("❌ Access denied..")
+
+        case 'maintenance':
+            role = get_current_role()
+            user = st.session_state.get("user")
+            if role in ('admin', 'manager'):
+                maintenance_page()
+            else:
+                res = supabase.table("user_roles").select("maintenance_access") \
+                    .eq("user_id", user.id).execute()
+                has_access = bool(res.data[0].get("maintenance_access", False)) if res.data else False
+                if has_access:
+                    maintenance_page()
                 else:
                     st.error("❌ Access denied..")
         case None:
