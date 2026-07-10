@@ -53,6 +53,7 @@ def _highlight_due(row):
 # 1. VEHICLE SELECTOR
 # ──────────────────────────────────────────────
 def _maintenance_home():
+    home_layout()
     st.markdown("### 🔧 Maintenance Manager")
     st.caption("Choose Vehicle")
 
