@@ -552,3 +552,88 @@ def fulfill_requirement(req_id: str, product_name: str,
 
 def delete_requirement(req_id: str) -> None:
     supabase_admin.table("product_requirements").delete().eq("id", req_id).execute()
+
+
+
+
+# ══════════════════════════════════════════════
+# MAINTENANCE RECORDS
+# ══════════════════════════════════════════════
+
+def get_maintenance_records(bus_number: str) -> pd.DataFrame:
+    res = supabase.table("maintenance_records") \
+        .select("*") \
+        .eq("bus_number", bus_number) \
+        .order("record_date", desc=True) \
+        .execute()
+
+    if not res.data:
+        return pd.DataFrame(columns=[
+            "id", "Date", "Service Type", "Garage", "Cost",
+            "Next Due Date", "Next Due KM", "Notes"
+        ])
+
+    df = pd.DataFrame(res.data)
+    df = df.rename(columns={
+        "record_date":   "Date",
+        "service_type":  "Service Type",
+        "garage_name":   "Garage",
+        "cost":          "Cost",
+        "next_due_date": "Next Due Date",
+        "next_due_km":   "Next Due KM",
+        "notes":         "Notes",
+    })
+    for col, default in [("Next Due Date", None), ("Next Due KM", None), ("Notes", "")]:
+        if col not in df.columns:
+            df[col] = default
+
+    return df[["id", "Date", "Service Type", "Garage", "Cost",
+               "Next Due Date", "Next Due KM", "Notes"]]
+
+
+def save_maintenance_record(bus_number: str, record_date, service_type: str,
+                             garage_name: str, cost: float, notes: str,
+                             next_due_date, next_due_km, user_email: str) -> None:
+    supabase.table("maintenance_records").upsert({
+        "bus_number":     bus_number,
+        "record_date":    str(record_date),
+        "service_type":   service_type.strip(),
+        "garage_name":    (garage_name or "").strip(),
+        "cost":           float(cost or 0),
+        "notes":          (notes or "").strip(),
+        "next_due_date":  str(next_due_date) if next_due_date else None,
+        "next_due_km":    int(next_due_km) if next_due_km else None,
+        "updated_by":     user_email,
+    }, on_conflict="bus_number,record_date,service_type").execute()
+
+
+def delete_maintenance_record(bus_number: str, record_id: str) -> None:
+    supabase.table("maintenance_records") \
+        .delete() \
+        .eq("id", record_id) \
+        .eq("bus_number", bus_number) \
+        .execute()
+
+
+def get_previous_service_date(bus_number: str, service_type: str, before_date):
+    """Same service_type ki turant pichli occurrence (before_date se strictly pehle)"""
+    res = supabase.table("maintenance_records") \
+        .select("record_date") \
+        .eq("bus_number", bus_number) \
+        .eq("service_type", service_type) \
+        .lt("record_date", str(before_date)) \
+        .order("record_date", desc=True) \
+        .limit(1) \
+        .execute()
+    return res.data[0]["record_date"] if res.data else None
+
+
+def get_km_between(bus_number: str, start_date, end_date) -> int:
+    """vehicle_records se Actual KM sum karo, start_date ke baad se end_date tak"""
+    query = supabase.table("vehicle_records").select("actual_km").eq("bus_number", bus_number)
+    if start_date:
+        query = query.gt("date", str(start_date))
+    if end_date:
+        query = query.lte("date", str(end_date))
+    records = query.execute()
+    return sum(r["actual_km"] or 0 for r in records.data)
