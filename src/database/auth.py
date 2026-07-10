@@ -77,6 +77,23 @@ def get_product_access_flags() -> dict:
         "requirements_view": False,
     }
 
+def get_maintenance_access() -> bool:
+    """Current user ko Maintenance Manager access hai ya nahi"""
+    user = st.session_state.get("user")
+    if not user:
+        return False
+    # Admin/Manager ko hamesha access
+    if is_admin_or_manager():
+        return True
+    # Subordinate — DB se fetch karo
+    res = supabase.table("user_roles") \
+        .select("maintenance_access") \
+        .eq("user_id", user.id) \
+        .execute()
+    if res.data:
+        return bool(res.data[0].get("maintenance_access", False))
+    return False
+
 # ──────────────────────────────────────────────
 # LOGIN PAGE
 # ──────────────────────────────────────────────
