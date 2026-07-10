@@ -1,4 +1,5 @@
 import streamlit as st
+from src.database.config import supabase
 from src.ui.home_base_layout import home_layout, image_backgroung
 from src.database.auth import is_admin_or_manager, get_product_access_flags
 
@@ -45,6 +46,18 @@ def home_page():
         if show_products:
             if st.button("📦 Products Manager", type='primary', key='btn_products', width='stretch'):
                 st.session_state['login_state'] = 'products'
+                st.rerun()
+
+        # ✅ Maintenance Manager — Products Manager jaisa hi access pattern, alag button
+        if is_admin_or_manager():
+            show_maintenance = True
+        else:
+            res = supabase.table("user_roles").select("maintenance_access") \
+                .eq("user_id", st.session_state.get("user").id).execute()
+            show_maintenance = bool(res.data[0].get("maintenance_access", False)) if res.data else False
+        if show_maintenance:
+            if st.button("🔧 Maintenance Manager", type='primary', key='btn_maintenance', width='stretch'):
+                st.session_state['login_state'] = 'maintenance'
                 st.rerun()
 
     st.markdown("""
