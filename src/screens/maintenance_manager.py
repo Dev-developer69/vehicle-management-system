@@ -156,9 +156,16 @@ def _maintenance_vehicle_page():
     background()
     bus_number = st.session_state.get("maintenance_selected_vehicle")
 
-    if st.button("⬅️ Back to Vehicles", key="maint_back_veh"):
-        st.session_state.pop("maintenance_selected_vehicle", None)
-        st.rerun()
+     col1, col2 = st.columns(2)
+    with col1:
+        if st.button('Home page', type='secondary', width='stretch',
+                     icon=':material/home:', shortcut='control+backspace'):
+            st.session_state['login_state'] = None
+            st.rerun()
+    with col2:
+        if st.button("⬅️ Back to Vehicles", key="maint_back_veh", width= 'stretch's):
+            st.session_state.pop("maintenance_selected_vehicle", None)
+            st.rerun()
 
     st.markdown(f"### 🔧 Maintenance Records — {bus_number} 🚐")
 
