@@ -15,9 +15,9 @@ VEHICLE_MAP = {
 
 
 def _get_current_period():
-    today    = date.today()
-    year     = today.year
-    month    = today.month
+    today = date.today()
+    year  = today.year
+    month = today.month
     if today.day <= 15:
         period   = "1-15"
         start    = date(year, month, 1)
@@ -89,70 +89,117 @@ def quick_overview(bus_list: list):
     </div>
     """, unsafe_allow_html=True)
 
-    # ── Fetch data from DB ──
-    overview_cache_key = f"overview_{start}_{end}"
-    if overview_cache_key not in st.session_state:
+    # ── Fetch from DB ──
+    cache_key = f"overview_{start}_{end}"
+    if cache_key not in st.session_state:
         res = supabase.table("vehicle_records") \
-            .select("bus_number, income, diesel, actual_km, status") \
+            .select("bus_number, date, driver_name, actual_km, scheduled_km, income, diesel, status") \
             .in_("bus_number", bus_list) \
             .gte("date", str(start)) \
             .lte("date", str(end)) \
+            .order("date", desc=False) \
             .execute()
-        st.session_state[overview_cache_key] = res.data or []
+        st.session_state[cache_key] = res.data or []
 
-    rows = st.session_state[overview_cache_key]
+    rows = st.session_state[cache_key]
 
     if not rows:
         st.info("Is period mein koi record nahi mila.")
+        if st.button("🔄 Refresh", key="refresh_overview"):
+            st.session_state.pop(cache_key, None)
+            st.rerun()
         return
 
     df = pd.DataFrame(rows)
     df = df[df["status"] != "On Leave"]
-    df["income"]     = pd.to_numeric(df["income"],     errors="coerce").fillna(0)
-    df["diesel"]     = pd.to_numeric(df["diesel"],     errors="coerce").fillna(0)
-    df["actual_km"]  = pd.to_numeric(df["actual_km"],  errors="coerce").fillna(0)
+    df["actual_km"]    = pd.to_numeric(df["actual_km"],    errors="coerce").fillna(0)
+    df["scheduled_km"] = pd.to_numeric(df["scheduled_km"], errors="coerce").fillna(0)
+    df["income"]       = pd.to_numeric(df["income"],       errors="coerce").fillna(0)
+    df["diesel"]       = pd.to_numeric(df["diesel"],       errors="coerce").fillna(0)
+    df["date"]         = pd.to_datetime(df["date"])
 
     summary = df.groupby("bus_number").agg(
-        Income   =("income",    "sum"),
-        Diesel   =("diesel",    "sum"),
-        Actual_KM=("actual_km", "sum"),
-        Days     =("income",    "count"),
+        Actual_KM   =("actual_km",    "sum"),
+        Scheduled_KM=("scheduled_km", "sum"),
+        Income      =("income",       "sum"),
+        Diesel      =("diesel",       "sum"),
+        Days        =("date",         "count"),
     ).reset_index().rename(columns={"bus_number": "Bus"})
 
     # ── Summary cards ──
     card_cols = st.columns(len(summary))
     for i, (_, row) in enumerate(summary.iterrows()):
+        efficiency = round((row["Actual_KM"] / row["Scheduled_KM"] * 100), 1) \
+            if row["Scheduled_KM"] > 0 else 0
         with card_cols[i]:
             st.markdown(f"""
             <div style='background:#14A085;border-radius:12px;padding:16px;
                         text-align:center;border:1px solid rgba(255,255,255,0.2);'>
                 <div style='font-size:1.1rem;font-weight:600;color:white;
                             margin-bottom:8px;'>🚌 {row["Bus"]}</div>
-                <div style='color:#d0f5ee;font-size:0.8rem;'>Income</div>
+                <div style='color:#d0f5ee;font-size:0.8rem;'>Actual KM</div>
                 <div style='color:white;font-size:1.3rem;font-weight:700;'>
-                    ₹{int(row["Income"]):,}</div>
-                <div style='color:#d0f5ee;font-size:0.8rem;margin-top:6px;'>Diesel</div>
-                <div style='color:#FFD700;font-size:1.1rem;font-weight:600;'>
-                    {row["Diesel"]:.1f} L</div>
-                <div style='color:#d0f5ee;font-size:0.75rem;margin-top:6px;'>
-                    {int(row["Days"])} days · {int(row["Actual_KM"])} km</div>
+                    {int(row["Actual_KM"]):,}</div>
+                <div style='color:#d0f5ee;font-size:0.75rem;margin-top:4px;'>
+                    Efficiency: {efficiency}%</div>
+                <div style='color:#d0f5ee;font-size:0.75rem;margin-top:4px;'>
+                    {int(row["Days"])} days</div>
             </div>
             """, unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # ── Bar Chart — Income + Diesel per Bus ──
-    chart_tab1, chart_tab2 = st.tabs(["💰 Income", "⛽ Diesel"])
+    # ── 3 Charts ──
+    tab1, tab2, tab3 = st.tabs([
+        "📈 Daily KM Trend",
+        "📊 Scheduled vs Actual KM",
+        "🥧 Driver Duty Distribution",
+    ])
 
-    with chart_tab1:
-        income_df = summary[["Bus", "Income"]].set_index("Bus")
-        st.bar_chart(income_df, color="#14A085", use_container_width=True)
+    # Tab 1 — Line chart: Date vs Actual KM per bus
+    with tab1:
+        pivot = df.pivot_table(
+            index="date", columns="bus_number", values="actual_km", aggfunc="sum"
+        ).fillna(0)
+        pivot.index = pivot.index.strftime("%d %b")
+        st.line_chart(pivot, use_container_width=True)
+        st.caption("Har bus ki daily Actual KM trend")
 
-    with chart_tab2:
-        diesel_df = summary[["Bus", "Diesel"]].set_index("Bus")
-        st.bar_chart(diesel_df, color="#FFB347", use_container_width=True)
+    # Tab 2 — Grouped bar: Scheduled KM vs Actual KM per bus
+    with tab2:
+        grouped = summary[["Bus", "Scheduled_KM", "Actual_KM"]].set_index("Bus")
+        grouped.columns = ["Scheduled KM", "Actual KM"]
+        st.bar_chart(grouped, use_container_width=True)
+        st.caption("Scheduled KM vs Actual KM — bus wise comparison")
 
-    # ── Refresh button ──
+    # Tab 3 — Pie chart: Driver wise duty days
+    with tab3:
+        driver_days = df.groupby("driver_name")["date"].count().reset_index()
+        driver_days.columns = ["Driver", "Days"]
+        driver_days = driver_days.sort_values("Days", ascending=False)
+
+        # Streamlit mein pie chart nahi hai — plotly use karo
+        try:
+            import plotly.express as px
+            fig = px.pie(
+                driver_days,
+                names="Driver",
+                values="Days",
+                color_discrete_sequence=px.colors.qualitative.Set3,
+                hole=0.3,
+            )
+            fig.update_layout(
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                font_color="white",
+                margin=dict(t=20, b=20, l=20, r=20),
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        except ImportError:
+            # Plotly nahi hai toh bar chart fallback
+            st.bar_chart(driver_days.set_index("Driver"), use_container_width=True)
+        st.caption("Driver wise duty days distribution")
+
     if st.button("🔄 Refresh Overview", key="refresh_overview"):
-        st.session_state.pop(overview_cache_key, None)
+        st.session_state.pop(cache_key, None)
         st.rerun()
