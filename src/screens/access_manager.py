@@ -44,13 +44,14 @@ def _add_user(email: str, password: str, role: str):
     })
     user_id = res.user.id
     supabase.table("user_roles").upsert({
-        "user_id":           user_id,
-        "email":             email,
-        "role":              role,
-        "products_access":   False,
-        "products_view":     False,
-        "suppliers_view":    False,
-        "requirements_view": False,
+        "user_id":            user_id,
+        "email":              email,
+        "role":               role,
+        "products_access":    False,
+        "products_view":      False,
+        "suppliers_view":     False,
+        "requirements_view":  False,
+        "maintenance_access": False,
     }, on_conflict="user_id").execute()
     return user_id
 
@@ -84,6 +85,15 @@ def _get_product_access_flags(user_id: str) -> dict:
 
 def _set_product_access_flags(user_id: str, flags: dict):
     supabase.table("user_roles").update(flags).eq("user_id", user_id).execute()
+
+
+def _get_maintenance_access(user_id: str) -> bool:
+    res = supabase.table("user_roles").select("maintenance_access").eq("user_id", user_id).execute()
+    return bool(res.data[0].get("maintenance_access", False)) if res.data else False
+
+
+def _set_maintenance_access(user_id: str, value: bool):
+    supabase.table("user_roles").update({"maintenance_access": value}).eq("user_id", user_id).execute()
 
 
 # ══════════════════════════════════════════════
@@ -207,6 +217,16 @@ def access_manager_page():
                 else:
                     pv = sv = rv = False
 
+                st.markdown("---")
+
+                # ── Maintenance Access ──
+                st.markdown("**🔧 Maintenance Manager Access**")
+                ma = st.checkbox(
+                    "Maintenance Manager khol sakte hain",
+                    value=_get_maintenance_access(u["user_id"]),
+                    key=f"ma2_{u['user_id']}",
+                )
+
                 st.markdown("<br>", unsafe_allow_html=True)
                 if st.button("💾 Save All", key=f"save_va_{u['user_id']}", 
                             type="primary", use_container_width=True):
@@ -225,5 +245,9 @@ def access_manager_page():
                         "suppliers_view":    sv,
                         "requirements_view": rv,
                     })
+
+                    # Maintenance access save
+                    _set_maintenance_access(u["user_id"], ma)
+
                     st.success("✅ Access updated!")
                     st.rerun()
