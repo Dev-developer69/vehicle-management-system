@@ -53,8 +53,15 @@ def _highlight_due(row):
 # 1. VEHICLE SELECTOR
 # ──────────────────────────────────────────────
 def _maintenance_home():
-    st.markdown("### 🔧 Maintenance Manager ")
+    st.markdown("### 🔧 Maintenance Manager")
     st.caption("Choose Vehicle")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button('Home page', type='secondary', width='stretch',
+                     icon=':material/home:', shortcut='control+backspace'):
+            st.session_state['login_state'] = None
+            st.rerun()
 
     if is_admin_or_manager():
         vehicles = BUS_NUMBERS
@@ -67,12 +74,6 @@ def _maintenance_home():
         return
 
     # ── Vehicle buttons — 2 per row ──
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button('Home page', type='secondary', width='stretch', icon=':material/home:', shortcut='control+backspace'):
-                st.session_state['login_state']= None
-                st.rerun()
-    
     for row_start in range(0, len(vehicles), 2):
         row_vehicles = vehicles[row_start:row_start + 2]
         cols = st.columns(2)
@@ -98,7 +99,7 @@ def _maintenance_home():
             for _, r in records_df.iterrows():
                 is_latest = (r["Date"] == latest_per_type[r["Service Type"]])
                 if not is_latest:
-                    continue  # sirf latest occurrence check karo har type ki
+                    continue
                 prev_date, km_since = _compute_row_km(bus, r["Service Type"], r["Date"], True)
 
                 overdue, due_soon = False, False
@@ -146,7 +147,7 @@ def _maintenance_home():
                 <div style='color:#aaa;font-size:0.75rem;margin-top:4px;'>{row['total_services']} service records</div>
             </div>
             """, unsafe_allow_html=True)
-
+            
 # ──────────────────────────────────────────────
 # 2. PER-VEHICLE MAINTENANCE GRID
 # ──────────────────────────────────────────────
