@@ -594,7 +594,7 @@ def get_maintenance_records(bus_number: str) -> pd.DataFrame:
 def save_maintenance_record(bus_number: str, record_date, service_type: str,
                              garage_name: str, cost: float, notes: str,
                              next_due_date, next_due_km, user_email: str) -> None:
-    supabase.table("maintenance_records").upsert({
+    res = supabase.table("maintenance_records").upsert({
         "bus_number":     bus_number,
         "record_date":    str(record_date),
         "service_type":   service_type.strip(),
@@ -605,6 +605,24 @@ def save_maintenance_record(bus_number: str, record_date, service_type: str,
         "next_due_km":    int(next_due_km) if next_due_km else None,
         "updated_by":     user_email,
     }, on_conflict="bus_number,record_date,service_type").execute()
+
+    record_id = res.data[0]["id"] if res.data else None
+    if not record_id:
+        return
+
+    # ── Sync to Vehicle Expenses ──
+    if cost and float(cost) > 0:
+        supabase.table("vehicle_expenses").upsert({
+            "bus_number":         bus_number,
+            "date":               str(record_date),
+            "category":           f"Maintenance - {service_type.strip()}",
+            "amount":             float(cost),
+            "description":        f"{(garage_name or '').strip()} {(notes or '').strip()}".strip(),
+            "maintenance_ref_id": record_id,
+        }, on_conflict="maintenance_ref_id").execute()
+    else:
+        # cost 0/removed -> koi linked expense ho toh hata do
+        supabase.table("vehicle_expenses").delete().eq("maintenance_ref_id", record_id).execute()
 
 
 def delete_maintenance_record(bus_number: str, record_id: str) -> None:
