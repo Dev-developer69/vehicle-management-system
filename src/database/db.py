@@ -605,10 +605,18 @@ def save_maintenance_record(bus_number: str, record_date, service_type: str,
         "next_due_km":    int(next_due_km) if next_due_km else None,
         "updated_by":     user_email,
     }, on_conflict="bus_number,record_date,service_type").execute()
-
     record_id = res.data[0]["id"] if res.data else None
     if not record_id:
         return
+
+    # ── Stale reminder clear: purani same-service_type entries ka
+    #    reminder ab irrelevant hai, naya record hi latest fulfil hai ──
+    supabase.table("maintenance_records") \
+        .update({"next_due_date": None, "next_due_km": None}) \
+        .eq("bus_number", bus_number) \
+        .eq("service_type", service_type.strip()) \
+        .lt("record_date", str(record_date)) \
+        .execute()
 
     # ── Sync to Vehicle Expenses ──
     if cost and float(cost) > 0:
