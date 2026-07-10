@@ -69,9 +69,9 @@ def _maintenance_home():
     # ── Vehicle buttons — 2 per row ──
         col1, col2 = st.columns(2)
         with col1:
-        if st.button('Home page', type='secondary', width='stretch', icon=':material/home:', shortcut='control+backspace'):
-            st.session_state['login_state']= None
-            st.rerun()
+            if st.button('Home page', type='secondary', width='stretch', icon=':material/home:', shortcut='control+backspace'):
+                st.session_state['login_state']= None
+                st.rerun()
     
     for row_start in range(0, len(vehicles), 2):
         row_vehicles = vehicles[row_start:row_start + 2]
