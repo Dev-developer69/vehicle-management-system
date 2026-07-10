@@ -156,7 +156,7 @@ def _maintenance_vehicle_page():
     background()
     bus_number = st.session_state.get("maintenance_selected_vehicle")
 
-     col1, col2 = st.columns(2)
+    col1, col2 = st.columns(2)
     with col1:
         if st.button('Home page', type='secondary', width='stretch',
                      icon=':material/home:', shortcut='control+backspace'):
