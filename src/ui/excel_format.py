@@ -176,7 +176,7 @@ def editable_grid(bus_number: str):
         st.session_state[key] = pd.DataFrame({
             "Date":           [date.today()],
             "Status":         ["Present"],
-            "Driver Name":    [None],
+            "Driver Name":    ['None'],
             "Conductor Name": [None],
             "Scheduled KM":   [scheduled_km],
             "Actual KM":      [0],
