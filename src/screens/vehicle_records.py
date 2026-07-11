@@ -88,23 +88,31 @@ def quick_overview(bus_list: list):
     if not bus_list:
         return
 
-    period, auto_start, auto_end = _get_current_period()
+    # ── Month / Period Selector — Vehicle Records jaisa hi ──
+    sel_col1, sel_col2, sel_col3 = st.columns([2, 2, 1])
+    with sel_col1:
+        sel_month = st.selectbox(
+            "Month", options=list(range(1, 13)),
+            index=date.today().month - 1,
+            format_func=lambda x: date(2000, x, 1).strftime("%B"),
+            key="qo_month"
+        )
+    with sel_col2:
+        default_half = "1-15" if date.today().day <= 15 else "16-31"
+        sel_period = st.radio(
+            "Period", ["1-15", "16-31"],
+            index=0 if default_half == "1-15" else 1,
+            horizontal=True, key="qo_period"
+        )
+    with sel_col3:
+        st.markdown("<br>", unsafe_allow_html=True)
+        load_clicked = st.button("🔄 Load", key="qo_load", use_container_width=True)
 
-    # ── Manual Date Range Override ──
-    with st.expander("📅 Custom Date Range (optional)"):
-        use_custom = st.checkbox("Manual date range use karo", key="qo_use_custom")
-        c1, c2 = st.columns(2)
-        with c1:
-            custom_from = st.date_input("From", value=auto_start, key="qo_custom_from")
-        with c2:
-            custom_to = st.date_input("To", value=auto_end, key="qo_custom_to")
+    year = date.today().year
+    raw_start, raw_end = get_date_range(year, sel_month, sel_period)
+    start, end = raw_start.date(), raw_end.date()
 
-    if use_custom:
-        start, end = custom_from, custom_to
-        period_label = f"{start.strftime('%d %b')} - {end.strftime('%d %b %Y')} (manual)"
-    else:
-        start, end = auto_start, auto_end
-        period_label = f"{date.today().strftime('%B')} ({period})"
+    period_label = f"{date(2000, sel_month, 1).strftime('%B')} ({sel_period})"
 
     st.markdown(f"""
     <div style='display:flex;align-items:center;gap:10px;margin-bottom:0.5rem;'>
@@ -114,45 +122,34 @@ def quick_overview(bus_list: list):
     </div>
     """, unsafe_allow_html=True)
 
-    cache_key = f"overview_{start}_{end}_{use_custom}"
+    # ── Fetch from DB (Next-flag carry-forward — jis period ke liye select kiya usi ke hisaab se) ──
+    cache_key = f"overview_{start}_{end}"
 
-    if cache_key not in st.session_state:
+    if cache_key not in st.session_state or load_clicked:
         cols = "bus_number, date, driver_name, actual_km, scheduled_km, income, diesel, status, next_period"
 
-        if use_custom:
-            # Manual range — seedha fetch, "Next" carry-forward logic skip
-            # (user ne khud range choose ki hai, period-boundary shifting irrelevant hai)
-            res = supabase.table("vehicle_records") \
-                .select(cols) \
-                .in_("bus_number", bus_list) \
-                .gte("date", str(start)) \
-                .lte("date", str(end)) \
-                .execute()
-            st.session_state[cache_key] = res.data or []
-        else:
-            # Auto period — "Next" flag carry-forward, Saved Records grid jaisa
-            prev_start, prev_end = shift_period_back(date.today().year, date.today().month, period)
+        prev_start, prev_end = shift_period_back(year, sel_month, sel_period)
 
-            normal_res = supabase.table("vehicle_records") \
-                .select(cols) \
-                .in_("bus_number", bus_list) \
-                .gte("date", str(start)) \
-                .lte("date", str(end)) \
-                .execute()
-            normal_rows = [r for r in (normal_res.data or []) if not r.get("next_period")]
+        # Selected window — Next=True wali entries exclude, wo shifted se aayengi
+        normal_res = supabase.table("vehicle_records") \
+            .select(cols) \
+            .in_("bus_number", bus_list) \
+            .gte("date", str(start)) \
+            .lte("date", str(end)) \
+            .execute()
+        normal_rows = [r for r in (normal_res.data or []) if not r.get("next_period")]
 
-            shifted_res = supabase.table("vehicle_records") \
-                .select(cols) \
-                .in_("bus_number", bus_list) \
-                .gte("date", str(prev_start)) \
-                .lte("date", str(prev_end)) \
-                .eq("next_period", True) \
-                .execute()
-            shifted_rows = shifted_res.data or []
+        # Pichle period se sirf Next=True wali entries carry-forward
+        shifted_res = supabase.table("vehicle_records") \
+            .select(cols) \
+            .in_("bus_number", bus_list) \
+            .gte("date", str(prev_start)) \
+            .lte("date", str(prev_end)) \
+            .eq("next_period", True) \
+            .execute()
+        shifted_rows = shifted_res.data or []
 
-            st.session_state[cache_key] = normal_rows + shifted_rows
-
-
+        st.session_state[cache_key] = normal_rows + shifted_rows
 
     rows = st.session_state[cache_key]
 
