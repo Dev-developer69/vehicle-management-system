@@ -232,9 +232,9 @@ def _product_details_tab():
                                         type=["jpg","jpeg","png","webp"],
                                         key=f"prod_img_{img_reset_key}")
            if uploaded:
-                if "img_products_list" not in st.session_state:
-                    with st.spinner("Fetching products from image..."):
-                        products_list = _extract_data_from_image(
+               if "img_products_list" not in st.session_state:
+                   with st.spinner("Fetching products from image..."):
+                       products_list = _extract_data_from_image(
                             uploaded.read(), uploaded.type,
                             "Extract ALL products/items from this bill or image. For each item extract:\n"
                             "- name (string)\n"
