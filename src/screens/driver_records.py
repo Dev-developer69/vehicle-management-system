@@ -119,10 +119,17 @@ def salary_check_view():
                 sal_from = f"{year}-{sal_month:02d}-16"
                 sal_to   = f"{year}-{sal_month:02d}-{last_day}"
 
-            # ✅ FIX: sirf accessible vehicles ke drivers dikhao
+            # ✅ sabhi accessible vehicles ke drivers dikhao (loop over each bus)
             accessible = get_accessible_vehicles()
-            bus_number = accessible[0] if accessible else ""
-            df_sal = get_driver_salary(bus_number=bus_number)
+
+            if accessible:
+                all_dfs = [get_driver_salary(bus_number=bus) for bus in accessible]
+                all_dfs = [d for d in all_dfs if not d.empty]
+                df_sal = pd.concat(all_dfs, ignore_index=True) if all_dfs else pd.DataFrame(
+                    columns=["id", "Date", "Driver Name", "Salary", "Transaction", "Updated By"]
+                )
+            else:
+                df_sal = get_driver_salary(bus_number="")  # admin/manager — sab dikhao
 
             if not df_sal.empty:
                 df_sal["Date"] = pd.to_datetime(df_sal["Date"])
@@ -131,6 +138,7 @@ def salary_check_view():
                     (df_sal["Date"] <= pd.Timestamp(sal_to))
                 ]
                 df_sal["Date"] = df_sal["Date"].dt.strftime("%Y-%m-%d")
+
             st.session_state["sal_records_df"] = df_sal
 
     if "sal_records_df" in st.session_state:
