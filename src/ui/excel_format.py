@@ -214,7 +214,7 @@ def editable_grid(bus_number: str):
     on_leave_mask = edited_df["Status"] == "On Leave"
     edited_df.loc[on_leave_mask, ["Scheduled KM", "Actual KM", "Income"]] = 0
 
-if st.session_state.get(confirm_key):
+    if st.session_state.get(confirm_key):
         st.warning("⚠️ Duplicate dates exist. Wanna update?")
         col1, col2 = st.columns(2)
         with col1:
