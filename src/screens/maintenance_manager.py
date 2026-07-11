@@ -214,6 +214,13 @@ def _maintenance_vehicle_page():
                         m_next_date, m_next_km if m_next_km else None, current_email,
                     )
                     st.success(f"✅ Saved: {m_type} on {m_date}")
+    
+                    # ── Clear form fields ──
+                    for k in [f"m_date_{bus_number}", f"m_type_{bus_number}", f"m_garage_{bus_number}",
+                              f"m_notes_{bus_number}", f"m_labour_{bus_number}", f"m_item_{bus_number}",
+                              f"m_next_date_{bus_number}", f"m_next_km_{bus_number}"]:
+                        st.session_state.pop(k, None)
+    
                     st.session_state.pop(f"maint_records_{bus_number}", None)
                     st.rerun()
 
