@@ -78,7 +78,7 @@ def _get_date_range(year, month, period):
 # ──────────────────────────────────────────────
 # HELPER: Previous period shift (for Next flag)
 # ──────────────────────────────────────────────
-def _shift_period_back(year, month, period):
+def shift_period_back(year, month, period):
     if period == "16-31":
         return pd.Timestamp(year, month, 1), pd.Timestamp(year, month, 15)
     else:
@@ -291,7 +291,7 @@ def editable_grid(bus_number: str):
             display_df["Next"] = False
         start, end           = _get_date_range(date.today().year, month, half)
         normal_mask          = (display_df["Date"] >= start) & (display_df["Date"] <= end) & (display_df["Next"] == False)
-        prev_start, prev_end = _shift_period_back(date.today().year, month, half)
+        prev_start, prev_end = shift_period_back(date.today().year, month, half)
         shifted_mask         = (display_df["Date"] >= prev_start) & (display_df["Date"] <= prev_end) & (display_df["Next"] == True)
         display_df           = display_df[normal_mask | shifted_mask]
         display_df["Date"]   = display_df["Date"].dt.strftime("%Y-%m-%d")
