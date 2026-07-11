@@ -7,7 +7,7 @@ from datetime import date
 from src.ui.home_base_layout import home_layout
 from src.database.auth import get_accessible_vehicles
 from src.database.config import supabase
-from src.ui.excel_format import _shift_period_back
+from src.ui.excel_format import shift_period_back
 
 VEHICLE_MAP = {
     "7389": "page_7389",
