@@ -402,6 +402,7 @@ def driver_salary(bus_number: str = ""):
                 "Driver Name": st.column_config.TextColumn("Driver Name"),
                 "Salary":      st.column_config.NumberColumn("Salary", min_value=0),
                 "Transaction": st.column_config.TextColumn("Transaction"),
+                "Updated By":  None,
             }
         )
 
