@@ -185,7 +185,7 @@ def _maintenance_vehicle_page():
     
             c3, c4 = st.columns(2)
             with c3:
-                m_garage = st.text_input("Garage Name", value='None', key=f"m_garage_{bus_number}")
+                m_garage = st.text_input("Garage Name", value='', placeholder='Bindal Motors', key=f"m_garage_{bus_number}")
             with c4:
                 m_notes = st.text_input("Notes", key=f"m_notes_{bus_number}", placeholder="optional...")
     
