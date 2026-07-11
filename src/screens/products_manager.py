@@ -150,6 +150,12 @@ def products_page():
     </div>
     """, unsafe_allow_html=True)
 
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button('Home page', type='secondary', width='stretch', icon=':material/home:', shortcut='control+backspace'):
+            st.session_state['login_state'] = None
+            st.rerun()
+    
     # ── Allowed tabs ──
     nav_key      = "pm_active_tab"
     allowed_tabs = []
