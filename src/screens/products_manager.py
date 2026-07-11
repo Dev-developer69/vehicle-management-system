@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 from datetime import date
+from src.ui.home_base_layout import home_layout
 
 from src.database.db import (
     get_suppliers, save_supplier, delete_supplier, get_supplier_products,
@@ -81,6 +82,7 @@ def _extract_data_from_image(image_bytes: bytes, mime_type: str, prompt: str) ->
 # PRODUCTS PAGE — entry point
 # ──────────────────────────────────────────────
 def products_page():
+    home_layout()
     from src.database.config import supabase
     from src.database.auth import get_current_role
 
