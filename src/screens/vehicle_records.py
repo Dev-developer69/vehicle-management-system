@@ -100,7 +100,7 @@ def quick_overview(bus_list: list):
     """, unsafe_allow_html=True)
 
 # ── Fetch from DB (Next-flag carry-forward — Saved Records grid jaisa) ──
-    prev_start, prev_end = _shift_period_back(date.today().year, date.today().month, period)
+    prev_start, prev_end = shift_period_back(date.today().year, date.today().month, period)
     cache_key = f"overview_{start}_{end}"
 
     if cache_key not in st.session_state:
