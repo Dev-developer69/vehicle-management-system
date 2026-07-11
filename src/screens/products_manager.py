@@ -231,10 +231,10 @@ def _product_details_tab():
             uploaded = st.file_uploader("Upload image/Bill",
                                         type=["jpg","jpeg","png","webp"],
                                         key=f"prod_img_{img_reset_key}")
-           if uploaded:
-               if "img_products_list" not in st.session_state:
-                   with st.spinner("Fetching products from image..."):
-                       products_list = _extract_data_from_image(
+            if uploaded:
+                if "img_products_list" not in st.session_state:
+                    with st.spinner("Fetching products from image..."):
+                        products_list = _extract_data_from_image(
                             uploaded.read(), uploaded.type,
                             "Extract ALL products/items from this bill or image. For each item extract:\n"
                             "- name (string)\n"
@@ -245,10 +245,9 @@ def _product_details_tab():
                             "Return ONLY a JSON array with keys: name, quantity, price, mrp. "
                             "No explanation, no markdown, just raw JSON array."
                         )
-            
+
                     if products_list:
                         with st.spinner("Verifying with Claude..."):
-                            # re-read image bytes since uploaded.read() consumed the stream once
                             uploaded.seek(0)
                             products_list = _verify_with_claude(uploaded.read(), uploaded.type, products_list)
                         st.session_state["img_products_list"] = products_list
@@ -274,10 +273,10 @@ def _product_details_tab():
                     if col not in edit_df.columns:
                         edit_df[col] = None
                 edit_df = edit_df[["name","price","mrp","quantity"]].copy()
-                edit_df.columns = ["Name","Price (₹)","MRP (₹)"]
+                edit_df.columns = ["Name","Price (₹)","MRP (₹)","Quantity"]
                 edit_df["Price (₹)"] = pd.to_numeric(edit_df["Price (₹)"], errors="coerce").fillna(0)
                 edit_df["MRP (₹)"]   = pd.to_numeric(edit_df["MRP (₹)"],   errors="coerce").fillna(0)
-                edit_df["Quantity"] = pd.to_numeric(edit_df.get("quantity", 0), errors="coerce").fillna(0).astype(int).astype(str)
+                edit_df["Quantity"]  = pd.to_numeric(edit_df["Quantity"],  errors="coerce").fillna(0).astype(int).astype(str)
                 edit_df["Remark"]    = ""
 
                 edited = st.data_editor(
