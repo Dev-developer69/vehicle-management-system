@@ -204,7 +204,7 @@ def _maintenance_vehicle_page():
             else:
                 save_maintenance_record(
                     bus_number, m_date, m_type, m_garage,
-                    m_labour_cost, m_item_cost, m_cost, m_notes,
+                    m_labour_cost, m_item_cost, m_notes,
                     m_next_date, m_next_km if m_next_km else None, current_email,
                 )
                 st.success(f"✅ Saved: {m_type} on {m_date}")
