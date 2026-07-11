@@ -214,14 +214,14 @@ def editable_grid(bus_number: str):
     on_leave_mask = edited_df["Status"] == "On Leave"
     edited_df.loc[on_leave_mask, ["Scheduled KM", "Actual KM", "Income"]] = 0
 
-    if st.session_state.get(confirm_key):
+if st.session_state.get(confirm_key):
         st.warning("⚠️ Duplicate dates exist. Wanna update?")
         col1, col2 = st.columns(2)
         with col1:
             if st.button("✅ Yes, Update", key=f"yes_{bus_number}"):
                 save_vehicle_records(bus_number, st.session_state.get(pending_key))
                 st.success("✅ Updated!")
-                for k in [key, fetch_key, confirm_key, pending_key]:
+                for k in [key, ed_key, fetch_key, confirm_key, pending_key]:
                     st.session_state.pop(k, None)
                 st.rerun()
         with col2:
@@ -251,6 +251,7 @@ def editable_grid(bus_number: str):
                 save_vehicle_records(bus_number, cleaned_df)
                 st.success("✅ Saved!")
                 st.session_state.pop(key, None)
+                st.session_state.pop(ed_key, None)
                 st.session_state.pop(fetch_key, None)
                 st.rerun()
 
@@ -363,9 +364,10 @@ def driver_salary(bus_number: str = ""):
         save_driver_salary(cleaned_df, bus_number=bus_number)
         st.success("✅ Saved!")
         st.session_state.pop(key, None)
+        st.session_state.pop(ed_key, None)  
         st.session_state.pop(fetch_key, None)
         st.rerun()
-
+        
     st.markdown("### Saved Salary Records 📋")
     col1, col2, col3 = st.columns([2, 2, 1])
     with col1:
@@ -467,6 +469,7 @@ def expenses(bus_number: str = ""):
         save_vehicle_expenses(bus_number, cleaned_df)
         st.success("✅ Saved!")
         st.session_state.pop(key, None)
+        st.session_state.pop(ed_key, None)  
         st.session_state.pop(fetch_key, None)
         st.rerun()
 
