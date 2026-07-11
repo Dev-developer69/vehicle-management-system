@@ -7,6 +7,7 @@ from datetime import date
 from src.ui.home_base_layout import home_layout
 from src.database.auth import get_accessible_vehicles
 from src.database.config import supabase
+from src.ui.excel_format import _shift_period_back
 
 VEHICLE_MAP = {
     "7389": "page_7389",
@@ -98,17 +99,33 @@ def quick_overview(bus_list: list):
     </div>
     """, unsafe_allow_html=True)
 
-    # ── Fetch from DB ──
+# ── Fetch from DB (Next-flag carry-forward — Saved Records grid jaisa) ──
+    prev_start, prev_end = _shift_period_back(date.today().year, date.today().month, period)
     cache_key = f"overview_{start}_{end}"
+
     if cache_key not in st.session_state:
-        res = supabase.table("vehicle_records") \
-            .select("bus_number, date, driver_name, actual_km, scheduled_km, income, diesel, status") \
+        cols = "bus_number, date, driver_name, actual_km, scheduled_km, income, diesel, status, next_period"
+
+        # Normal window — Next=True wali entries yahan se exclude, wo shifted se aayengi
+        normal_res = supabase.table("vehicle_records") \
+            .select(cols) \
             .in_("bus_number", bus_list) \
             .gte("date", str(start)) \
             .lte("date", str(end)) \
-            .order("date", desc=False) \
             .execute()
-        st.session_state[cache_key] = res.data or []
+        normal_rows = [r for r in (normal_res.data or []) if not r.get("next_period")]
+
+        # Previous window se sirf Next=True wali entries carry-forward
+        shifted_res = supabase.table("vehicle_records") \
+            .select(cols) \
+            .in_("bus_number", bus_list) \
+            .gte("date", str(prev_start)) \
+            .lte("date", str(prev_end)) \
+            .eq("next_period", True) \
+            .execute()
+        shifted_rows = shifted_res.data or []
+
+        st.session_state[cache_key] = normal_rows + shifted_rows
 
     rows = st.session_state[cache_key]
 
