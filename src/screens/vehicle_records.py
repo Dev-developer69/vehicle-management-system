@@ -7,7 +7,7 @@ from datetime import date
 from src.ui.home_base_layout import home_layout
 from src.database.auth import get_accessible_vehicles
 from src.database.config import supabase
-from src.ui.excel_format import shift_period_back
+from src.ui.excel_format import shift_period_back, _get_date_range
 
 VEHICLE_MAP = {
     "7389": "page_7389",
@@ -109,7 +109,7 @@ def quick_overview(bus_list: list):
         load_clicked = st.button("🔄 Load", key="qo_load", use_container_width=True)
 
     year = date.today().year
-    raw_start, raw_end = get_date_range(year, sel_month, sel_period)
+    raw_start, raw_end = _get_date_range(year, sel_month, sel_period)
     start, end = raw_start.date(), raw_end.date()
 
     period_label = f"{date(2000, sel_month, 1).strftime('%B')} ({sel_period})"
