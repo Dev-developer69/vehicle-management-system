@@ -144,7 +144,7 @@ def salary_check_view():
     if "sal_records_df" in st.session_state:
         df = st.session_state["sal_records_df"]
         if not df.empty:
-            show_df = df.drop(columns=["id"], errors="ignore")
+            show_df = df.drop(columns=["id", "Updated By"], errors="ignore")
             st.dataframe(show_df, use_container_width=True, hide_index=True)
 
             # Total row
