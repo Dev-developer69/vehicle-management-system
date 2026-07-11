@@ -45,6 +45,45 @@ from src.database.db import (
 #         return []
 
 # ──────────────────────────────────────────────
+# HELPER: Verify/correct Groq's extraction via Claude
+# ──────────────────────────────────────────────
+def _verify_with_claude(image_bytes: bytes, mime_type: str, groq_result: list) -> list:
+    try:
+        import anthropic, base64, json, re
+        client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
+        b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
+
+        msg = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=1000,   # verification hai, chhota output expected
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "image", "source": {"type": "base64", "media_type": mime_type, "data": b64}},
+                    {"type": "text", "text": (
+                        "Here is data another model extracted from this bill image:\n\n"
+                        f"{json.dumps(groq_result, ensure_ascii=False)}\n\n"
+                        "Check this against the image ONLY for errors in: name spelling, "
+                        "quantity, price (must be per-unit rate, not total amount), and mrp. "
+                        "If a value is correct, keep it unchanged. If wrong, fix it. "
+                        "Do not add new items unless one was clearly missed. "
+                        "Return ONLY the corrected JSON array in the same format "
+                        "(keys: name, quantity, price, mrp). No explanation, no markdown."
+                    )},
+                ],
+            }],
+        )
+        raw = re.sub(r"```json|```", "", msg.content[0].text.strip()).strip()
+        parsed = json.loads(raw)
+        if isinstance(parsed, dict):
+            parsed = [parsed]
+        return parsed if isinstance(parsed, list) else groq_result
+    except Exception as e:
+        st.warning(f"⚠️ Verification skipped: {e}")
+        return groq_result   # fallback: Groq ka result hi use karo agar Claude fail ho
+
+
+# ──────────────────────────────────────────────
 # HELPER: Image → structured data via Groq Vision
 # ──────────────────────────────────────────────
 def _extract_data_from_image(image_bytes: bytes, mime_type: str, prompt: str) -> list:
@@ -186,22 +225,29 @@ def _product_details_tab():
             uploaded = st.file_uploader("Upload image/Bill",
                                         type=["jpg","jpeg","png","webp"],
                                         key=f"prod_img_{img_reset_key}")
-            if uploaded:
-                if "img_products_list" not in st.session_state:
-                    with st.spinner("Fetching products from image..."):
-                        products_list = _extract_data_from_image(
-                            uploaded.read(), uploaded.type,
-                            "Extract ALL products/items from this bill or image. "
-                            "Return ONLY a JSON array with keys: "
-                            "name (string), price (number or null), mrp (number or null). "
-                            "price = rate/unit price, not total. "
-                            "No explanation, no markdown, just raw JSON array."
-                        )
-                    if products_list:
-                        st.session_state["img_products_list"] = products_list
-                    else:
-                        st.warning("⚠️ NO PRODUCT FOUND")
+           if uploaded:
+    if "img_products_list" not in st.session_state:
+        with st.spinner("Fetching products from image..."):
+            products_list = _extract_data_from_image(
+                uploaded.read(), uploaded.type,
+                "Extract ALL products/items from this bill or image. For each item extract:\n"
+                "- name (string)\n"
+                "- quantity (number - the quantity/pieces purchased; if not clearly mentioned, use 1)\n"
+                "- price (number - the PER PIECE / PER UNIT rate. If the bill shows a TOTAL amount "
+                "instead, CALCULATE price = total_amount / quantity. Never return total as price.)\n"
+                "- mrp (number or null, if printed)\n\n"
+                "Return ONLY a JSON array with keys: name, quantity, price, mrp. "
+                "No explanation, no markdown, just raw JSON array."
+            )
 
+        if products_list:
+            with st.spinner("Verifying with Claude..."):
+                # re-read image bytes since uploaded.read() consumed the stream once
+                uploaded.seek(0)
+                products_list = _verify_with_claude(uploaded.read(), uploaded.type, products_list)
+            st.session_state["img_products_list"] = products_list
+        else:
+            st.warning("⚠️ NO PRODUCT FOUND")
             if "img_products_list" in st.session_state:
                 products_list = st.session_state["img_products_list"]
                 st.success(f"✅ {len(products_list)} Product found - edit and save")
@@ -217,14 +263,14 @@ def _product_details_tab():
                     p_date = st.date_input("Purchase Date", value=date.today(), key="img_date")
 
                 edit_df = pd.DataFrame(products_list)
-                for col in ["name","price","mrp"]:
+                for col in ["name","price","mrp","quantity"]:
                     if col not in edit_df.columns:
                         edit_df[col] = None
-                edit_df = edit_df[["name","price","mrp"]].copy()
+                edit_df = edit_df[["name","price","mrp","quantity"]].copy()
                 edit_df.columns = ["Name","Price (₹)","MRP (₹)"]
                 edit_df["Price (₹)"] = pd.to_numeric(edit_df["Price (₹)"], errors="coerce").fillna(0)
                 edit_df["MRP (₹)"]   = pd.to_numeric(edit_df["MRP (₹)"],   errors="coerce").fillna(0)
-                edit_df["Quantity"]  = ""
+                edit_df["Quantity"] = pd.to_numeric(edit_df.get("quantity", 0), errors="coerce").fillna(0).astype(int).astype(str)
                 edit_df["Remark"]    = ""
 
                 edited = st.data_editor(
