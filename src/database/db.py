@@ -569,7 +569,7 @@ def get_maintenance_records(bus_number: str) -> pd.DataFrame:
 
     if not res.data:
         return pd.DataFrame(columns=[
-            "id", "Date", "Service Type", "Garage", "Cost",
+            "id", "Date", "Service Type", "Garage", "Labour Cost", "Item Cost", "Cost",
             "Next Due Date", "Next Due KM", "Notes"
         ])
 
@@ -578,28 +578,37 @@ def get_maintenance_records(bus_number: str) -> pd.DataFrame:
         "record_date":   "Date",
         "service_type":  "Service Type",
         "garage_name":   "Garage",
+        "labour_cost":   "Labour Cost",
+        "item_cost":     "Item Cost",
         "cost":          "Cost",
         "next_due_date": "Next Due Date",
         "next_due_km":   "Next Due KM",
         "notes":         "Notes",
     })
-    for col, default in [("Next Due Date", None), ("Next Due KM", None), ("Notes", "")]:
+    for col, default in [("Next Due Date", None), ("Next Due KM", None), ("Notes", ""),
+                          ("Labour Cost", 0), ("Item Cost", 0)]:
         if col not in df.columns:
             df[col] = default
 
-    return df[["id", "Date", "Service Type", "Garage", "Cost",
+    return df[["id", "Date", "Service Type", "Garage", "Labour Cost", "Item Cost", "Cost",
                "Next Due Date", "Next Due KM", "Notes"]]
 
 
 def save_maintenance_record(bus_number: str, record_date, service_type: str,
-                             garage_name: str, cost: float, notes: str,
+                             garage_name: str, labour_cost: float, item_cost: float, notes: str,
                              next_due_date, next_due_km, user_email: str) -> None:
+    labour_cost = float(labour_cost or 0)
+    item_cost   = float(item_cost or 0)
+    total_cost  = labour_cost + item_cost
+
     res = supabase.table("maintenance_records").upsert({
         "bus_number":     bus_number,
         "record_date":    str(record_date),
         "service_type":   service_type.strip(),
         "garage_name":    (garage_name or "").strip(),
-        "cost":           float(cost or 0),
+        "labour_cost":    labour_cost,
+        "item_cost":      item_cost,
+        "cost":           total_cost,
         "notes":          (notes or "").strip(),
         "next_due_date":  str(next_due_date) if next_due_date else None,
         "next_due_km":    int(next_due_km) if next_due_km else None,
@@ -609,8 +618,7 @@ def save_maintenance_record(bus_number: str, record_date, service_type: str,
     if not record_id:
         return
 
-    # ── Stale reminder clear: purani same-service_type entries ka
-    #    reminder ab irrelevant hai, naya record hi latest fulfil hai ──
+    # ── Stale reminder clear ──
     supabase.table("maintenance_records") \
         .update({"next_due_date": None, "next_due_km": None}) \
         .eq("bus_number", bus_number) \
@@ -619,17 +627,16 @@ def save_maintenance_record(bus_number: str, record_date, service_type: str,
         .execute()
 
     # ── Sync to Vehicle Expenses ──
-    if cost and float(cost) > 0:
+    if total_cost > 0:
         supabase.table("vehicle_expenses").upsert({
             "bus_number":         bus_number,
             "date":               str(record_date),
             "category":           f"Maintenance - {service_type.strip()}",
-            "amount":             float(cost),
+            "amount":             total_cost,
             "description":        f"{(garage_name or '').strip()} {(notes or '').strip()}".strip(),
             "maintenance_ref_id": record_id,
         }, on_conflict="maintenance_ref_id").execute()
     else:
-        # cost 0/removed -> koi linked expense ho toh hata do
         supabase.table("vehicle_expenses").delete().eq("maintenance_ref_id", record_id).execute()
 
 
