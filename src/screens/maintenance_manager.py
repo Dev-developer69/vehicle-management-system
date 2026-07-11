@@ -174,42 +174,48 @@ def _maintenance_vehicle_page():
 
     # ── Add / Update form ──
     with st.container(border=True):
-        st.markdown("#### ➕ Add / Update Service Record")
-
-        c1, c2 = st.columns(2)
-        with c1:
-            m_date = st.date_input("Service Date", value=date.today(), key=f"m_date_{bus_number}")
-        with c2:
-            m_type = st.text_input("Service Type", key=f"m_type_{bus_number}",
-                                    placeholder="e.g. Oil Change")
-
-        c3, c4 = st.columns(2)
-        with c3:
-            m_garage = st.text_input("Garage Name", value='None', key=f"m_garage_{bus_number}")
-        with c4:
-            m_notes = st.text_input("Notes", key=f"m_notes_{bus_number}", placeholder="optional...")
-
-        c4a, c4b = st.columns(2)
-        with c4a:
-            m_labour_cost = st.number_input("Labour Cost (₹)", min_value=0.0, step=0.01, key=f"m_labour_{bus_number}")
-        with c4b:
-            m_item_cost = st.number_input("Item Cost (₹)", min_value=0.0, step=0.01, key=f"m_item_{bus_number}")
-
-        m_cost = m_labour_cost + m_item_cost
-        st.caption(f"💰 Total Cost: ₹{m_cost:,.2f}")
-
-        if st.button("💾 Save Record", key=f"m_save_{bus_number}", type="primary", use_container_width=True):
-            if not m_type.strip():
-                st.warning("⚠️ Service Type required.")
-            else:
-                save_maintenance_record(
-                    bus_number, m_date, m_type, m_garage,
-                    m_labour_cost, m_item_cost, m_notes,
-                    m_next_date, m_next_km if m_next_km else None, current_email,
-                )
-                st.success(f"✅ Saved: {m_type} on {m_date}")
-                st.session_state.pop(f"maint_records_{bus_number}", None)
-                st.rerun()
+            st.markdown("#### ➕ Add / Update Service Record")
+    
+            c1, c2 = st.columns(2)
+            with c1:
+                m_date = st.date_input("Service Date", value=date.today(), key=f"m_date_{bus_number}")
+            with c2:
+                m_type = st.text_input("Service Type", key=f"m_type_{bus_number}",
+                                        placeholder="e.g. Oil Change")
+    
+            c3, c4 = st.columns(2)
+            with c3:
+                m_garage = st.text_input("Garage Name", value='None', key=f"m_garage_{bus_number}")
+            with c4:
+                m_notes = st.text_input("Notes", key=f"m_notes_{bus_number}", placeholder="optional...")
+    
+            c4a, c4b = st.columns(2)
+            with c4a:
+                m_labour_cost = st.number_input("Labour Cost (₹)", min_value=0.0, step=0.01, key=f"m_labour_{bus_number}")
+            with c4b:
+                m_item_cost = st.number_input("Item Cost (₹)", min_value=0.0, step=0.01, key=f"m_item_{bus_number}")
+    
+            m_cost = m_labour_cost + m_item_cost
+            st.caption(f"💰 Total Cost: ₹{m_cost:,.2f}")
+    
+            c5, c6 = st.columns(2)
+            with c5:
+                m_next_date = st.date_input("Next Due Date (optional)", value=None, key=f"m_next_date_{bus_number}")
+            with c6:
+                m_next_km = st.number_input("Next Due KM (optional)", min_value=0, step=1, key=f"m_next_km_{bus_number}")
+    
+            if st.button("💾 Save Record", key=f"m_save_{bus_number}", type="primary", use_container_width=True):
+                if not m_type.strip():
+                    st.warning("⚠️ Service Type required.")
+                else:
+                    save_maintenance_record(
+                        bus_number, m_date, m_type, m_garage,
+                        m_labour_cost, m_item_cost, m_notes,
+                        m_next_date, m_next_km if m_next_km else None, current_email,
+                    )
+                    st.success(f"✅ Saved: {m_type} on {m_date}")
+                    st.session_state.pop(f"maint_records_{bus_number}", None)
+                    st.rerun()
 
     st.markdown("### 📋 Saved Maintenance Records")
 
