@@ -197,7 +197,7 @@ def editable_grid(bus_number: str):
         column_config={
             "Date":           st.column_config.DateColumn("Date", default=date.today()),
             "Status":         st.column_config.SelectboxColumn("Status", options=["Present", "On Leave"], default="Present"),
-            "Driver Name":    st.column_config.TextColumn("Driver Name"),
+            "Driver Name":    st.column_config.TextColumn("Driver Name",default='none'),
             "Conductor Name": st.column_config.TextColumn("Conductor Name"),
             "Scheduled KM":   st.column_config.NumberColumn("Scheduled KM", min_value=0, default=scheduled_km),
             "Actual KM":      st.column_config.NumberColumn("Actual KM", min_value=0, default=0),
