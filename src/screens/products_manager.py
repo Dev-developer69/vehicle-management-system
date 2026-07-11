@@ -232,28 +232,29 @@ def _product_details_tab():
                                         type=["jpg","jpeg","png","webp"],
                                         key=f"prod_img_{img_reset_key}")
            if uploaded:
-    if "img_products_list" not in st.session_state:
-        with st.spinner("Fetching products from image..."):
-            products_list = _extract_data_from_image(
-                uploaded.read(), uploaded.type,
-                "Extract ALL products/items from this bill or image. For each item extract:\n"
-                "- name (string)\n"
-                "- quantity (number - the quantity/pieces purchased; if not clearly mentioned, use 1)\n"
-                "- price (number - the PER PIECE / PER UNIT rate. If the bill shows a TOTAL amount "
-                "instead, CALCULATE price = total_amount / quantity. Never return total as price.)\n"
-                "- mrp (number or null, if printed)\n\n"
-                "Return ONLY a JSON array with keys: name, quantity, price, mrp. "
-                "No explanation, no markdown, just raw JSON array."
-            )
-
-        if products_list:
-            with st.spinner("Verifying with Claude..."):
-                # re-read image bytes since uploaded.read() consumed the stream once
-                uploaded.seek(0)
-                products_list = _verify_with_claude(uploaded.read(), uploaded.type, products_list)
-            st.session_state["img_products_list"] = products_list
-        else:
-            st.warning("⚠️ NO PRODUCT FOUND")
+                if "img_products_list" not in st.session_state:
+                    with st.spinner("Fetching products from image..."):
+                        products_list = _extract_data_from_image(
+                            uploaded.read(), uploaded.type,
+                            "Extract ALL products/items from this bill or image. For each item extract:\n"
+                            "- name (string)\n"
+                            "- quantity (number - the quantity/pieces purchased; if not clearly mentioned, use 1)\n"
+                            "- price (number - the PER PIECE / PER UNIT rate. If the bill shows a TOTAL amount "
+                            "instead, CALCULATE price = total_amount / quantity. Never return total as price.)\n"
+                            "- mrp (number or null, if printed)\n\n"
+                            "Return ONLY a JSON array with keys: name, quantity, price, mrp. "
+                            "No explanation, no markdown, just raw JSON array."
+                        )
+            
+                    if products_list:
+                        with st.spinner("Verifying with Claude..."):
+                            # re-read image bytes since uploaded.read() consumed the stream once
+                            uploaded.seek(0)
+                            products_list = _verify_with_claude(uploaded.read(), uploaded.type, products_list)
+                        st.session_state["img_products_list"] = products_list
+                    else:
+                        st.warning("⚠️ NO PRODUCT FOUND")
+            
             if "img_products_list" in st.session_state:
                 products_list = st.session_state["img_products_list"]
                 st.success(f"✅ {len(products_list)} Product found - edit and save")
