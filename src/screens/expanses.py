@@ -5,20 +5,9 @@ from datetime import date
 from src.ui.home_base_layout import home_layout
 from src.database.db import get_vehicle_expenses
 from src.database.auth import get_accessible_vehicles
+from src.ui.excel_format import _get_date_range
 
 ALL_BUSES = [("3131", "3131_E"), ("0303", "0303_E"), ("7389", "7389_E"), ("2350", "2350_E")]
-
-
-def _get_date_range(year: int, month: int, period: str):
-    if period == "1-15":
-        return pd.Timestamp(year, month, 1), pd.Timestamp(year, month, 15)
-    elif period == "16-31":
-        last_day = calendar.monthrange(year, month)[1]
-        return pd.Timestamp(year, month, 16), pd.Timestamp(year, month, last_day)
-    else:  # 01-31
-        last_day = calendar.monthrange(year, month)[1]
-        return pd.Timestamp(year, month, 1), pd.Timestamp(year, month, last_day)
-
 
 def expenses():
     if st.button('Home page', type='secondary', width='stretch', icon=':material/home:', shortcut='control+backspace'):
