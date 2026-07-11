@@ -20,7 +20,7 @@ from src.vehicle_records.vehicle_0303 import page_0303, expense_0303
 from src.vehicle_records.vehicle_31 import page_3131, expense_3131
 from src.vehicle_records.vehicle_89 import page_7389, expense_7389
 from src.vehicle_records.vehicle_50 import page_2350, expense_2350
-from src.ui.excel_format import products_page
+from src.screens.products_manager import products_page
 from src.database.auth import (
     login_page, is_logged_in, get_current_role,
     get_accessible_vehicles, is_admin_or_manager,
