@@ -160,7 +160,7 @@ def _generate_expenses_pdf(df, bus_number, month, period):
 # 1. VEHICLE RECORDS
 # ──────────────────────────────────────────────
 def editable_grid(bus_number: str):
-    numeric_cols = ["Scheduled KM", "Actual KM", "Diesel", "Diesel KM", "Avg", "Income"]
+    numeric_cols = ["Scheduled KM", "Actual KM", "Diesel", "Diesel KM", "Avg", "Income", "Gross Income"]
     key          = f"grid_{bus_number}"
     ed_key       = f"editor_{bus_number}"
     fetch_key    = f"fetched_{bus_number}"
@@ -176,18 +176,59 @@ def editable_grid(bus_number: str):
         st.session_state[key] = pd.DataFrame({
             "Date":           [date.today()],
             "Status":         ["Present"],
-            "Driver Name":    ['None'],
+            "Driver Name":    [None],
             "Conductor Name": [None],
             "Scheduled KM":   [scheduled_km],
             "Actual KM":      [0],
             "Diesel":         [None],
             "Diesel KM":      [None],
             "Income":         [None],
+            "Gross Income":   [None],
             "Remark":         [""],
             "Next":           [False],
         })
 
     st.markdown(f"### Vehicle Records {bus_number} 🚐")
+
+    # ── Extract Income from Image (optional) ──
+    with st.expander("📷 Extract Income from Image (optional)"):
+        img_date = st.date_input("Entry date", value=date.today(), key=f"inc_img_date_{bus_number}")
+        img_file = st.file_uploader("Ticket/receipt image", type=["jpg", "jpeg", "png", "webp"],
+                                     key=f"inc_img_{bus_number}")
+        if img_file and st.button("🔍 Extract", key=f"inc_extract_{bus_number}"):
+            with st.spinner("Extracting..."):
+                from src.screens.products_manager import _extract_data_from_image
+                result = _extract_data_from_image(
+                    img_file.read(), img_file.type,
+                    "Extract the Gross Income (total revenue) and Base Fare from this bus ticket/receipt image. "
+                    "Return ONLY a JSON array with ONE object with keys: "
+                    "gross_income (number or null), base_fare (number or null). "
+                    "No explanation, no markdown, just raw JSON array."
+                )
+            if result:
+                data = result[0]
+                st.session_state[key] = pd.DataFrame({
+                    "Date":           [img_date],
+                    "Status":         ["Present"],
+                    "Driver Name":    [None],
+                    "Conductor Name": [None],
+                    "Scheduled KM":   [scheduled_km],
+                    "Actual KM":      [0],
+                    "Diesel":         [None],
+                    "Diesel KM":      [None],
+                    "Income":         [data.get("base_fare")],
+                    "Gross Income":   [data.get("gross_income")],
+                    "Remark":         [""],
+                    "Next":           [False],
+                })
+                st.success(
+                    f"✅ Base Fare: {data.get('base_fare')}, Gross Income: {data.get('gross_income')} — "
+                    f"grid mein fill ho gaya, baaki fields (Driver Name etc.) bhar ke Save karo"
+                )
+                st.rerun()
+            else:
+                st.warning("⚠️ Extraction fail hua, manually fill karo.")
+
     st.data_editor(
         st.session_state[key],
         num_rows="dynamic",
@@ -197,13 +238,14 @@ def editable_grid(bus_number: str):
         column_config={
             "Date":           st.column_config.DateColumn("Date", default=date.today()),
             "Status":         st.column_config.SelectboxColumn("Status", options=["Present", "On Leave"], default="Present"),
-            "Driver Name":    st.column_config.TextColumn("Driver Name",default='none'),
+            "Driver Name":    st.column_config.TextColumn("Driver Name"),
             "Conductor Name": st.column_config.TextColumn("Conductor Name"),
             "Scheduled KM":   st.column_config.NumberColumn("Scheduled KM", min_value=0, default=scheduled_km),
             "Actual KM":      st.column_config.NumberColumn("Actual KM", min_value=0, default=0),
             "Diesel":         st.column_config.NumberColumn("Diesel", min_value=0.0, step=0.01, format="%.2f"),
             "Diesel KM":      st.column_config.NumberColumn("Diesel KM", min_value=0),
             "Income":         st.column_config.NumberColumn("Income", min_value=0),
+            "Gross Income":   st.column_config.NumberColumn("Gross Income", min_value=0),
             "Remark":         st.column_config.TextColumn("Remark"),
             "Next":           st.column_config.CheckboxColumn("Next", default=False),
         },
@@ -221,7 +263,7 @@ def editable_grid(bus_number: str):
             if st.button("✅ Yes, Update", key=f"yes_{bus_number}"):
                 save_vehicle_records(bus_number, st.session_state.get(pending_key))
                 st.success("✅ Updated!")
-                for k in [key, ed_key, fetch_key, confirm_key, pending_key]:
+                for k in [key, fetch_key, confirm_key, pending_key]:
                     st.session_state.pop(k, None)
                 st.rerun()
         with col2:
@@ -251,12 +293,10 @@ def editable_grid(bus_number: str):
                 save_vehicle_records(bus_number, cleaned_df)
                 st.success("✅ Saved!")
                 st.session_state.pop(key, None)
-                st.session_state.pop(ed_key, None)
                 st.session_state.pop(fetch_key, None)
                 st.rerun()
 
     st.markdown("### Saved Records 📋")
-
 
     # ── Delete row by date ──
     with st.expander("🗑️ Delete a record by date"):
@@ -266,7 +306,7 @@ def editable_grid(bus_number: str):
             st.success(f"✅ Deleted record for {del_date}")
             st.session_state.pop(fetch_key, None)
             st.rerun()
-    
+
     if fetch_key not in st.session_state:
         st.session_state[fetch_key] = get_vehicle_records(bus_number)
     fetched_df = st.session_state[fetch_key]
@@ -302,12 +342,12 @@ def editable_grid(bus_number: str):
             pd.to_numeric(display_df["Diesel KM"], errors="coerce") /
             pd.to_numeric(display_df["Diesel"], errors="coerce").replace(0, float("nan"))
         ).round(2)
-        for col, default in [("Income", 0), ("Remark", "")]:
+        for col, default in [("Income", 0), ("Gross Income", 0), ("Remark", "")]:
             if col not in display_df.columns:
                 display_df[col] = default
         display_df = display_df[["Date", "Status", "Driver Name", "Conductor Name",
                                   "Scheduled KM", "Actual KM", "Diesel", "Diesel KM",
-                                  "Avg", "Income", "Remark", "Next"]]
+                                  "Avg", "Income", "Gross Income", "Remark", "Next"]]
         st.dataframe(display_df, use_container_width=True, hide_index=True)
         total_row = build_total_row(display_df, numeric_cols, label_col="Driver Name")
         st.dataframe(total_row, use_container_width=True, hide_index=True)
