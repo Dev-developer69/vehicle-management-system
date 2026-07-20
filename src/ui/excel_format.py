@@ -92,13 +92,19 @@ def shift_period_back(year, month, period):
 # ──────────────────────────────────────────────
 # HELPER: Generate PDF — Vehicle Records
 # ──────────────────────────────────────────────
+def _safe_pdf_text(val) -> str:
+    """FPDF core fonts (Helvetica) sirf Latin-1 support karte hain — unsupported chars replace karo"""
+    text = str(val)
+    return text.encode("latin-1", errors="replace").decode("latin-1")
+
+
 def _generate_pdf(df, total_row, bus_number, month, half):
     pdf = FPDF(orientation="L", unit="mm", format="A4")
     pdf.add_page()
     pdf.set_auto_page_break(auto=True, margin=10)
     pdf.set_font("Helvetica", "B", 14)
     month_name = date(2000, month, 1).strftime("%B")
-    pdf.cell(0, 10, f"Vehicle Records - {bus_number}  |  {month_name} ({half})", ln=True, align="C")
+    pdf.cell(0, 10, _safe_pdf_text(f"Vehicle Records - {bus_number}  |  {month_name} ({half})"), ln=True, align="C")
     pdf.ln(3)
     cols   = list(df.columns)
     page_w = pdf.w - 2 * pdf.l_margin
@@ -106,32 +112,29 @@ def _generate_pdf(df, total_row, bus_number, month, half):
     pdf.set_fill_color(52, 73, 94); pdf.set_text_color(255, 255, 255)
     pdf.set_font("Helvetica", "B", 8)
     for col in cols:
-        pdf.cell(col_w, 8, str(col), border=1, align="C", fill=True)
+        pdf.cell(col_w, 8, _safe_pdf_text(col), border=1, align="C", fill=True)
     pdf.ln()
     pdf.set_text_color(0, 0, 0); pdf.set_font("Helvetica", "", 8)
     for i, row in df.iterrows():
         fill = i % 2 == 0
         pdf.set_fill_color(245, 245, 245) if fill else pdf.set_fill_color(255, 255, 255)
         for col in cols:
-            pdf.cell(col_w, 7, str(row[col]) if pd.notna(row[col]) else "", border=1, align="C", fill=fill)
+            pdf.cell(col_w, 7, _safe_pdf_text(row[col]) if pd.notna(row[col]) else "", border=1, align="C", fill=fill)
         pdf.ln()
     pdf.set_fill_color(230, 240, 255); pdf.set_font("Helvetica", "B", 8)
     for col in cols:
-        pdf.cell(col_w, 8, str(total_row.iloc[0][col]), border=1, align="C", fill=True)
+        pdf.cell(col_w, 8, _safe_pdf_text(total_row.iloc[0][col]), border=1, align="C", fill=True)
     pdf.ln()
     return bytes(pdf.output())
 
 
-# ──────────────────────────────────────────────
-# HELPER: Generate PDF — Expenses
-# ──────────────────────────────────────────────
 def _generate_expenses_pdf(df, bus_number, month, period):
     pdf = FPDF(orientation="L", unit="mm", format="A4")
     pdf.add_page()
     pdf.set_auto_page_break(auto=True, margin=10)
     pdf.set_font("Helvetica", "B", 14)
     month_name = date(2000, month, 1).strftime("%B")
-    pdf.cell(0, 10, f"Vehicle Expenses - {bus_number}  |  {month_name} ({period})", ln=True, align="C")
+    pdf.cell(0, 10, _safe_pdf_text(f"Vehicle Expenses - {bus_number}  |  {month_name} ({period})"), ln=True, align="C")
     pdf.ln(3)
     cols   = list(df.columns)
     page_w = pdf.w - 2 * pdf.l_margin
@@ -139,20 +142,20 @@ def _generate_expenses_pdf(df, bus_number, month, period):
     pdf.set_fill_color(52, 73, 94); pdf.set_text_color(255, 255, 255)
     pdf.set_font("Helvetica", "B", 9)
     for col in cols:
-        pdf.cell(col_w, 8, str(col), border=1, align="C", fill=True)
+        pdf.cell(col_w, 8, _safe_pdf_text(col), border=1, align="C", fill=True)
     pdf.ln()
     pdf.set_text_color(0, 0, 0); pdf.set_font("Helvetica", "", 9)
     for i, row in df.iterrows():
         fill = i % 2 == 0
         pdf.set_fill_color(245, 245, 245) if fill else pdf.set_fill_color(255, 255, 255)
         for col in cols:
-            pdf.cell(col_w, 7, str(row[col]) if pd.notna(row[col]) else "", border=1, align="C", fill=fill)
+            pdf.cell(col_w, 7, _safe_pdf_text(row[col]) if pd.notna(row[col]) else "", border=1, align="C", fill=fill)
         pdf.ln()
     total_amount = pd.to_numeric(df["Amount"], errors="coerce").sum()
     pdf.set_fill_color(230, 240, 255); pdf.set_font("Helvetica", "B", 9)
     for col in cols:
         val = "TOTAL" if col == "Category" else (f"{total_amount:,.0f}" if col == "Amount" else "")
-        pdf.cell(col_w, 8, str(val), border=1, align="C", fill=True)
+        pdf.cell(col_w, 8, _safe_pdf_text(val), border=1, align="C", fill=True)
     pdf.ln()
     return bytes(pdf.output())
 
