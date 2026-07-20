@@ -242,7 +242,7 @@ def editable_grid(bus_number: str):
                     rows.append({
                         "Date":           pd.to_datetime(r.get("date"), errors="coerce"),
                         "Status":         "Present",
-                        "Driver Name":    ['None'],
+                        "Driver Name":    None,
                         "Conductor Name": None,
                         "Scheduled KM":   r.get("scheduled_km") or 0,
                         "Actual KM":      r.get("actual_km") or 0,
