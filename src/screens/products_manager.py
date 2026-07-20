@@ -11,7 +11,7 @@ from src.database.db import (
     get_requirements, save_requirement, fulfill_requirement, delete_requirement,
 )
 
-def _compress_image(image_bytes: bytes, max_dimension: int = 700, quality: int = 60) -> bytes:
+def _compress_image(image_bytes: bytes, max_dimension: int = 500, quality: int = 50) -> bytes:
     """Image ko resize + compress karo taaki vision model ke token usage kam ho.
     Vision models token cost RESOLUTION (pixels) se decide karte hain, byte-size se nahi —
     isliye hamesha resize karo, chahe original chhoti bhi ho."""
