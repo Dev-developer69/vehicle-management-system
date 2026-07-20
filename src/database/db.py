@@ -65,6 +65,7 @@ def save_vehicle_records(bus_number: str, df: pd.DataFrame) -> None:
             "diesel": None if on_leave else (float(row.get("Diesel")) if pd.notna(row.get("Diesel")) else None),
             "diesel_km": None if on_leave else _safe_int(row.get("Diesel KM")),
             "income":    None if on_leave else _safe_int(row.get("Income")),
+            "gross_income": None if on_leave else _safe_int(row.get("Gross Income")),
             "updated_by":      current_email,
             "updated_by_role": current_role,
             "remark":          str(row.get("Remark") or ""),
@@ -92,6 +93,7 @@ def save_vehicle_records(bus_number: str, df: pd.DataFrame) -> None:
                 "diesel":          keep(new_data["diesel"],         old.get("diesel"),          [None]),
                 "diesel_km":       keep(new_data["diesel_km"],      old.get("diesel_km"),       [None]),
                 "income":          keep(new_data["income"],         old.get("income"),          [None]),
+                "gross_income":    keep(new_data["gross_income"],   old.get("gross_income"),    [None]),
             }
             supabase.table("vehicle_records") \
                 .update(merged) \
@@ -112,7 +114,7 @@ def get_vehicle_records(bus_number: str) -> pd.DataFrame:
     if not res.data:
         return pd.DataFrame(columns=[
             "Date", "Status", "Driver Name", "Conductor Name",
-            "Scheduled KM", "Actual KM", "Diesel", "Diesel KM", "Income", "Remark", "Next"
+            "Scheduled KM", "Actual KM", "Diesel", "Diesel KM", "Income", "Gross Income", "Remark", "Next"
         ])
 
     df = pd.DataFrame(res.data)
@@ -126,16 +128,17 @@ def get_vehicle_records(bus_number: str) -> pd.DataFrame:
         "diesel":         "Diesel",
         "diesel_km":      "Diesel KM",
         "income":         "Income",
+        "gross_income":   "Gross Income",
         "remark":         "Remark",
         "next_period":    "Next",
     })
 
-    for col, default in [("Status", "Present"), ("Remark", ""), ("Next", False), ("Diesel KM", 0)]:
+    for col, default in [("Status", "Present"), ("Remark", ""), ("Next", False), ("Diesel KM", 0), ("Gross Income", 0)]:
         if col not in df.columns:
             df[col] = default
 
     return df[["Date", "Status", "Driver Name", "Conductor Name",
-               "Scheduled KM", "Actual KM", "Diesel", "Diesel KM", "Income", "Remark", "Next"]]
+               "Scheduled KM", "Actual KM", "Diesel", "Diesel KM", "Income", "Gross Income", "Remark", "Next"]]]
 
 
 def get_diesel_summary(bus_number: str, from_date: str, to_date: str) -> pd.DataFrame:
