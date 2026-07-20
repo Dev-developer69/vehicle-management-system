@@ -100,9 +100,21 @@ def _extract_data_from_image(image_bytes: bytes, mime_type: str, prompt: str) ->
                     {"type": "text", "text": prompt},
                 ]
             }],
-            max_tokens=4000,
+            max_tokens=4000,   # 👈 bada table ho sakta hai, badha diya
         )
-        raw = re.sub(r"```json|```", "", response.choices[0].message.content.strip()).strip()
+        raw = (response.choices[0].message.content or "").strip()
+
+        if not raw:
+            st.error("Image read failed: model se khaali response aaya.")
+            return []
+
+        raw = re.sub(r"```json|```", "", raw).strip()
+
+        # Model kabhi kabhi extra text ke saath JSON deta hai — sirf [ ... ] wala hissa nikalo
+        match = re.search(r"\[.*\]", raw, re.DOTALL)
+        if match:
+            raw = match.group(0)
+
         parsed = json.loads(raw)
         if isinstance(parsed, dict):
             parsed = [parsed]
@@ -110,7 +122,6 @@ def _extract_data_from_image(image_bytes: bytes, mime_type: str, prompt: str) ->
     except Exception as e:
         st.error(f"Image read failed: {e}")
         return []
-
 
 # ──────────────────────────────────────────────
 # PRODUCTS PAGE — entry point
