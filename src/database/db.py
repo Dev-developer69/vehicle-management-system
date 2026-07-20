@@ -138,7 +138,7 @@ def get_vehicle_records(bus_number: str) -> pd.DataFrame:
             df[col] = default
 
     return df[["Date", "Status", "Driver Name", "Conductor Name",
-               "Scheduled KM", "Actual KM", "Diesel", "Diesel KM", "Income", "Gross Income", "Remark", "Next"]]]
+               "Scheduled KM", "Actual KM", "Diesel", "Diesel KM", "Income", "Gross Income", "Remark", "Next"]]
 
 
 def get_diesel_summary(bus_number: str, from_date: str, to_date: str) -> pd.DataFrame:
