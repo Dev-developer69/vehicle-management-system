@@ -4,6 +4,7 @@ import pandas as pd
 from datetime import date
 from fpdf import FPDF
 
+from src.screens.products_manager import _extract_data_from_image
 from src.database.db import (
     save_vehicle_records, save_driver_salary, save_vehicle_expenses,
     get_vehicle_records, get_driver_salary, get_vehicle_expenses,
