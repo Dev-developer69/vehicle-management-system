@@ -52,9 +52,8 @@ def _verify_with_claude(image_bytes: bytes, mime_type: str, groq_result: list) -
         import anthropic, base64, json, re
         client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
         b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
-
         msg = client.messages.create(
-            model="claude-sonnet-4-6",
+            model="claude-sonnet-5",
             max_tokens=1000,   # verification hai, chhota output expected
             messages=[{
                 "role": "user",
@@ -90,12 +89,10 @@ def _extract_data_from_image(image_bytes: bytes, mime_type: str, prompt: str) ->
     try:
         import base64, json, re
         from groq import Groq
-
         client = Groq(api_key=st.secrets["GROQ_API_KEY"])
         b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
-
         response = client.chat.completions.create(
-            model="meta-llama/llama-4-scout-17b-16e-instruct",
+            model="qwen/qwen3.6-27b",
             messages=[{
                 "role": "user",
                 "content": [
@@ -105,13 +102,11 @@ def _extract_data_from_image(image_bytes: bytes, mime_type: str, prompt: str) ->
             }],
             max_tokens=1000,
         )
-
         raw = re.sub(r"```json|```", "", response.choices[0].message.content.strip()).strip()
         parsed = json.loads(raw)
         if isinstance(parsed, dict):
             parsed = [parsed]
         return parsed if isinstance(parsed, list) else []
-
     except Exception as e:
         st.error(f"Image read failed: {e}")
         return []
