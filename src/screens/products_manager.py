@@ -11,17 +11,15 @@ from src.database.db import (
     get_requirements, save_requirement, fulfill_requirement, delete_requirement,
 )
 
-def _compress_image(image_bytes: bytes, max_dimension: int = 500, quality: int = 50) -> bytes:
-    """Image ko resize + compress karo taaki vision model ke token usage kam ho.
-    Vision models token cost RESOLUTION (pixels) se decide karte hain, byte-size se nahi —
-    isliye hamesha resize karo, chahe original chhoti bhi ho."""
+def _compress_image(image_bytes: bytes, max_dimension: int = 900, quality: int = 55) -> bytes:
+    """Image ko resize + compress karo taaki vision model ke token usage kam ho"""
     try:
         img = Image.open(io.BytesIO(image_bytes))
         img = img.convert("RGB")
 
         w, h = img.size
         scale = max_dimension / max(w, h)
-        if scale < 1:   # sirf bada karke chhota mat karo, sirf shrink karo
+        if scale < 1:
             img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
 
         buf = io.BytesIO()
@@ -32,7 +30,7 @@ def _compress_image(image_bytes: bytes, max_dimension: int = 500, quality: int =
     except Exception as e:
         st.warning(f"⚠️ Compression failed, using original: {e}")
         return image_bytes
-
+        
 # ──────────────────────────────────────────────
 # HELPER: Image → Product data via Claude API
 # ──────────────────────────────────────────────
@@ -131,7 +129,9 @@ def _extract_data_from_image(image_bytes: bytes, mime_type: str, prompt: str) ->
             max_tokens=4000,   
         )
         raw = (response.choices[0].message.content or "").strip()
-
+        if not raw:
+            st.error(f"Image read failed: model se khaali response aaya. finish_reason: {response.choices[0].finish_reason}")
+            return []
         if not raw:
             st.error("Image read failed: model se khaali response aaya.")
             return []
