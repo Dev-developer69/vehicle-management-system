@@ -100,7 +100,7 @@ def _extract_data_from_image(image_bytes: bytes, mime_type: str, prompt: str) ->
                     {"type": "text", "text": prompt},
                 ]
             }],
-            max_tokens=4000,   # 👈 bada table ho sakta hai, badha diya
+            max_tokens=4000,   
         )
         raw = (response.choices[0].message.content or "").strip()
 
@@ -110,7 +110,47 @@ def _extract_data_from_image(image_bytes: bytes, mime_type: str, prompt: str) ->
 
         raw = re.sub(r"```json|```", "", raw).strip()
 
-        # Model kabhi kabhi extra text ke saath JSON deta hai — sirf [ ... ] wala hissa nikalo
+    
+        match = re.search(r"\[.*\]", raw, re.DOTALL)
+        if match:
+            raw = match.group(0)
+
+        parsed = json.loads(raw)
+        if isinstance(parsed, dict):
+            parsed = [parsed]
+        return parsed if isinstance(parsed, list) else []
+    except Exception as e:
+        st.error(f"Image read failed: {e}")
+        return []
+
+
+# ──────────────────────────────────────────────
+# HELPER: Multiple images (same rows, split columns) → merged structured data
+# ──────────────────────────────────────────────
+def _extract_data_from_images(images: list, prompt: str) -> list:
+    """images = list of (image_bytes, mime_type) tuples, same rows in same order across images"""
+    try:
+        import base64, json, re
+        from groq import Groq
+        client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+
+        content = []
+        for image_bytes, mime_type in images:
+            b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
+            content.append({"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{b64}"}})
+        content.append({"type": "text", "text": prompt})
+
+        response = client.chat.completions.create(
+            model="qwen/qwen3.6-27b",
+            messages=[{"role": "user", "content": content}],
+            max_tokens=4000,
+        )
+        raw = (response.choices[0].message.content or "").strip()
+        if not raw:
+            st.error("Image read failed: model se khaali response aaya.")
+            return []
+
+        raw = re.sub(r"```json|```", "", raw).strip()
         match = re.search(r"\[.*\]", raw, re.DOTALL)
         if match:
             raw = match.group(0)
