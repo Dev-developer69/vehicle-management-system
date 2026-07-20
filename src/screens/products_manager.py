@@ -2,12 +2,31 @@ import streamlit as st
 import pandas as pd
 from datetime import date
 from src.ui.home_base_layout import home_layout
+from PIL import Image
+import io
 
 from src.database.db import (
     get_suppliers, save_supplier, delete_supplier, get_supplier_products,
     get_products, save_product, delete_product,
     get_requirements, save_requirement, fulfill_requirement, delete_requirement,
 )
+
+def _compress_image(image_bytes: bytes, max_dimension: int = 1200, quality: int = 70) -> bytes:
+    """Image ko resize + compress karo taaki vision model ke token usage kam ho"""
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+        img = img.convert("RGB")
+
+        w, h = img.size
+        if max(w, h) > max_dimension:
+            scale = max_dimension / max(w, h)
+            img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=quality, optimize=True)
+        return buf.getvalue()
+    except Exception:
+        return image_bytes  # compress fail ho toh original hi bhej do
 
 # ──────────────────────────────────────────────
 # HELPER: Image → Product data via Claude API
@@ -89,6 +108,10 @@ def _extract_data_from_image(image_bytes: bytes, mime_type: str, prompt: str) ->
     try:
         import base64, json, re
         from groq import Groq
+
+        image_bytes = _compress_image(image_bytes)  
+        mime_type = "image/jpeg"                       
+        
         client = Groq(api_key=st.secrets["GROQ_API_KEY"])
         b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
         response = client.chat.completions.create(
@@ -128,7 +151,6 @@ def _extract_data_from_image(image_bytes: bytes, mime_type: str, prompt: str) ->
 # HELPER: Multiple images (same rows, split columns) → merged structured data
 # ──────────────────────────────────────────────
 def _extract_data_from_images(images: list, prompt: str) -> list:
-    """images = list of (image_bytes, mime_type) tuples, same rows in same order across images"""
     try:
         import base64, json, re
         from groq import Groq
@@ -136,6 +158,8 @@ def _extract_data_from_images(images: list, prompt: str) -> list:
 
         content = []
         for image_bytes, mime_type in images:
+            image_bytes = _compress_image(image_bytes) 
+            mime_type = "image/jpeg"                       
             b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
             content.append({"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{b64}"}})
         content.append({"type": "text", "text": prompt})
