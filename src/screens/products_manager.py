@@ -154,44 +154,29 @@ def _extract_data_from_image(image_bytes: bytes, mime_type: str, prompt: str) ->
 
 # ──────────────────────────────────────────────
 # HELPER: Multiple images (same rows, split columns) → merged structured data
+# Har image alag call mein bhejo (token limit se bachne ke liye), phir row-position se merge karo
 # ──────────────────────────────────────────────
 def _extract_data_from_images(images: list, prompt: str) -> list:
-    try:
-        import base64, json, re
-        from groq import Groq
-        client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+    all_results = []
+    for image_bytes, mime_type in images:
+        single_result = _extract_data_from_image(image_bytes, mime_type, prompt)
+        all_results.append(single_result or [])
 
-        content = []
-        for image_bytes, mime_type in images:
-            image_bytes = _compress_image(image_bytes) 
-            mime_type = "image/jpeg"                       
-            b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
-            content.append({"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{b64}"}})
-        content.append({"type": "text", "text": prompt})
-
-        response = client.chat.completions.create(
-            model="qwen/qwen3.6-27b",
-            messages=[{"role": "user", "content": content}],
-            max_tokens=4000,
-        )
-        raw = (response.choices[0].message.content or "").strip()
-        if not raw:
-            st.error("Image read failed: model se khaali response aaya.")
-            return []
-
-        raw = re.sub(r"```json|```", "", raw).strip()
-        match = re.search(r"\[.*\]", raw, re.DOTALL)
-        if match:
-            raw = match.group(0)
-
-        parsed = json.loads(raw)
-        if isinstance(parsed, dict):
-            parsed = [parsed]
-        return parsed if isinstance(parsed, list) else []
-    except Exception as e:
-        st.error(f"Image read failed: {e}")
+    if not all_results:
         return []
 
+    # Row-position se merge karo — jo bhi non-null field ho wo le lo
+    max_len = max(len(r) for r in all_results)
+    merged = []
+    for i in range(max_len):
+        combined = {}
+        for result_set in all_results:
+            if i < len(result_set) and isinstance(result_set[i], dict):
+                for k, v in result_set[i].items():
+                    if v is not None:
+                        combined[k] = v
+        merged.append(combined)
+    return merged
 # ──────────────────────────────────────────────
 # PRODUCTS PAGE — entry point
 # ──────────────────────────────────────────────
