@@ -100,7 +100,7 @@ def _extract_data_from_image(image_bytes: bytes, mime_type: str, prompt: str) ->
                     {"type": "text", "text": prompt},
                 ]
             }],
-            max_tokens=1000,
+            max_tokens=4000,
         )
         raw = re.sub(r"```json|```", "", response.choices[0].message.content.strip()).strip()
         parsed = json.loads(raw)
