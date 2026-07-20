@@ -192,40 +192,45 @@ def editable_grid(bus_number: str):
     st.markdown(f"### Vehicle Records {bus_number} 🚐")
 
     # ── Extract Income from Image (optional) ──
-    with st.expander("📷 Extract Income from Image (optional)"):
-        img_date = st.date_input("Entry date", value=date.today(), key=f"inc_img_date_{bus_number}")
-        img_file = st.file_uploader("Ticket/receipt image", type=["jpg", "jpeg", "png", "webp"],
+    # ── Extract Income from Image (bulk — poore period ka table) ──
+    with st.expander("📷 Extract Records from Image (optional)"):
+        img_file = st.file_uploader("Period table image (Date, Sch KM, Actual KM, Gross)",
+                                     type=["jpg", "jpeg", "png", "webp"],
                                      key=f"inc_img_{bus_number}")
         if img_file and st.button("🔍 Extract", key=f"inc_extract_{bus_number}"):
             with st.spinner("Extracting..."):
                 from src.screens.products_manager import _extract_data_from_image
                 result = _extract_data_from_image(
                     img_file.read(), img_file.type,
-                    "Extract the Gross Income (total revenue) and Base Fare from this bus ticket/receipt image. "
-                    "Return ONLY a JSON array with ONE object with keys: "
-                    "gross_income (number or null), base_fare (number or null). "
+                    "Extract every row from this table. Columns are: Date, Scheduled KM, Actual KM, Gross Income. "
+                    "Skip the TOTAL row. Convert date to YYYY-MM-DD format. "
+                    "If Scheduled/Actual/Gross is blank for a row, use 0. "
+                    "Return ONLY a JSON array with keys: date (YYYY-MM-DD string), "
+                    "scheduled_km (number), actual_km (number), gross_income (number). "
                     "No explanation, no markdown, just raw JSON array."
                 )
             if result:
-                data = result[0]
-                st.session_state[key] = pd.DataFrame({
-                    "Date":           [img_date],
-                    "Status":         ["Present"],
-                    "Driver Name":    [None],
-                    "Conductor Name": [None],
-                    "Scheduled KM":   [scheduled_km],
-                    "Actual KM":      [0],
-                    "Diesel":         [None],
-                    "Diesel KM":      [None],
-                    "Income":         [data.get("base_fare")],
-                    "Gross Income":   [data.get("gross_income")],
-                    "Remark":         [""],
-                    "Next":           [False],
-                })
-                st.success(
-                    f"✅ Base Fare: {data.get('base_fare')}, Gross Income: {data.get('gross_income')} — "
-                    f"grid mein fill ho gaya, baaki fields (Driver Name etc.) bhar ke Save karo"
-                )
+                rows = []
+                for r in result:
+                    rows.append({
+                        "Date":           pd.to_datetime(r.get("date"), errors="coerce"),
+                        "Status":         "Present",
+                        "Driver Name":    None,
+                        "Conductor Name": None,
+                        "Scheduled KM":   r.get("scheduled_km") or 0,
+                        "Actual KM":      r.get("actual_km") or 0,
+                        "Diesel":         None,
+                        "Diesel KM":      None,
+                        "Income":         None,
+                        "Gross Income":   r.get("gross_income") or 0,
+                        "Remark":         "",
+                        "Next":           False,
+                    })
+                new_df = pd.DataFrame(rows)
+                new_df = new_df.dropna(subset=["Date"])
+                new_df["Date"] = new_df["Date"].dt.date
+                st.session_state[key] = new_df
+                st.success(f"✅ {len(new_df)} rows extracted — Driver/Conductor Name bhar ke Save karo")
                 st.rerun()
             else:
                 st.warning("⚠️ Extraction fail hua, manually fill karo.")
