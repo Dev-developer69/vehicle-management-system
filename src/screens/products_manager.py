@@ -24,9 +24,12 @@ def _compress_image(image_bytes: bytes, max_dimension: int = 1200, quality: int 
 
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=quality, optimize=True)
-        return buf.getvalue()
-    except Exception:
-        return image_bytes  # compress fail ho toh original hi bhej do
+        compressed = buf.getvalue()
+        st.caption(f"🗜️ Compressed: {len(image_bytes)} → {len(compressed)} bytes")   # 👈 temp debug line
+        return compressed
+    except Exception as e:
+        st.warning(f"⚠️ Compression failed, using original: {e}")   # 👈 temp debug line
+        return image_bytes
 
 # ──────────────────────────────────────────────
 # HELPER: Image → Product data via Claude API
