@@ -194,37 +194,61 @@ def editable_grid(bus_number: str):
 
     st.markdown(f"### Vehicle Records {bus_number} 🚐")
 
-    # ── Extract Income from Image (optional) ──
-    # ── Extract Income from Image (bulk — poore period ka table) ──
+   # ── Extract Income from Image (bulk — poore period ka table, 1 ya 2 images) ──
     with st.expander("📷 Extract Records from Image (optional)"):
-        img_file = st.file_uploader("Period table image (Date, Sch KM, Actual KM, Gross)",
-                                     type=["jpg", "jpeg", "png", "webp"],
-                                     key=f"inc_img_{bus_number}")
-        if img_file and st.button("🔍 Extract", key=f"inc_extract_{bus_number}"):
+        st.caption("Agar sheet chaudi hai aur do photos mein aayi hai (ek mein Date, dusri mein Income/Diesel), dono upload karo — rows same order mein match hongi.")
+        img_file_1 = st.file_uploader("Image 1 (Date wali, ya poori image)",
+                                       type=["jpg", "jpeg", "png", "webp"],
+                                       key=f"inc_img1_{bus_number}")
+        img_file_2 = st.file_uploader("Image 2 (optional — baaki columns wali)",
+                                       type=["jpg", "jpeg", "png", "webp"],
+                                       key=f"inc_img2_{bus_number}")
+
+        if img_file_1 and st.button("🔍 Extract", key=f"inc_extract_{bus_number}"):
             with st.spinner("Extracting..."):
-                from src.screens.products_manager import _extract_data_from_image
-                result = _extract_data_from_image(
-                    img_file.read(), img_file.type,
-                    "Extract every row from this table. Columns are: Date, Scheduled KM, Actual KM, Gross Income. "
-                    "Skip the TOTAL row. Convert date to YYYY-MM-DD format. "
-                    "If Scheduled/Actual/Gross is blank for a row, use 0. "
-                    "Return ONLY a JSON array with keys: date (YYYY-MM-DD string), "
-                    "scheduled_km (number), actual_km (number), gross_income (number). "
+                from src.screens.products_manager import _extract_data_from_images
+
+                images = [(img_file_1.read(), img_file_1.type)]
+                if img_file_2:
+                    images.append((img_file_2.read(), img_file_2.type))
+
+                prompt = (
+                    "This is a vehicle log table with varying column names across different sheets. "
+                    + ("Two images are provided — they show the SAME rows in the SAME order, "
+                       "just different columns of a wide table split across two photos. "
+                       "Merge them row-by-row by position (1st row of image 1 = 1st row of image 2, etc.). "
+                       if img_file_2 else "")
+                    + "Extract every row (skip the TOTAL/summary row). "
+                    "For each row, only extract these fields if a matching column exists "
+                    "(match by meaning, column headers may vary):\n"
+                    "- date: the row's date (day/date column). Convert to YYYY-MM-DD. "
+                    "If only one date is shown for the whole sheet, use it for every row and add day offset if a day-of-month/serial column exists.\n"
+                    "- scheduled_km: column like 'Sch', 'Scheduled', 'SCH.KM'\n"
+                    "- actual_km: column like 'Actual', 'ACT.KM'\n"
+                    "- diesel: column like 'Diesel', 'DSL', 'Fuel' (litres)\n"
+                    "- income: column like 'Income', 'INCOME', 'Base Fare' (NOT other-income, NOT per-km, NOT load factor)\n"
+                    "- gross_income: column like 'Gross', 'GROSS', 'Total Income'\n\n"
+                    "IGNORE all other columns (e.g. IPKM, LF, OTH.INC, load factor, per-km rates, habaa, registration number). "
+                    "If a field's matching column is not present in the image(s), set it to null — do not guess. "
+                    "Return ONLY a JSON array with keys: date, scheduled_km, actual_km, diesel, income, gross_income. "
                     "No explanation, no markdown, just raw JSON array."
                 )
+
+                result = _extract_data_from_images(images, prompt)
+
             if result:
                 rows = []
                 for r in result:
                     rows.append({
                         "Date":           pd.to_datetime(r.get("date"), errors="coerce"),
                         "Status":         "Present",
-                        "Driver Name":    None,
+                        "Driver Name":    ['None'],
                         "Conductor Name": None,
                         "Scheduled KM":   r.get("scheduled_km") or 0,
                         "Actual KM":      r.get("actual_km") or 0,
-                        "Diesel":         None,
+                        "Diesel":         r.get("diesel"),
                         "Diesel KM":      None,
-                        "Income":         None,
+                        "Income":         r.get("income"),
                         "Gross Income":   r.get("gross_income") or 0,
                         "Remark":         "",
                         "Next":           False,
@@ -236,7 +260,7 @@ def editable_grid(bus_number: str):
                 st.success(f"✅ {len(new_df)} rows extracted — Driver/Conductor Name bhar ke Save karo")
                 st.rerun()
             else:
-                st.warning("⚠️ Extraction fail hua, manually fill karo.")
+                st.warning("⚠️ Extraction failed, fill manually .")
 
     st.data_editor(
         st.session_state[key],
