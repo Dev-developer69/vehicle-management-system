@@ -11,24 +11,26 @@ from src.database.db import (
     get_requirements, save_requirement, fulfill_requirement, delete_requirement,
 )
 
-def _compress_image(image_bytes: bytes, max_dimension: int = 1200, quality: int = 70) -> bytes:
-    """Image ko resize + compress karo taaki vision model ke token usage kam ho"""
+def _compress_image(image_bytes: bytes, max_dimension: int = 700, quality: int = 60) -> bytes:
+    """Image ko resize + compress karo taaki vision model ke token usage kam ho.
+    Vision models token cost RESOLUTION (pixels) se decide karte hain, byte-size se nahi —
+    isliye hamesha resize karo, chahe original chhoti bhi ho."""
     try:
         img = Image.open(io.BytesIO(image_bytes))
         img = img.convert("RGB")
 
         w, h = img.size
-        if max(w, h) > max_dimension:
-            scale = max_dimension / max(w, h)
+        scale = max_dimension / max(w, h)
+        if scale < 1:   # sirf bada karke chhota mat karo, sirf shrink karo
             img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
 
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=quality, optimize=True)
         compressed = buf.getvalue()
-        st.caption(f"🗜️ Compressed: {len(image_bytes)} → {len(compressed)} bytes")   # 👈 temp debug line
+        st.caption(f"🗜️ Compressed: {len(image_bytes)} → {len(compressed)} bytes ({img.size[0]}x{img.size[1]}px)")
         return compressed
     except Exception as e:
-        st.warning(f"⚠️ Compression failed, using original: {e}")   # 👈 temp debug line
+        st.warning(f"⚠️ Compression failed, using original: {e}")
         return image_bytes
 
 # ──────────────────────────────────────────────
