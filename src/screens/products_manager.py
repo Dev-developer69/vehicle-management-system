@@ -75,7 +75,7 @@ def _verify_with_claude(image_bytes: bytes, mime_type: str, groq_result: list) -
         client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
         b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
         msg = client.messages.create(
-            model="claude-sonnet-5",
+            model="claude-sonnet-4-6",
             max_tokens=1000,   # verification hai, chhota output expected
             messages=[{
                 "role": "user",
