@@ -194,48 +194,93 @@ def editable_grid(bus_number: str):
 
     st.markdown(f"### Vehicle Records {bus_number} 🚐")
 
-   # ── Extract Income from Image (bulk — poore period ka table, 1 ya 2 images) ──
+    # ── Extract Records from Image ──
     with st.expander("📷 Extract Records from Image (optional)"):
-        st.caption("Agar sheet chaudi hai aur do photos mein aayi hai (ek mein Date, dusri mein Income/Diesel), dono upload karo — rows same order mein match hongi.")
+        st.caption("Agar sheet chaudi hai aur do photos mein aayi hai, dono upload karo.")
+        
+        # ✅ AI choice
+        ai_choice = st.radio(
+            "🤖 AI Model",
+            ["🤖 Claude (Accurate — 2 images ek saath)", "⚡ Groq (Fast — 1 image at a time)"],
+            horizontal=True,
+            key=f"ai_choice_{bus_number}"
+        )
+    
         img_file_1 = st.file_uploader("Image 1 (Date wali, ya poori image)",
-                                       type=["jpg", "jpeg", "png", "webp"],
+                                       type=["jpg","jpeg","png","webp"],
                                        key=f"inc_img1_{bus_number}")
         img_file_2 = st.file_uploader("Image 2 (optional — baaki columns wali)",
-                                       type=["jpg", "jpeg", "png", "webp"],
+                                       type=["jpg","jpeg","png","webp"],
                                        key=f"inc_img2_{bus_number}")
-
+    
         if img_file_1 and st.button("🔍 Extract", key=f"inc_extract_{bus_number}"):
             with st.spinner("Extracting..."):
-                from src.screens.products_manager import _extract_data_from_images
-
-                images = [(img_file_1.read(), img_file_1.type)]
-                if img_file_2:
-                    images.append((img_file_2.read(), img_file_2.type))
-
+                from src.screens.products_manager import (
+                    _extract_data_from_images, _compress_image
+                )
+    
                 prompt = (
                     "This is a vehicle log table with varying column names across different sheets. "
                     + ("Two images are provided — they show the SAME rows in the SAME order, "
                        "just different columns of a wide table split across two photos. "
-                       "Merge them row-by-row by position (1st row of image 1 = 1st row of image 2, etc.). "
+                       "Merge them row-by-row by position. "
                        if img_file_2 else "")
                     + "Extract every row (skip the TOTAL/summary row). "
-                    "For each row, only extract these fields if a matching column exists "
-                    "(match by meaning, column headers may vary):\n"
-                    "- date: the row's date (day/date column). Convert to YYYY-MM-DD. "
-                    "If only one date is shown for the whole sheet, use it for every row and add day offset if a day-of-month/serial column exists.\n"
-                    "- scheduled_km: column like 'Sch', 'Scheduled', 'SCH.KM'\n"
-                    "- actual_km: column like 'Actual', 'ACT.KM'\n"
-                    "- diesel: column like 'Diesel', 'DSL', 'Fuel' (litres)\n"
-                    "- income: column like 'Income', 'INCOME', 'Base Fare' (NOT other-income, NOT per-km, NOT load factor)\n"
-                    "- gross_income: column like 'Gross', 'GROSS', 'Total Income'\n\n"
-                    "IGNORE all other columns (e.g. IPKM, LF, OTH.INC, load factor, per-km rates, habaa, registration number). "
-                    "If a field's matching column is not present in the image(s), set it to null — do not guess. "
-                    "Return ONLY a JSON array with keys: date, scheduled_km, actual_km, diesel, income, gross_income. "
-                    "No explanation, no markdown, just raw JSON array."
+                    "For each row extract these fields if matching column exists:\n"
+                    "- date: Convert to YYYY-MM-DD.\n"
+                    "- scheduled_km: 'Sch', 'Scheduled', 'SCH.KM'\n"
+                    "- actual_km: 'Actual', 'ACT.KM'\n"
+                    "- diesel: 'Diesel', 'DSL', 'Fuel' (litres)\n"
+                    "- income: 'Income', 'INCOME', 'Base Fare' (NOT per-km, NOT load factor)\n"
+                    "- gross_income: 'Gross', 'GROSS', 'Total Income'\n\n"
+                    "IGNORE: IPKM, LF, OTH.INC, load factor, per-km rates. "
+                    "If field not present set null. "
+                    "Return ONLY JSON array with keys: date, scheduled_km, actual_km, diesel, income, gross_income. "
+                    "No explanation, no markdown."
                 )
-
-                result = _extract_data_from_images(images, prompt)
-
+    
+                if "Claude" in ai_choice:
+                    # ✅ Claude — dono images ek saath ek call mein
+                    import anthropic, base64, json, re
+                    client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
+    
+                    img1_bytes = _compress_image(img_file_1.read())
+                    b64_1      = base64.standard_b64encode(img1_bytes).decode("utf-8")
+    
+                    content = [
+                        {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64_1}},
+                    ]
+                    if img_file_2:
+                        img2_bytes = _compress_image(img_file_2.read())
+                        b64_2      = base64.standard_b64encode(img2_bytes).decode("utf-8")
+                        content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64_2}})
+    
+                    content.append({"type": "text", "text": prompt})
+    
+                    try:
+                        msg = client.messages.create(
+                            model="claude-sonnet-4-6",
+                            max_tokens=4000,
+                            messages=[{"role": "user", "content": content}],
+                        )
+                        raw   = re.sub(r"```json|```", "", msg.content[0].text.strip()).strip()
+                        match = re.search(r"\[.*\]", raw, re.DOTALL)
+                        if match:
+                            raw = match.group(0)
+                        result = json.loads(raw)
+                        if not isinstance(result, list):
+                            result = []
+                    except Exception as e:
+                        st.error(f"❌ Claude extract failed: {e}")
+                        result = []
+    
+                else:
+                    # ✅ Groq — sequentially with delay
+                    images = [(img_file_1.read(), img_file_1.type)]
+                    if img_file_2:
+                        images.append((img_file_2.read(), img_file_2.type))
+                    result = _extract_data_from_images(images, prompt)
+    
             if result:
                 rows = []
                 for r in result:
@@ -260,7 +305,7 @@ def editable_grid(bus_number: str):
                 st.success(f"✅ {len(new_df)} rows extracted — Driver/Conductor Name bhar ke Save karo")
                 st.rerun()
             else:
-                st.warning("⚠️ Extraction failed, fill manually .")
+                st.warning("⚠️ Extraction failed, fill manually.")
 
     st.data_editor(
         st.session_state[key],
