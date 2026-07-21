@@ -152,22 +152,22 @@ def _extract_data_from_image(image_bytes: bytes, mime_type: str, prompt: str) ->
         return []
 
 
-# ──────────────────────────────────────────────
-# HELPER: Multiple images (same rows, split columns) → merged structured data
-# Har image alag call mein bhejo (token limit se bachne ke liye), phir row-position se merge karo
-# ──────────────────────────────────────────────
 def _extract_data_from_images(images: list, prompt: str) -> list:
+    import time
     all_results = []
-    for image_bytes, mime_type in images:
+    for i, (image_bytes, mime_type) in enumerate(images):
+        # ✅ Pehli image ke baad wait karo
+        if i > 0:
+            st.caption("⏳ Rate limit se bachne ke liye 20s wait...")
+            time.sleep(20)
         single_result = _extract_data_from_image(image_bytes, mime_type, prompt)
         all_results.append(single_result or [])
 
     if not all_results:
         return []
 
-    # Row-position se merge karo — jo bhi non-null field ho wo le lo
     max_len = max(len(r) for r in all_results)
-    merged = []
+    merged  = []
     for i in range(max_len):
         combined = {}
         for result_set in all_results:
