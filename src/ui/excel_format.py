@@ -285,12 +285,11 @@ def editable_grid(bus_number: str):
                 rows = []
                 for r in result:
                     sched_km = r.get("scheduled_km") or 0
-                    # ✅ Scheduled KM 0 hai toh On Leave
                     status = "On Leave" if sched_km == 0 else "Present"
                     rows.append({
                         "Date":           pd.to_datetime(r.get("date"), errors="coerce"),
                         "Status":         status,
-                        "Driver Name":    "None",   
+                        "Driver Name":    "None",
                         "Conductor Name": "None",
                         "Scheduled KM":   sched_km,
                         "Actual KM":      r.get("actual_km") or 0,
@@ -301,6 +300,8 @@ def editable_grid(bus_number: str):
                         "Remark":         "",
                         "Next":           False,
                     })
+                # ✅ new_df pehle define karo — ye missing tha
+                new_df = pd.DataFrame(rows)
                 new_df = new_df.dropna(subset=["Date"])
                 new_df["Date"] = new_df["Date"].dt.date
                 st.session_state[key] = new_df
