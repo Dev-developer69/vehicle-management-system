@@ -16,6 +16,10 @@ VEHICLE_MAP = {
     "3131": "page_3131",
 }
 
+# ── Config: adjust to your fleet's actual normal mileage range ──
+MIN_NORMAL_MILEAGE = 4.0   # km/litre neeche isse -> "Check" flag
+DIESEL_PRICE_PER_L = 90    # already used in Tab 6 for est. cost
+
 
 def _get_current_period():
     today = date.today()
@@ -176,6 +180,17 @@ def quick_overview(bus_list: list):
     df["diesel_per_km"]  = (df["diesel"] / df["actual_km"].replace(0, float("nan"))).round(3)
     df["km_per_litre"]   = (df["actual_km"] / df["diesel"].replace(0, float("nan"))).round(2)
 
+    # ── NEW: Mileage Alert flag per row ──
+    def _alert_status(row):
+        if row["diesel"] > 0 and row["actual_km"] == 0:
+            return "🚨 Red flag"
+        if pd.notna(row["km_per_litre"]) and row["km_per_litre"] < MIN_NORMAL_MILEAGE:
+            return "⚠️ Check"
+        if row["diesel"] > 0:
+            return "✅ Normal"
+        return "—"
+    df["alert_status"] = df.apply(_alert_status, axis=1)
+
     summary = df.groupby("bus_number").agg(
         Actual_KM      =("actual_km",      "sum"),
         Scheduled_KM   =("scheduled_km",   "sum"),
@@ -211,16 +226,21 @@ def quick_overview(bus_list: list):
     st.markdown("<br>", unsafe_allow_html=True)
 
     # ══════════════════════════════════════════
-    # TABS
+    # TABS  (3 naye tabs add kiye: 7, 8, 9)
     # ══════════════════════════════════════════
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
         "📈 Daily KM Trend",
         "📊 Scheduled vs Actual",
         "🎯 KM Efficiency",
         "🥧 Driver Distribution",
         "👤 Driver Performance",
         "⛽ Diesel & Income",
+        "🚨 Mileage Alert",
+        "💰 Income per KM",
+        "📋 Monthly Summary",
     ])
+
+    colors = ["#14A085", "#7B8CFF", "#FFB347", "#FF5252"]
 
     # ── Tab 1: Daily KM Trend (line chart per bus) ──
     with tab1:
@@ -229,7 +249,6 @@ def quick_overview(bus_list: list):
             values="actual_km", aggfunc="sum"
         ).fillna(0)
         fig = go.Figure()
-        colors = ["#14A085", "#7B8CFF", "#FFB347", "#FF5252"]
         for i, col in enumerate(pivot.columns):
             fig.add_trace(go.Scatter(
                 x=pivot.index, y=pivot[col],
@@ -296,9 +315,9 @@ def quick_overview(bus_list: list):
         for i, bus in enumerate(bus_list):
             bus_df = df[df["bus_number"] == bus]
             driver_days = (
-    bus_df.assign(
-        driver_name=bus_df["driver_name"].str.lower().str.strip()
-    ).groupby("driver_name")["date"].count().reset_index())
+                bus_df.assign(
+                    driver_name=bus_df["driver_name"].str.lower().str.strip()
+                ).groupby("driver_name")["date"].count().reset_index())
             driver_days.columns = ["Driver", "Days"]
             with donut_cols[i]:
                 st.markdown(f"**🚌 {bus}**")
@@ -314,7 +333,7 @@ def quick_overview(bus_list: list):
 
     # ── Tab 5: Driver Performance ──
     with tab5:
-        driver_perf = (df.assign( driver_name=df["driver_name"].str.strip().str.lower())
+        driver_perf = (df.assign(driver_name=df["driver_name"].str.strip().str.lower())
             .groupby("driver_name")
             .agg(
                 Total_KM=("actual_km", "sum"),
@@ -325,15 +344,14 @@ def quick_overview(bus_list: list):
             )
             .reset_index()
             .rename(columns={"driver_name": "Driver"})
-                )
-        driver_perf["Avg_KM_Day"]    = driver_perf["Avg_KM_Day"].round(1)
+        )
+        driver_perf["Avg_KM_Day"]     = driver_perf["Avg_KM_Day"].round(1)
         driver_perf["Avg_Efficiency"] = driver_perf["Avg_Efficiency"].round(1)
         driver_perf = driver_perf.sort_values("Total_KM", ascending=False)
         driver_perf.insert(0, "Rank", range(1, len(driver_perf) + 1))
 
         st.dataframe(driver_perf, use_container_width=True, hide_index=True)
 
-        # Driver KM bar chart
         fig = px.bar(
             driver_perf, x="Driver", y="Total_KM",
             color="Total_KM", color_continuous_scale="teal",
@@ -364,7 +382,6 @@ def quick_overview(bus_list: list):
                 fig.update_layout(showlegend=False, yaxis_title="Diesel (L)")
                 st.plotly_chart(_plotly_dark(fig), use_container_width=True)
 
-                # KM per litre
                 mileage = df[df["diesel"] > 0].groupby("bus_number").apply(
                     lambda x: (x["actual_km"].sum() / x["diesel"].sum()).round(2)
                 ).reset_index()
@@ -385,13 +402,104 @@ def quick_overview(bus_list: list):
 
             if has_diesel and has_income:
                 st.markdown("**💰 Income vs ⛽ Diesel Cost (@ ₹90/L est.):**")
-                summary["Est_Diesel_Cost"] = (summary["Diesel"] * 90).round(0)
+                summary["Est_Diesel_Cost"] = (summary["Diesel"] * DIESEL_PRICE_PER_L).round(0)
                 summary["Net"]             = summary["Income"] - summary["Est_Diesel_Cost"]
                 fig = go.Figure()
-                fig.add_trace(go.Bar(name="Income",         x=summary["Bus"], y=summary["Income"],         marker_color="#14A085"))
-                fig.add_trace(go.Bar(name="Est Diesel Cost",x=summary["Bus"], y=summary["Est_Diesel_Cost"],marker_color="#FF5252"))
+                fig.add_trace(go.Bar(name="Income",          x=summary["Bus"], y=summary["Income"],          marker_color="#14A085"))
+                fig.add_trace(go.Bar(name="Est Diesel Cost", x=summary["Bus"], y=summary["Est_Diesel_Cost"], marker_color="#FF5252"))
                 fig.update_layout(barmode="group", yaxis_title="₹")
                 st.plotly_chart(_plotly_dark(fig), use_container_width=True)
+
+    # ══════════════════════════════════════════
+    # ── Tab 7 (NEW): Mileage Alert ──
+    # Diesel liya but KM 0 -> Red flag (fraud/engine issue signal)
+    # Mileage MIN_NORMAL_MILEAGE se kam -> Check
+    # ══════════════════════════════════════════
+    with tab7:
+        alert_df = df[df["diesel"] > 0][
+            ["date_str", "bus_number", "driver_name", "actual_km", "diesel", "km_per_litre", "alert_status"]
+        ].rename(columns={
+            "date_str": "Date", "bus_number": "Bus", "driver_name": "Driver",
+            "actual_km": "Actual KM", "diesel": "Diesel (L)",
+            "km_per_litre": "Mileage (KM/L)", "alert_status": "Status",
+        }).sort_values("Date")
+
+        red_flags = alert_df[alert_df["Status"] == "🚨 Red flag"]
+        checks    = alert_df[alert_df["Status"] == "⚠️ Check"]
+
+        m1, m2, m3 = st.columns(3)
+        m1.metric("🚨 Red flags", len(red_flags))
+        m2.metric("⚠️ Low mileage days", len(checks))
+        m3.metric("✅ Normal days", len(alert_df[alert_df["Status"] == "✅ Normal"]))
+
+        if len(red_flags) > 0:
+            st.error(f"{len(red_flags)} din aisa hain jaha diesel liya gaya lekin gaadi chali nahi — check karo!")
+        st.dataframe(alert_df, use_container_width=True, hide_index=True)
+        st.caption(f"Red flag = diesel liya but 0 km chali. Check = mileage {MIN_NORMAL_MILEAGE} km/L se kam.")
+
+    # ══════════════════════════════════════════
+    # ── Tab 8 (NEW): Income per KM ──
+    # ══════════════════════════════════════════
+    with tab8:
+        ipk_driver = (df.assign(driver_name=df["driver_name"].str.strip().str.lower())
+            .groupby("driver_name")
+            .agg(Income=("income", "sum"), Actual_KM=("actual_km", "sum"))
+            .reset_index()
+            .rename(columns={"driver_name": "Driver"})
+        )
+        ipk_driver = ipk_driver[ipk_driver["Actual_KM"] > 0]
+        ipk_driver["Income_per_KM"] = (ipk_driver["Income"] / ipk_driver["Actual_KM"]).round(2)
+        ipk_driver = ipk_driver.sort_values("Income_per_KM", ascending=False)
+
+        fig = px.bar(
+            ipk_driver, x="Driver", y="Income_per_KM",
+            color="Income_per_KM", color_continuous_scale="teal",
+            text="Income_per_KM",
+        )
+        fig.update_traces(texttemplate="₹%{text}", textposition="outside")
+        fig.update_layout(xaxis_title="Driver", yaxis_title="Income per KM (₹)",
+                          coloraxis_showscale=False)
+        st.plotly_chart(_plotly_dark(fig), use_container_width=True)
+        st.caption("Sabse upar wala driver route se sabse zyada kama raha hai per KM")
+        st.dataframe(ipk_driver, use_container_width=True, hide_index=True)
+
+    # ══════════════════════════════════════════
+    # ── Tab 9 (NEW): Monthly Summary ──
+    # ══════════════════════════════════════════
+    with tab9:
+        total_income      = df["income"].sum()
+        total_diesel_l    = df["diesel"].sum()
+        est_diesel_cost   = total_diesel_l * DIESEL_PRICE_PER_L
+        net_profit        = total_income - est_diesel_cost
+        total_alerts      = (df["alert_status"] == "🚨 Red flag").sum()
+
+        best_driver_row = ipk_driver.iloc[0] if 'ipk_driver' in locals() and len(ipk_driver) else None
+
+        s1, s2, s3, s4 = st.columns(4)
+        s1.metric("💰 Total Income", f"₹{total_income:,.0f}")
+        s2.metric("⛽ Est. Diesel Cost", f"₹{est_diesel_cost:,.0f}")
+        s3.metric("📈 Net (est.)", f"₹{net_profit:,.0f}")
+        s4.metric("🚨 Alerts this period", int(total_alerts))
+
+        if best_driver_row is not None:
+            st.markdown(f"""
+            <div style='background:#14A085;border-radius:12px;padding:16px;margin-top:12px;
+                        border:1px solid rgba(255,255,255,0.2);'>
+                <span style='color:#d0f5ee;font-size:0.85rem;'>🏆 Best driver (income/km)</span><br>
+                <span style='color:white;font-size:1.2rem;font-weight:700;'>{best_driver_row["Driver"].title()}</span>
+                <span style='color:#FFD700;font-size:1rem;'> — ₹{best_driver_row["Income_per_KM"]}/km</span>
+            </div>
+            """, unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown("**Bus wise net profit:**")
+        summary["Est_Diesel_Cost"] = (summary["Diesel"] * DIESEL_PRICE_PER_L).round(0)
+        summary["Net"] = summary["Income"] - summary["Est_Diesel_Cost"]
+        st.dataframe(
+            summary[["Bus", "Income", "Diesel", "Est_Diesel_Cost", "Net"]],
+            use_container_width=True, hide_index=True
+        )
+        st.caption(f"Diesel cost ₹{DIESEL_PRICE_PER_L}/L par estimate kiya gaya hai — apne actual rate se update karo (upar MIN_NORMAL_MILEAGE / DIESEL_PRICE_PER_L variables mein).")
 
     if st.button("🔄 Refresh Overview", key="refresh_overview"):
         st.session_state.pop(cache_key, None)
