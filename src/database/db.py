@@ -60,74 +60,6 @@ def save_vehicle_records(bus_number: str, df: pd.DataFrame) -> None:
             "status":          "On Leave" if on_leave else "Present",
             "driver_name":     row.get("Driver Name"),
             "conductor_name":  row.get("Conductor Name"),
-            "scheduled_km":    0 if on_leave else row.get("Scheduled KM", 0),
-            "actual_km":       0 if on_leave else row.get("Actual KM", 0),
-            "diesel": None if on_leave else (float(row.get("Diesel")) if pd.notna(row.get("Diesel")) else None),
-            "diesel_km": None if on_leave else _safe_int(row.get("Diesel KM")),
-            "income":    None if on_leave else _safe_int(row.get("Income")),
-            "gross_income": None if on_leave else _safe_int(row.get("Gross Income")),
-            "updated_by":      current_email,
-            "updated_by_role": current_role,
-            "remark":          str(row.get("Remark") or ""),
-            "next_period":     bool(row.get("Next", False)),
-        }
-
-        if existing.data:
-            old = existing.data[0]
-
-            def keep(new_val, old_val, empty_vals):
-                return new_val if new_val not in empty_vals else old_val
-
-            merged = {
-                "bus_number":      bus_number,
-                "date":            date_str,
-                "status":          new_data["status"],
-                "updated_by":      current_email,
-                "updated_by_role": current_role,
-                "remark":          new_data["remark"] or old.get("remark", ""),
-                "next_period":     new_data["next_period"],
-                "driver_name":     keep(new_data["driver_name"],    old.get("driver_name"),    [None, "", "None","none"]),
-                "conductor_name":  keep(new_data["conductor_name"], old.get("conductor_name"), [None, "", "None","none"]),
-                "scheduled_km":    new_data["scheduled_km"],
-                "actual_km":       new_data["actual_km"],
-                "diesel":          keep(new_data["diesel"],         old.get("diesel"),          [None]),
-                "diesel_km":       keep(new_data["diesel_km"],      old.get("diesel_km"),       [None]),
-                "income":          keep(new_data["income"],         old.get("income"),          [None]),
-                "gross_income":    keep(new_data["gross_income"],   old.get("gross_income"),    [None]),
-            }
-            supabase.table("vehicle_records") \
-                .update(merged) \
-                .eq("bus_number", bus_number) \
-                .eq("date", date_str) \
-                .execute()
-        else:
-            supabase.table("vehicle_records").insert(new_data).execute()
-
-
-def save_vehicle_records(bus_number: str, df: pd.DataFrame) -> None:
-    from src.database.auth import get_current_role
-    import streamlit as st
-
-    user          = st.session_state.get("user")
-    current_email = user.email if user else "unknown"
-    current_role  = get_current_role()
-
-    for _, row in df.iterrows():
-        date_str = str(row["Date"])
-        on_leave = str(row.get("Status", "Present")).strip() == "On Leave"
-
-        existing = supabase.table("vehicle_records") \
-            .select("*") \
-            .eq("bus_number", bus_number) \
-            .eq("date", date_str) \
-            .execute()
-
-        new_data = {
-            "bus_number":      bus_number,
-            "date":            date_str,
-            "status":          "On Leave" if on_leave else "Present",
-            "driver_name":     row.get("Driver Name"),
-            "conductor_name":  row.get("Conductor Name"),
             # ✅ FIX: pehle _safe_int se clean karo, taaki NaN/None JSON crash na kare
             "scheduled_km":    0 if on_leave else _safe_int(row.get("Scheduled KM")),
             "actual_km":       0 if on_leave else _safe_int(row.get("Actual KM")),
@@ -158,7 +90,7 @@ def save_vehicle_records(bus_number: str, df: pd.DataFrame) -> None:
                 "driver_name":     keep(new_data["driver_name"],    old.get("driver_name"),    [None, "", "None","none"]),
                 "conductor_name":  keep(new_data["conductor_name"], old.get("conductor_name"), [None, "", "None","none"]),
                 # ✅ FIX: ab scheduled_km/actual_km bhi None hone par purani value retain karte hain,
-                # bilkul diesel/income jaisa hi behavior. On-leave case mein 0 hi rahega (koi purani value nahi rakhi).
+                # bilkul diesel/income jaisa hi. On-leave case mein 0 hi rahega.
                 "scheduled_km":    new_data["scheduled_km"] if on_leave else keep(new_data["scheduled_km"], old.get("scheduled_km"), [None]),
                 "actual_km":       new_data["actual_km"]    if on_leave else keep(new_data["actual_km"],    old.get("actual_km"),    [None]),
                 "diesel":          keep(new_data["diesel"],         old.get("diesel"),          [None]),
@@ -173,6 +105,43 @@ def save_vehicle_records(bus_number: str, df: pd.DataFrame) -> None:
                 .execute()
         else:
             supabase.table("vehicle_records").insert(new_data).execute()
+
+
+def get_vehicle_records(bus_number: str) -> pd.DataFrame:
+    res = supabase.table("vehicle_records") \
+        .select("*") \
+        .eq("bus_number", bus_number) \
+        .order("date", desc=True) \
+        .execute()
+
+    if not res.data:
+        return pd.DataFrame(columns=[
+            "Date", "Status", "Driver Name", "Conductor Name",
+            "Scheduled KM", "Actual KM", "Diesel", "Diesel KM", "Income", "Gross Income", "Remark", "Next"
+        ])
+
+    df = pd.DataFrame(res.data)
+    df = df.rename(columns={
+        "date":           "Date",
+        "status":         "Status",
+        "driver_name":    "Driver Name",
+        "conductor_name": "Conductor Name",
+        "scheduled_km":   "Scheduled KM",
+        "actual_km":      "Actual KM",
+        "diesel":         "Diesel",
+        "diesel_km":      "Diesel KM",
+        "income":         "Income",
+        "gross_income":   "Gross Income",
+        "remark":         "Remark",
+        "next_period":    "Next",
+    })
+
+    for col, default in [("Status", "Present"), ("Remark", ""), ("Next", False), ("Diesel KM", 0), ("Gross Income", 0)]:
+        if col not in df.columns:
+            df[col] = default
+
+    return df[["Date", "Status", "Driver Name", "Conductor Name",
+               "Scheduled KM", "Actual KM", "Diesel", "Diesel KM", "Income", "Gross Income", "Remark", "Next"]]
 
 
 def get_diesel_summary(bus_number: str, from_date: str, to_date: str) -> pd.DataFrame:
@@ -408,7 +377,7 @@ def get_salary_check(from_date: str = None, to_date: str = None, bus_numbers: li
     if to_date:
         sal_query = sal_query.lte("date", to_date)
     if bus_numbers:
-        sal_query = sal_query.in_("bus_number", bus_numbers)  # ✅ FIX: ye line add ki
+        sal_query = sal_query.in_("bus_number", bus_numbers)
     sal_res = sal_query.execute()
     sal_df  = pd.DataFrame(sal_res.data) if sal_res.data else pd.DataFrame(
         columns=["driver_name", "salary", "bus_number", "date"])
