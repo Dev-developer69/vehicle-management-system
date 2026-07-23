@@ -299,15 +299,13 @@ def editable_grid(bus_number: str):
                         "Status":         status,
                         "Driver Name":    "None",
                         "Conductor Name": "None",
-                        # ✅ FIX: Scheduled KM/Actual KM ab None hai (0 nahi) — taaki save ke waqt
-                        # db.py ka keep() logic purani DB value ko retain kare, overwrite na kare
                         "Scheduled KM":   0 if is_absent_or_leave else None,
                         "Actual KM":      0 if is_absent_or_leave else None,
                         "Diesel":         r.get("diesel"),
                         "Diesel KM":      None,
                         "Income":         r.get("income"),
                         "Gross Income":   r.get("gross_income") or 0,
-                        "Remark":         r.get("remark") or "",
+                        "Remark":         "",
                         "Next":           is_next,
                     })
                 new_df = pd.DataFrame(rows)
@@ -318,7 +316,6 @@ def editable_grid(bus_number: str):
                 st.rerun()
             else:
                 st.warning("⚠️ Extraction failed, fill manually.")
-
     st.data_editor(
         st.session_state[key],
         num_rows="dynamic",
