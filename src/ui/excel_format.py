@@ -218,7 +218,7 @@ def editable_grid(bus_number: str):
                 from src.screens.products_manager import (
                     _extract_data_from_images, _compress_image
                 )
-    
+
                 prompt = (
                     "This is a vehicle log table with varying column names across different sheets. "
                     + ("Two images are provided — they show the SAME rows in the SAME order, "
@@ -228,25 +228,26 @@ def editable_grid(bus_number: str):
                     + "Extract every row (skip the TOTAL/summary row). "
                     "For each row extract these fields if matching column exists:\n"
                     "- date: Convert to YYYY-MM-DD.\n"
-                    "- scheduled_km: 'Sch', 'Scheduled', 'SCH.KM'\n"
-                    "- actual_km: 'Actual', 'ACT.KM'\n"
                     "- diesel: 'Diesel', 'DSL', 'Fuel' (litres)\n"
                     "- income: 'Income', 'INCOME', 'Base Fare' (NOT per-km, NOT load factor)\n"
-                    "- gross_income: 'Gross', 'GROSS', 'Total Income'\n\n"
-                    "IGNORE: IPKM, LF, OTH.INC, load factor, per-km rates. "
+                    "- gross_income: 'Gross', 'GROSS', 'Total Income'\n"
+                    "- remark: 'Remark', 'REMARK' column — copy the exact text as-is "
+                    "(e.g. 'ON ROUTE', 'LEAVE APPROVED', 'ABSENT', 'NEXT PERIOD'). "
+                    "If empty set null.\n\n"
+                    "IGNORE: Scheduled KM, Actual KM, IPKM, LF, OTH.INC, load factor, per-km rates. "
                     "If field not present set null. "
-                    "Return ONLY JSON array with keys: date, scheduled_km, actual_km, diesel, income, gross_income. "
+                    "Return ONLY JSON array with keys: date, diesel, income, gross_income, remark. "
                     "No explanation, no markdown."
                 )
-    
+
                 if "Claude" in ai_choice:
                     # ✅ Claude — dono images ek saath ek call mein
                     import anthropic, base64, json, re
                     client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
-    
+
                     img1_bytes = _compress_image(img_file_1.read())
                     b64_1      = base64.standard_b64encode(img1_bytes).decode("utf-8")
-    
+
                     content = [
                         {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64_1}},
                     ]
@@ -254,9 +255,9 @@ def editable_grid(bus_number: str):
                         img2_bytes = _compress_image(img_file_2.read())
                         b64_2      = base64.standard_b64encode(img2_bytes).decode("utf-8")
                         content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64_2}})
-    
+
                     content.append({"type": "text", "text": prompt})
-    
+
                     try:
                         msg = client.messages.create(
                             model="claude-sonnet-4-6",
@@ -273,39 +274,47 @@ def editable_grid(bus_number: str):
                     except Exception as e:
                         st.error(f"❌ Claude extract failed: {e}")
                         result = []
-    
+
                 else:
                     # ✅ Groq — sequentially with delay
                     images = [(img_file_1.read(), img_file_1.type)]
                     if img_file_2:
                         images.append((img_file_2.read(), img_file_2.type))
                     result = _extract_data_from_images(images, prompt)
-    
+
             if result:
                 rows = []
                 for r in result:
-                    sched_km = r.get("scheduled_km") or 0
-                    status = "On Leave" if sched_km == 0 else "Present"
+                    remark_text = str(r.get("remark") or "").strip().upper()
+
+                    # ✅ Status Remark text se decide hota hai
+                    is_absent_or_leave = ("ABSENT" in remark_text) or ("LEAVE APPROVED" in remark_text) or ("LEAVE" in remark_text and "APPROV" in remark_text)
+                    status = "On Leave" if is_absent_or_leave else "Present"
+
+                    # ✅ Next flag "NEXT PERIOD" remark text se set hota hai
+                    is_next = "NEXT" in remark_text and "PERIOD" in remark_text
+
                     rows.append({
                         "Date":           pd.to_datetime(r.get("date"), errors="coerce"),
                         "Status":         status,
                         "Driver Name":    "None",
                         "Conductor Name": "None",
-                        "Scheduled KM":   sched_km,
-                        "Actual KM":      r.get("actual_km") or 0,
+                        # ✅ FIX: Scheduled KM/Actual KM ab None hai (0 nahi) — taaki save ke waqt
+                        # db.py ka keep() logic purani DB value ko retain kare, overwrite na kare
+                        "Scheduled KM":   0 if is_absent_or_leave else None,
+                        "Actual KM":      0 if is_absent_or_leave else None,
                         "Diesel":         r.get("diesel"),
                         "Diesel KM":      None,
                         "Income":         r.get("income"),
                         "Gross Income":   r.get("gross_income") or 0,
-                        "Remark":         "",
-                        "Next":           False,
+                        "Remark":         r.get("remark") or "",
+                        "Next":           is_next,
                     })
-                # ✅ new_df pehle define karo — ye missing tha
                 new_df = pd.DataFrame(rows)
                 new_df = new_df.dropna(subset=["Date"])
                 new_df["Date"] = new_df["Date"].dt.date
                 st.session_state[key] = new_df
-                st.success(f"✅ {len(new_df)} rows extracted — Driver/Conductor Name bhar ke Save karo")
+                st.success(f"✅ {len(new_df)} rows extracted — Scheduled/Actual KM, Driver/Conductor Name bhar ke Save karo")
                 st.rerun()
             else:
                 st.warning("⚠️ Extraction failed, fill manually.")
