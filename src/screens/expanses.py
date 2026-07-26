@@ -98,9 +98,6 @@ def _show_bus_detail(bus: str, start, end, month: int, period: str):
     """, unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
-    if st.button("✖ Close Detail", key=f"close_{bus}", type="secondary"):
-        st.session_state["open_bus_detail"] = None
-        st.rerun()
 
 
 def expenses():
