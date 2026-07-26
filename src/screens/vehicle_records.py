@@ -55,7 +55,7 @@ def _show_insight(prompt: str):
             from groq import Groq
             client = Groq(api_key=st.secrets["GROQ_API_KEY"])
             chat   = client.chat.completions.create(
-                model="llama3-8b-8192",
+                model="llama-3.1-8b-instant",
                 messages=[
                     {
                         "role": "system",
