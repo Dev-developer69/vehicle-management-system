@@ -23,39 +23,66 @@ DIESEL_PRICE_PER_L = 95.69
 COLORS = ["#14A085", "#7B8CFF", "#FFB347", "#FF5252", "#00D4FF", "#FF69B4"]
 
 
+def _call_groq(prompt: str) -> str:
+    from groq import Groq
+    client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+    chat = client.chat.completions.create(
+        model="llama-3.1-8b-instant",
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are an expert fleet operations analyst for an Indian bus transport company. "
+                    "Analyze the chart data and give ONE sharp actionable insight in 1-2 sentences. "
+                    "Rules: plain text only, no markdown, no bullets, be specific with numbers, "
+                    "mention best/worst bus or driver by name, suggest action if needed. Simple English."
+                ),
+            },
+            {"role": "user", "content": prompt},
+        ],
+        max_tokens=120,
+        temperature=0.3,
+    )
+    return chat.choices[0].message.content.strip()
+
+
+def _call_claude_api(prompt: str) -> str:
+    import anthropic
+    client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
+    msg = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=120,
+        messages=[{
+            "role": "user",
+            "content": (
+                "You are an expert fleet operations analyst for an Indian bus transport company. "
+                "Analyze this chart data and give ONE sharp actionable insight in 1-2 sentences. "
+                "Plain text only, no markdown, be specific with numbers, mention best/worst bus or driver by name.\n\n"
+                f"Data: {prompt}"
+            ),
+        }],
+    )
+    return msg.content[0].text.strip()
+
+
 def _show_insight(prompt: str):
+    provider = st.session_state.get("ai_provider", "Groq")
     with st.spinner("🤖 Analyzing..."):
         try:
-            from groq import Groq
-            client = Groq(api_key=st.secrets["GROQ_API_KEY"])
-            chat = client.chat.completions.create(
-                model="llama-3.1-8b-instant",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are a fleet management analyst. "
-                            "Give a single concise insight (1-2 sentences, plain text, no markdown) "
-                            "about the chart data. Be specific with numbers. Write in simple English."
-                        ),
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                max_tokens=100,
-                temperature=0.4,
-            )
-            insight = chat.choices[0].message.content.strip()
+            insight = _call_groq(prompt) if provider == "Groq" else _call_claude_api(prompt)
             if insight:
+                icon = "🟢" if provider == "Groq" else "🔵"
                 st.markdown(f"""
                 <div style='background:rgba(123,140,255,0.15);border-left:3px solid #7B8CFF;
                             border-radius:6px;padding:10px 14px;margin-top:6px;font-size:0.88rem;color:#d0eaff;'>
-                    🤖 {insight}
+                    {icon} {insight}
                 </div>
                 """, unsafe_allow_html=True)
-        except KeyError:
-            st.warning("⚠️ GROQ_API_KEY Streamlit Secrets mein missing hai.")
+        except KeyError as e:
+            st.warning(f"⚠️ API key missing in Secrets: {e}")
         except Exception as e:
-            st.error(f"❌ Groq error: {e}")
+            st.error(f"❌ {provider} error: {e}")
+
 
 
 def _plotly_dark(fig):
@@ -253,6 +280,20 @@ def quick_overview(bus_list: list):
     st.markdown("<br>", unsafe_allow_html=True)
 
     bus_color_map = {bus: COLORS[i % len(COLORS)] for i, bus in enumerate(bus_list)}
+
+    # ── Global AI provider toggle ──
+    ai_col1, ai_col2 = st.columns([3, 1])
+    with ai_col2:
+        provider = st.radio(
+            "🤖 AI Insights",
+            ["Groq", "Claude"],
+            index=0 if st.session_state.get("ai_provider", "Groq") == "Groq" else 1,
+            horizontal=True,
+            key="ai_provider_radio",
+            help="Groq: free & fast | Claude: better quality (needs ANTHROPIC_API_KEY)"
+        )
+        st.session_state["ai_provider"] = provider
+
 
     tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
         "📈 Daily KM Trend", "📊 Scheduled vs Actual", "🎯 KM Efficiency",
