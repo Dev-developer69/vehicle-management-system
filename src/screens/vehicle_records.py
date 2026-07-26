@@ -177,7 +177,7 @@ def quick_overview(bus_list: list):
     cache_key = f"overview_{start}_{end}"
 
     if cache_key not in st.session_state or load_clicked:
-        cols_sel = "bus_number, date, driver_name, conductor_name, actual_km, scheduled_km, income, gross_income, diesel, diesel_km, status, next_period"
+        cols_sel = "bus_number, date, driver_name, conductor_name, actual_km, scheduled_km, income, income, diesel, diesel_km, status, next_period"
         prev_start, prev_end = shift_period_back(year, sel_month, sel_period)
 
         normal_res = supabase.table("vehicle_records") \
@@ -212,7 +212,7 @@ def quick_overview(bus_list: list):
     df["actual_km"]      = pd.to_numeric(df["actual_km"],    errors="coerce").fillna(0)
     df["scheduled_km"]   = pd.to_numeric(df["scheduled_km"], errors="coerce").fillna(0)
     df["income"]         = pd.to_numeric(df["income"],       errors="coerce").fillna(0)
-    df["gross_income"]   = pd.to_numeric(df["gross_income"]  if "gross_income"  in df.columns else 0, errors="coerce").fillna(0)
+    df["income"]   = pd.to_numeric(df["income"]  if "income"  in df.columns else 0, errors="coerce").fillna(0)
     df["diesel"]         = pd.to_numeric(df["diesel"],       errors="coerce").fillna(0)
     df["diesel_km"]      = pd.to_numeric(df["diesel_km"]     if "diesel_km"     in df.columns else 0, errors="coerce").fillna(0)
     df["conductor_name"] = df["conductor_name"].fillna("") if "conductor_name" in df.columns else ""
@@ -241,7 +241,7 @@ def quick_overview(bus_list: list):
         Actual_KM      =("actual_km",      "sum"),
         Scheduled_KM   =("scheduled_km",   "sum"),
         Income         =("income",         "sum"),
-        Gross_Income   =("gross_income",   "sum"),
+        Income   =("income",   "sum"),
         Diesel         =("diesel",         "sum"),
         Diesel_KM      =("diesel_km",      "sum"),
         Days           =("date",           "count"),
@@ -260,7 +260,7 @@ def quick_overview(bus_list: list):
         bus_rates[bus] = rate_data["rate"]
     summary["Diesel_Rate"]     = summary["Bus"].map(bus_rates)
     summary["Est_Diesel_Cost"] = (summary["Diesel"] * summary["Diesel_Rate"]).round(0)
-    summary["Net"]             = summary["Gross_Income"] - summary["Est_Diesel_Cost"]
+    summary["Net"]             = summary["Income"] - summary["Est_Diesel_Cost"]
 
     # ── Summary Cards ──
     card_cols = st.columns(len(summary))
@@ -426,7 +426,7 @@ def quick_overview(bus_list: list):
     # ── Tab 6: Diesel & Income ── ✅ colorful + no gap
     with tab6:
         has_diesel = df["diesel"].sum() > 0
-        has_income = df["gross_income"].sum() > 0
+        has_income = df["income"].sum() > 0
 
         if not has_diesel and not has_income:
             st.info("Diesel aur Income data abhi fill nahi hai — vehicle records mein add karo.")
@@ -456,35 +456,35 @@ def quick_overview(bus_list: list):
                 st.dataframe(mileage, use_container_width=True, hide_index=True)
 
             if has_income:
-                st.markdown("**💰 Gross Income — Bus wise**")
+                st.markdown("**💰 Income — Bus wise**")
                 fig = go.Figure(go.Bar(
-                    x=summary["Bus"].tolist(), y=summary["Gross_Income"],
+                    x=summary["Bus"].tolist(), y=summary["Income"],
                     marker_color=[bus_color_map.get(b, "#14A085") for b in summary["Bus"]],
-                    text=summary["Gross_Income"].astype(int), textposition="outside",
+                    text=summary["Income"].astype(int), textposition="outside",
                     texttemplate="₹%{text:,}",
                 ))
-                max_i = summary["Gross_Income"].max()
+                max_i = summary["Income"].max()
                 fig.update_layout(
-                    showlegend=False, yaxis_title="Gross Income (₹)",
+                    showlegend=False, yaxis_title="Income (₹)",
                     xaxis=dict(type="category"),
                     yaxis=dict(range=[0, max_i * 1.2], gridcolor="rgba(255,255,255,0.08)"),
                 )
                 st.plotly_chart(_plotly_dark(fig), use_container_width=True)
 
             if has_diesel and has_income:
-                st.markdown("**💰 Gross Income vs ⛽ Est. Diesel Cost:**")
+                st.markdown("**💰 Income vs ⛽ Est. Diesel Cost:**")
                 fig = go.Figure()
                 fig.add_trace(go.Bar(
-                    name="Gross Income", x=summary["Bus"].tolist(), y=summary["Gross_Income"],
+                    name="Income", x=summary["Bus"].tolist(), y=summary["Income"],
                     marker_color="#14A085",
-                    text=summary["Gross_Income"].astype(int), textposition="outside",
+                    text=summary["Income"].astype(int), textposition="outside",
                 ))
                 fig.add_trace(go.Bar(
                     name="Est Diesel Cost", x=summary["Bus"].tolist(), y=summary["Est_Diesel_Cost"],
                     marker_color="#FF5252",
                     text=summary["Est_Diesel_Cost"].astype(int), textposition="outside",
                 ))
-                max_v = max(summary["Gross_Income"].max(), summary["Est_Diesel_Cost"].max())
+                max_v = max(summary["Income"].max(), summary["Est_Diesel_Cost"].max())
                 fig.update_layout(
                     barmode="group", yaxis_title="₹",
                     xaxis=dict(type="category"),
@@ -493,7 +493,7 @@ def quick_overview(bus_list: list):
                 )
                 st.plotly_chart(_plotly_dark(fig), use_container_width=True)
                 _show_insight(
-                    f"Gross Income vs Diesel Cost: {summary[['Bus','Gross_Income','Est_Diesel_Cost','Net']].to_dict('records')}."
+                    f"Income vs Diesel Cost: {summary[['Bus','Income','Est_Diesel_Cost','Net']].to_dict('records')}."
                 )
 
     # ── Tab 7: Mileage Alert ──
@@ -563,7 +563,7 @@ def quick_overview(bus_list: list):
 
     # ── Tab 9: Monthly Summary ──
     with tab9:
-        total_gross    = df["gross_income"].sum()
+        total_gross    = df["income"].sum()
         total_est_cost = summary["Est_Diesel_Cost"].sum()
         net_profit     = total_gross - total_est_cost
         total_alerts   = (df["alert_status"] == "🚨 Red flag").sum()
@@ -575,7 +575,7 @@ def quick_overview(bus_list: list):
         )
 
         s1, s2, s3, s4 = st.columns(4)
-        s1.metric("💰 Gross Income",       f"₹{total_gross:,.0f}")
+        s1.metric("💰 Income",       f"₹{total_gross:,.0f}")
         s2.metric("⛽ Est. Diesel Cost",   f"₹{total_est_cost:,.0f}")
         s3.metric("📈 Net (est.)",         f"₹{net_profit:,.0f}")
         s4.metric("🚨 Alerts this period", int(total_alerts))
@@ -592,8 +592,8 @@ def quick_overview(bus_list: list):
 
         st.markdown("<br>", unsafe_allow_html=True)
         st.markdown("**Bus wise net profit (actual diesel rate):**")
-        display_summary = summary[["Bus", "Gross_Income", "Diesel", "Diesel_Rate", "Est_Diesel_Cost", "Net"]].copy()
-        display_summary.columns = ["Bus", "Gross Income", "Diesel (L)", "Rate (₹/L)", "Est. Diesel Cost", "Net"]
+        display_summary = summary[["Bus", "Income", "Diesel", "Diesel_Rate", "Est_Diesel_Cost", "Net"]].copy()
+        display_summary.columns = ["Bus", "Income", "Diesel (L)", "Rate (₹/L)", "Est. Diesel Cost", "Net"]
         st.dataframe(display_summary, use_container_width=True, hide_index=True)
 
         _show_insight(
