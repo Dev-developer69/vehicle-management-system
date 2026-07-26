@@ -316,7 +316,26 @@ def quick_overview(bus_list: list):
             ))
         fig.update_layout(xaxis_title="Date", yaxis_title="Actual KM", hovermode="x unified")
         st.plotly_chart(_plotly_dark(fig), use_container_width=True)
-        _show_insight(f"Daily KM trend per bus: {pivot.to_dict()}. Period: {period_label}.")
+        _show_insight(f"""
+Period: {period_label}
+Daily Actual KM per bus: {pivot.to_dict()}
+
+Analyze this daily KM trend and respond in this exact format:
+🟢 Strengths
+• [which bus is most consistent and why]
+
+🟠 Opportunities
+• [buses with irregular or declining trend]
+
+🔴 Critical Issues
+• [buses with 0 KM days or sudden drops — name them]
+
+💡 Recommendations
+• [specific actions: route redistribution, maintenance check, etc.]
+
+📈 Overall Status: Excellent / Good / Average / Poor
+Keep each bullet to 1 line. Max 2 bullets per section.
+""")
 
     with tab2:
         fig = go.Figure()
@@ -338,10 +357,26 @@ def quick_overview(bus_list: list):
             bargap=0.25, bargroupgap=0.05,
         )
         st.plotly_chart(_plotly_dark(fig), use_container_width=True)
-        _show_insight(
-            f"Scheduled vs Actual KM. Scheduled: {summary.set_index('Bus')['Scheduled_KM'].to_dict()}. "
-            f"Actual: {summary.set_index('Bus')['Actual_KM'].to_dict()}."
-        )
+        _show_insight(f"""
+Scheduled KM: {summary.set_index('Bus')['Scheduled_KM'].to_dict()}
+Actual KM: {summary.set_index('Bus')['Actual_KM'].to_dict()}
+
+Analyze schedule adherence and respond in this exact format:
+🟢 Strengths
+• [bus meeting or exceeding schedule — name it]
+
+🟠 Opportunities
+• [bus consistently below schedule — name it and gap %]
+
+🔴 Critical Issues
+• [bus with largest gap or missed schedule — name it]
+
+💡 Recommendations
+• [specific fix: route change, driver reassignment, etc.]
+
+📈 Overall Status: Excellent / Good / Average / Poor
+Max 2 bullets per section. Be specific with numbers.
+""")
 
     with tab3:
         eff_pivot = df.pivot_table(
@@ -370,10 +405,26 @@ def quick_overview(bus_list: list):
                     <span style='color:#FF5252;'>Worst: {int(row["Worst_KM_Day"])} km</span>
                 </div>
                 """, unsafe_allow_html=True)
-        _show_insight(
-            f"KM efficiency avg per bus: {eff_pivot.mean().to_dict()}. "
-            f"Best/Worst: {summary[['Bus','Best_KM_Day','Worst_KM_Day']].to_dict('records')}."
-        )
+        _show_insight(f"""
+Avg KM Efficiency per bus: {eff_pivot.mean().to_dict()}
+Best/Worst day per bus: {summary[['Bus','Best_KM_Day','Worst_KM_Day']].to_dict('records')}
+
+Analyze efficiency and respond in this exact format:
+🟢 Strengths
+• [highest efficiency bus — name and % avg]
+
+🟠 Opportunities
+• [bus with large best/worst gap — name it]
+
+🔴 Critical Issues
+• [bus below 80% efficiency — name it, possible cause]
+
+💡 Recommendations
+• [maintenance check, load balancing, or route review]
+
+📈 Overall Status: Excellent / Good / Average / Poor
+Max 2 bullets per section. Plain text only.
+""")
 
     with tab4:
         donut_cols = st.columns(len(bus_list))
@@ -424,9 +475,25 @@ def quick_overview(bus_list: list):
             yaxis=dict(range=[0, max_val * 1.2], gridcolor="rgba(255,255,255,0.08)"),
         )
         st.plotly_chart(_plotly_dark(fig), use_container_width=True)
-        _show_insight(
-            f"Driver performance: {driver_perf[['Driver','Total_KM','Days','Avg_Efficiency']].head(5).to_dict('records')}."
-        )
+        _show_insight(f"""
+Driver performance data: {driver_perf[['Driver','Total_KM','Days','Avg_Efficiency']].to_dict('records')}
+
+Analyze driver performance and respond in this exact format:
+🟢 Strengths
+• [top driver name, total KM, efficiency %]
+
+🟠 Opportunities
+• [driver with low utilization or inconsistency — name them]
+
+🔴 Critical Issues
+• [driver with 0 KM or very low efficiency — name them]
+
+💡 Recommendations
+• [training, route reassignment, or recognition suggestion]
+
+📈 Overall Status: Excellent / Good / Average / Poor
+Max 2 bullets per section. Mention driver names specifically.
+""")
 
     with tab6:
         has_diesel = df["diesel"].sum() > 0
@@ -496,9 +563,25 @@ def quick_overview(bus_list: list):
                     bargap=0.25, bargroupgap=0.05,
                 )
                 st.plotly_chart(_plotly_dark(fig), use_container_width=True)
-                _show_insight(
-                    f"Income vs Diesel Cost: {summary[['Bus','Income','Est_Diesel_Cost','Net']].to_dict('records')}."
-                )
+                _show_insight(f"""
+Bus financial data: {summary[['Bus','Income','Est_Diesel_Cost','Net']].to_dict('records')}
+
+Analyze profitability and respond in this exact format:
+🟢 Strengths
+• [most profitable bus — name, income, net profit]
+
+🟠 Opportunities
+• [bus with high diesel cost eating into profit — name it]
+
+🔴 Critical Issues
+• [bus with negative or zero net profit — name it]
+
+💡 Recommendations
+• [diesel reduction strategy or route optimization]
+
+📈 Overall Status: Excellent / Good / Average / Poor
+Max 2 bullets per section. Use rupee amounts.
+""")
 
     with tab7:
         alert_df = df[df["diesel"] > 0][
@@ -521,10 +604,28 @@ def quick_overview(bus_list: list):
         if len(red_flags) > 0:
             st.error(f"{len(red_flags)} din aisa hain jaha diesel liya gaya lekin gaadi chali nahi!")
         st.dataframe(alert_df, use_container_width=True, hide_index=True)
-        _show_insight(
-            f"Mileage alert: {len(red_flags)} red flags, {len(checks)} low mileage days. "
-            f"Threshold: {MIN_NORMAL_MILEAGE} km/L."
-        )
+        _show_insight(f"""
+Mileage threshold: {MIN_NORMAL_MILEAGE} km/L
+Red flags (diesel taken, 0 KM): {len(red_flags)}
+Low mileage days: {len(checks)}
+Alert details: {alert_df[['Bus','Driver','Diesel KM','Diesel (L)','Mileage (KM/L)','Status']].head(5).to_dict('records')}
+
+Analyze fuel alerts and respond in this exact format:
+🟢 Strengths
+• [days with normal mileage — count and avg]
+
+🟠 Opportunities
+• [buses with recurring low mileage — name them]
+
+🔴 Critical Issues
+• [red flag buses — diesel taken but 0 KM — name driver and bus]
+
+💡 Recommendations
+• [maintenance priority, driver investigation, or fuel audit]
+
+📈 Overall Status: Excellent / Good / Average / Poor
+Max 2 bullets per section. Name specific buses and drivers.
+""")
 
     with tab8:
         ipk_conductor = (df.assign(conductor_name=df["conductor_name"].str.strip().str.lower())
@@ -558,9 +659,25 @@ def quick_overview(bus_list: list):
                 yaxis=dict(range=[0, max_v * 1.2], gridcolor="rgba(255,255,255,0.08)"),
             )
             st.plotly_chart(_plotly_dark(fig), use_container_width=True)
-            _show_insight(
-                f"Conductor income per KM: {ipk_conductor[['Conductor','Income_per_KM','Actual_KM']].to_dict('records')}."
-            )
+            _show_insight(f"""
+Conductor revenue data: {ipk_conductor[['Conductor','Income_per_KM','Actual_KM']].to_dict('records')}
+
+Analyze conductor revenue efficiency and respond in this exact format:
+🟢 Strengths
+• [top conductor name, income/km, total KM]
+
+🟠 Opportunities
+• [conductor with high KM but low income/km — possible fare leakage]
+
+🔴 Critical Issues
+• [conductor with lowest income/km — name them, possible cause]
+
+💡 Recommendations
+• [revenue audit, route change, or recognition]
+
+📈 Overall Status: Excellent / Good / Average / Poor
+Max 2 bullets per section. Name conductors specifically.
+""")
             st.dataframe(ipk_conductor, use_container_width=True, hide_index=True)
 
     with tab9:
@@ -597,11 +714,30 @@ def quick_overview(bus_list: list):
         display_summary.columns = ["Bus", "Income", "Diesel (L)", "Rate (₹/L)", "Est. Diesel Cost", "Net"]
         st.dataframe(display_summary, use_container_width=True, hide_index=True)
 
-        _show_insight(
-            f"Monthly fleet summary {period_label}: Income Rs{total_income:,.0f}, "
-            f"Diesel cost Rs{total_est_cost:,.0f}, Net Rs{net_profit:,.0f}, "
-            f"{int(total_alerts)} red flags. Bus detail: {display_summary.to_dict('records')}."
-        )
+        _show_insight(f"""
+Period: {period_label}
+Total Income: Rs{total_income:,.0f}
+Diesel Cost: Rs{total_est_cost:,.0f}
+Net Profit: Rs{net_profit:,.0f}
+Mileage Alerts: {int(total_alerts)}
+Bus details: {display_summary.to_dict('records')}
+
+Give a monthly fleet summary and respond in this exact format:
+🟢 Strengths
+• [most profitable bus — name, net profit]
+
+🟠 Opportunities
+• [bus with high diesel cost or low net — name it]
+
+🔴 Critical Issues
+• [negative net or high alert count — name bus, state risk]
+
+💡 Recommendations
+• [top priority action for next period]
+
+📈 Overall Status: Excellent / Good / Average / Poor
+Max 2 bullets per section. Use rupee amounts where relevant.
+""")
 
     if st.button("🔄 Refresh Overview", key="refresh_overview"):
         st.session_state.pop(cache_key, None)
