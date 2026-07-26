@@ -51,14 +51,37 @@ def _get_groq_insight(prompt: str) -> str:
 def _show_insight(prompt: str):
     """Fetch and display Groq insight with spinner."""
     with st.spinner("🤖 Analyzing..."):
-        insight = _get_groq_insight(prompt)
-    if insight:
-        st.markdown(f"""
-        <div style='background:rgba(123,140,255,0.15);border-left:3px solid #7B8CFF;
-                    border-radius:6px;padding:10px 14px;margin-top:6px;font-size:0.88rem;color:#d0eaff;'>
-            🤖 {insight}
-        </div>
-        """, unsafe_allow_html=True)
+        try:
+            from groq import Groq
+            client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+            chat   = client.chat.completions.create(
+                model="llama3-8b-8192",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a fleet management analyst. "
+                            "Give a single concise insight (1-2 sentences, plain text, no markdown) "
+                            "about the chart data. Be specific with numbers. Write in simple English."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                max_tokens=100,
+                temperature=0.4,
+            )
+            insight = chat.choices[0].message.content.strip()
+            if insight:
+                st.markdown(f"""
+                <div style='background:rgba(123,140,255,0.15);border-left:3px solid #7B8CFF;
+                            border-radius:6px;padding:10px 14px;margin-top:6px;font-size:0.88rem;color:#d0eaff;'>
+                    🤖 {insight}
+                </div>
+                """, unsafe_allow_html=True)
+        except KeyError:
+            st.warning("⚠️ GROQ_API_KEY Streamlit Secrets mein missing hai — add karo: `GROQ_API_KEY = 'gsk_...'`")
+        except Exception as e:
+            st.error(f"❌ Groq error: {e}")
 
 
 def _plotly_dark(fig):
