@@ -23,25 +23,41 @@ DIESEL_PRICE_PER_L = 95.69
 COLORS = ["#14A085", "#7B8CFF", "#FFB347", "#FF5252", "#00D4FF", "#FF69B4"]
 
 
+SYSTEM_PROMPT = (
+    "You are a strict fleet operations analyst for an Indian diesel bus transport company. "
+    "STEP 1 DATA VALIDATION always do this first: "
+    "Scan all records for logical inconsistencies and flag them inline, do NOT exclude them from analysis. "
+    "Flag these patterns with a warning note next to the bus name: "
+    "Income > 0 and Diesel = 0 means add note Diesel entry missing verify fuel records. "
+    "Actual KM > 0 and Diesel = 0 means add note diesel bus cannot run without fuel data error. "
+    "Income = 0 but Actual KM > 0 means add note Revenue data may be missing. "
+    "Diesel > 0 but Actual KM = 0 means add note Fuel recorded but vehicle did not operate. "
+    "Net > Income means add note Calculation error verify. "
+    "Show these as a Data Quality section first, then include ALL buses in performance analysis with warning tags. "
+    "STEP 2 PERFORMANCE ANALYSIS include all buses tag inconsistent ones: "
+    "Analyze all records. For buses with data issues, include them but add a warning tag like "
+    "verify diesel data or revenue missing next to their name in brackets. "
+    "ABSOLUTE RULES: "
+    "1. Use ONLY the exact numbers from the data never round estimate or invent. "
+    "2. Copy rupee and KM values exactly as given. "
+    "3. Plain text only no markdown no bold no asterisks. "
+    "4. Follow the exact output format in the prompt. "
+    "5. Max 2 bullets per section each under 20 words. "
+    "6. A diesel bus CANNOT run without diesel always flag Diesel=0 with KM>0 or Income>0 as data error."
+)
+
+
 def _call_groq(prompt: str) -> str:
     from groq import Groq
     client = Groq(api_key=st.secrets["GROQ_API_KEY"])
     chat = client.chat.completions.create(
         model="llama-3.1-8b-instant",
         messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You are an expert fleet operations analyst for an Indian bus transport company. "
-                    "Analyze the chart data and give ONE sharp actionable insight in 1-2 sentences. "
-                    "Rules: plain text only, no markdown, no bullets, be specific with numbers, "
-                    "mention best/worst bus or driver by name, suggest action if needed. Simple English."
-                ),
-            },
-            {"role": "user", "content": prompt},
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user",   "content": prompt},
         ],
-        max_tokens=120,
-        temperature=0.3,
+        max_tokens=300,
+        temperature=0.1,  # low temp = less hallucination
     )
     return chat.choices[0].message.content.strip()
 
@@ -51,37 +67,83 @@ def _call_claude_api(prompt: str) -> str:
     client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
     msg = client.messages.create(
         model="claude-haiku-4-5-20251001",
-        max_tokens=120,
-        messages=[{
-            "role": "user",
-            "content": (
-                "You are an expert fleet operations analyst for an Indian bus transport company. "
-                "Analyze this chart data and give ONE sharp actionable insight in 1-2 sentences. "
-                "Plain text only, no markdown, be specific with numbers, mention best/worst bus or driver by name.\n\n"
-                f"Data: {prompt}"
-            ),
-        }],
+        max_tokens=300,
+        system=SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": prompt}],
     )
     return msg.content[0].text.strip()
 
 
-def _show_insight(prompt: str):
-    provider = st.session_state.get("ai_provider", "Groq")
-    with st.spinner("🤖 Analyzing..."):
-        try:
-            insight = _call_groq(prompt) if provider == "Groq" else _call_claude_api(prompt)
-            if insight:
-                icon = "🟢" if provider == "Groq" else "🔵"
-                st.markdown(f"""
-                <div style='background:rgba(123,140,255,0.15);border-left:3px solid #7B8CFF;
-                            border-radius:6px;padding:10px 14px;margin-top:6px;font-size:0.88rem;color:#d0eaff;'>
-                    {icon} {insight}
-                </div>
-                """, unsafe_allow_html=True)
-        except KeyError as e:
-            st.warning(f"⚠️ API key missing in Secrets: {e}")
-        except Exception as e:
-            st.error(f"❌ {provider} error: {e}")
+def _supabase_get_insight(cache_key: str) -> str | None:
+    """Fetch insight from Supabase ai_insights table."""
+    try:
+        res = supabase.table("ai_insights").select("insight").eq("cache_key", cache_key).single().execute()
+        return res.data["insight"] if res.data else None
+    except Exception:
+        return None
+
+
+def _supabase_save_insight(cache_key: str, insight: str, provider: str) -> None:
+    """Upsert insight into Supabase ai_insights table."""
+    try:
+        supabase.table("ai_insights").upsert({
+            "cache_key": cache_key,
+            "insight":   insight,
+            "provider":  provider,
+            "updated_at": "now()",
+        }, on_conflict="cache_key").execute()
+    except Exception:
+        pass  # silently fail — session cache still works
+
+
+def _show_insight(prompt: str, key: str = ""):
+    """Button-based lazy load — result stored in Supabase + session cache."""
+    cache_key = f"insight_{abs(hash(prompt[:100]))}"
+    provider  = st.session_state.get("ai_provider", "Groq")
+
+    def _render(insight: str, regen_key: str):
+        st.markdown(f"""
+        <div style='background:rgba(123,140,255,0.12);border-left:3px solid #7B8CFF;
+                    border-radius:6px;padding:10px 14px;margin-top:6px;
+                    font-size:0.85rem;color:#d0eaff;white-space:pre-line;'>{insight}
+        </div>
+        """, unsafe_allow_html=True)
+        if st.button("🔄 Regenerate", key=regen_key, help="Fetch fresh insight from AI"):
+            st.session_state.pop(cache_key, None)
+            # Delete from Supabase so fresh insight is fetched
+            try:
+                supabase.table("ai_insights").delete().eq("cache_key", cache_key).execute()
+            except Exception:
+                pass
+            st.rerun()
+
+    # 1. Check session cache first (fastest)
+    if cache_key in st.session_state:
+        _render(st.session_state[cache_key], f"regen_{cache_key}")
+        return
+
+    # 2. Check Supabase (persistent across sessions)
+    with st.spinner("Loading saved insight..."):
+        saved = _supabase_get_insight(cache_key)
+    if saved:
+        st.session_state[cache_key] = saved
+        _render(saved, f"regen_{cache_key}")
+        return
+
+    # 3. Show generate button — no saved insight found
+    icon = "🟢 Groq" if provider == "Groq" else "🔵 Claude"
+    if st.button(f"🤖 Generate AI Insight ({icon})", key=f"gen_{cache_key}", type="secondary"):
+        with st.spinner("Analyzing..."):
+            try:
+                result = _call_groq(prompt) if provider == "Groq" else _call_claude_api(prompt)
+                # Save to session + Supabase
+                st.session_state[cache_key] = result
+                _supabase_save_insight(cache_key, result, provider)
+                st.rerun()
+            except KeyError as e:
+                st.warning(f"⚠️ API key missing: {e}")
+            except Exception as e:
+                st.error(f"❌ {provider} error: {e}")
 
 
 
@@ -716,27 +778,37 @@ Max 2 bullets per section. Name conductors specifically.
 
         _show_insight(f"""
 Period: {period_label}
+Bus details (use these exact numbers only):
+{display_summary.to_dict('records')}
 Total Income: Rs{total_income:,.0f}
-Diesel Cost: Rs{total_est_cost:,.0f}
+Total Diesel Cost: Rs{total_est_cost:,.0f}
 Net Profit: Rs{net_profit:,.0f}
 Mileage Alerts: {int(total_alerts)}
-Bus details: {display_summary.to_dict('records')}
 
-Give a monthly fleet summary and respond in this exact format:
-🟢 Strengths
-• [most profitable bus — name, net profit]
+FIRST check each bus for data issues and tag them inline — include ALL buses in analysis:
+- Diesel = 0 but Income > 0 → tag as [diesel entry missing]
+- Diesel = 0 but KM > 0 → tag as [data error: bus cannot run without fuel]
+- Income = 0 but Diesel > 0 → tag as [revenue missing]
+- Net > Income → tag as [calculation error]
 
-🟠 Opportunities
-• [bus with high diesel cost or low net — name it]
+Respond in this exact format:
+⚠️ Data Quality Issues
+• [bus name + exact issue, e.g. Bus 7389 [diesel entry missing] Income=Rs3,08,141 Diesel=0]
 
-🔴 Critical Issues
-• [negative net or high alert count — name bus, state risk]
+🟢 Strengths (all buses, tag flagged ones)
+• [highest net profit bus — exact name and net amount]
+
+🟠 Opportunities (all buses, tag flagged ones)
+• [bus with high diesel cost — exact name and amounts]
+
+🔴 Critical Issues (all buses, tag flagged ones)
+• [bus with negative net — exact name and amount]
 
 💡 Recommendations
-• [top priority action for next period]
+• [one specific action — data fix or operational improvement]
 
 📈 Overall Status: Excellent / Good / Average / Poor
-Max 2 bullets per section. Use rupee amounts where relevant.
+Use only exact rupee values from data above. Max 2 bullets per section.
 """)
 
     if st.button("🔄 Refresh Overview", key="refresh_overview"):
