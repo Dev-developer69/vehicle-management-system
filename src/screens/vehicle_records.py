@@ -18,43 +18,17 @@ VEHICLE_MAP = {
 }
 
 MIN_NORMAL_MILEAGE = 4.0
-DIESEL_PRICE_PER_L = 95.69  # fallback only
+DIESEL_PRICE_PER_L = 95.69
 
 COLORS = ["#14A085", "#7B8CFF", "#FFB347", "#FF5252", "#00D4FF", "#FF69B4"]
 
 
-def _get_groq_insight(prompt: str) -> str:
-    try:
-        from groq import Groq
-        client = Groq(api_key=st.secrets["GROQ_API_KEY"])
-        chat   = client.chat.completions.create(
-            model="llama3-8b-8192",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a fleet management analyst. "
-                        "Give a single concise insight (1-2 sentences, plain text, no markdown, no bullet points) "
-                        "about the chart data. Be specific with numbers. Write in simple English."
-                    ),
-                },
-                {"role": "user", "content": prompt},
-            ],
-            max_tokens=100,
-            temperature=0.4,
-        )
-        return chat.choices[0].message.content.strip()
-    except Exception as e:
-        return ""
-
-
 def _show_insight(prompt: str):
-    """Fetch and display Groq insight with spinner."""
     with st.spinner("🤖 Analyzing..."):
         try:
             from groq import Groq
             client = Groq(api_key=st.secrets["GROQ_API_KEY"])
-            chat   = client.chat.completions.create(
+            chat = client.chat.completions.create(
                 model="llama-3.1-8b-instant",
                 messages=[
                     {
@@ -79,7 +53,7 @@ def _show_insight(prompt: str):
                 </div>
                 """, unsafe_allow_html=True)
         except KeyError:
-            st.warning("⚠️ GROQ_API_KEY Streamlit Secrets mein missing hai — add karo: `GROQ_API_KEY = 'gsk_...'`")
+            st.warning("⚠️ GROQ_API_KEY Streamlit Secrets mein missing hai.")
         except Exception as e:
             st.error(f"❌ Groq error: {e}")
 
@@ -91,7 +65,7 @@ def _plotly_dark(fig):
         font_color="white",
         margin=dict(t=40, b=20, l=20, r=20),
         legend=dict(bgcolor="rgba(0,0,0,0)"),
-        xaxis=dict(gridcolor="rgba(255,255,255,0.08)", type="category"),  # ✅ string x-axis
+        xaxis=dict(gridcolor="rgba(255,255,255,0.08)", type="category"),
         yaxis=dict(gridcolor="rgba(255,255,255,0.08)"),
     )
     return fig
@@ -109,7 +83,7 @@ def vehicle_records():
 
     home_layout()
 
-    accessible       = get_accessible_vehicles()
+    accessible = get_accessible_vehicles()
     visible_vehicles = [bus for bus in VEHICLE_MAP.keys() if bus in accessible]
 
     if not visible_vehicles:
@@ -163,7 +137,6 @@ def quick_overview(bus_list: list):
     year = date.today().year
     raw_start, raw_end = _get_date_range(year, sel_month, sel_period)
     start, end = raw_start.date(), raw_end.date()
-
     period_label = f"{date(2000, sel_month, 1).strftime('%B')} ({sel_period})"
 
     st.markdown(f"""
@@ -177,7 +150,7 @@ def quick_overview(bus_list: list):
     cache_key = f"overview_{start}_{end}"
 
     if cache_key not in st.session_state or load_clicked:
-        cols_sel = "bus_number, date, driver_name, conductor_name, actual_km, scheduled_km, income, income, diesel, diesel_km, status, next_period"
+        cols_sel = "bus_number, date, driver_name, conductor_name, actual_km, scheduled_km, income, gross_income, diesel, diesel_km, status, next_period"
         prev_start, prev_end = shift_period_back(year, sel_month, sel_period)
 
         normal_res = supabase.table("vehicle_records") \
@@ -212,19 +185,17 @@ def quick_overview(bus_list: list):
     df["actual_km"]      = pd.to_numeric(df["actual_km"],    errors="coerce").fillna(0)
     df["scheduled_km"]   = pd.to_numeric(df["scheduled_km"], errors="coerce").fillna(0)
     df["income"]         = pd.to_numeric(df["income"],       errors="coerce").fillna(0)
-    df["income"]   = pd.to_numeric(df["income"]  if "income"  in df.columns else 0, errors="coerce").fillna(0)
     df["diesel"]         = pd.to_numeric(df["diesel"],       errors="coerce").fillna(0)
-    df["diesel_km"]      = pd.to_numeric(df["diesel_km"]     if "diesel_km"     in df.columns else 0, errors="coerce").fillna(0)
+    df["diesel_km"]      = pd.to_numeric(df["diesel_km"] if "diesel_km" in df.columns else 0, errors="coerce").fillna(0)
     df["conductor_name"] = df["conductor_name"].fillna("") if "conductor_name" in df.columns else ""
     df["date"]           = pd.to_datetime(df["date"])
     df["date_str"]       = df["date"].dt.strftime("%d %b")
-    # ✅ bus_number string rakho
     df["bus_number"]     = df["bus_number"].astype(str)
 
     df["efficiency_pct"] = (df["actual_km"] / df["scheduled_km"].replace(0, float("nan")) * 100).round(1)
     df["achieved"]       = df["actual_km"] >= df["scheduled_km"]
     df["income_per_km"]  = (df["income"] / df["actual_km"].replace(0, float("nan"))).round(2)
-    df["diesel_per_km"]  = (df["diesel"]  / df["actual_km"].replace(0, float("nan"))).round(3)
+    df["diesel_per_km"]  = (df["diesel"] / df["actual_km"].replace(0, float("nan"))).round(3)
     df["km_per_litre"]   = (df["diesel_km"] / df["diesel"].replace(0, float("nan"))).round(2)
 
     def _alert_status(row):
@@ -238,19 +209,18 @@ def quick_overview(bus_list: list):
     df["alert_status"] = df.apply(_alert_status, axis=1)
 
     summary = df.groupby("bus_number").agg(
-        Actual_KM      =("actual_km",      "sum"),
-        Scheduled_KM   =("scheduled_km",   "sum"),
-        Income         =("income",         "sum"),
-        Income   =("income",   "sum"),
-        Diesel         =("diesel",         "sum"),
-        Diesel_KM      =("diesel_km",      "sum"),
-        Days           =("date",           "count"),
-        Achieved_Days  =("achieved",       "sum"),
-        Avg_Efficiency =("efficiency_pct", "mean"),
-        Best_KM_Day    =("actual_km",      "max"),
-        Worst_KM_Day   =("actual_km",      "min"),
+        Actual_KM     =("actual_km",      "sum"),
+        Scheduled_KM  =("scheduled_km",   "sum"),
+        Income        =("income",         "sum"),
+        Diesel        =("diesel",         "sum"),
+        Diesel_KM     =("diesel_km",      "sum"),
+        Days          =("date",           "count"),
+        Achieved_Days =("achieved",       "sum"),
+        Avg_Efficiency=("efficiency_pct", "mean"),
+        Best_KM_Day   =("actual_km",      "max"),
+        Worst_KM_Day  =("actual_km",      "min"),
     ).reset_index().rename(columns={"bus_number": "Bus"})
-    summary["Bus"]            = summary["Bus"].astype(str)  # ✅ string
+    summary["Bus"]            = summary["Bus"].astype(str)
     summary["Consistency_%"]  = (summary["Achieved_Days"] / summary["Days"] * 100).round(1)
     summary["Avg_Efficiency"] = summary["Avg_Efficiency"].round(1)
 
@@ -282,7 +252,6 @@ def quick_overview(bus_list: list):
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # ✅ only visible buses color assign
     bus_color_map = {bus: COLORS[i % len(COLORS)] for i, bus in enumerate(bus_list)}
 
     tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
@@ -291,7 +260,6 @@ def quick_overview(bus_list: list):
         "🚨 Mileage Alert", "💰 Income per KM", "📋 Monthly Summary",
     ])
 
-    # ── Tab 1: Daily KM Trend ──
     with tab1:
         pivot = df.pivot_table(
             index="date_str", columns="bus_number",
@@ -309,7 +277,6 @@ def quick_overview(bus_list: list):
         st.plotly_chart(_plotly_dark(fig), use_container_width=True)
         _show_insight(f"Daily KM trend per bus: {pivot.to_dict()}. Period: {period_label}.")
 
-    # ── Tab 2: Scheduled vs Actual ── ✅ string x-axis, no gap, colorful
     with tab2:
         fig = go.Figure()
         fig.add_trace(go.Bar(
@@ -335,7 +302,6 @@ def quick_overview(bus_list: list):
             f"Actual: {summary.set_index('Bus')['Actual_KM'].to_dict()}."
         )
 
-    # ── Tab 3: KM Efficiency ──
     with tab3:
         eff_pivot = df.pivot_table(
             index="date_str", columns="bus_number",
@@ -368,7 +334,6 @@ def quick_overview(bus_list: list):
             f"Best/Worst: {summary[['Bus','Best_KM_Day','Worst_KM_Day']].to_dict('records')}."
         )
 
-    # ── Tab 4: Driver Distribution ──
     with tab4:
         donut_cols = st.columns(len(bus_list))
         for i, bus in enumerate(bus_list):
@@ -386,7 +351,6 @@ def quick_overview(bus_list: list):
                 st.plotly_chart(_plotly_dark(fig), use_container_width=True)
         st.caption("Har bus mein driver duty distribution")
 
-    # ── Tab 5: Driver Performance ── ✅ colorful bars
     with tab5:
         driver_perf = (df.assign(driver_name=df["driver_name"].str.strip().str.lower())
             .groupby("driver_name")
@@ -423,13 +387,12 @@ def quick_overview(bus_list: list):
             f"Driver performance: {driver_perf[['Driver','Total_KM','Days','Avg_Efficiency']].head(5).to_dict('records')}."
         )
 
-    # ── Tab 6: Diesel & Income ── ✅ colorful + no gap
     with tab6:
         has_diesel = df["diesel"].sum() > 0
         has_income = df["income"].sum() > 0
 
         if not has_diesel and not has_income:
-            st.info("Diesel aur Income data abhi fill nahi hai — vehicle records mein add karo.")
+            st.info("Diesel aur Income data abhi fill nahi hai.")
         else:
             if has_diesel:
                 st.markdown("**⛽ Diesel — Bus wise**")
@@ -496,14 +459,13 @@ def quick_overview(bus_list: list):
                     f"Income vs Diesel Cost: {summary[['Bus','Income','Est_Diesel_Cost','Net']].to_dict('records')}."
                 )
 
-    # ── Tab 7: Mileage Alert ──
     with tab7:
         alert_df = df[df["diesel"] > 0][
             ["date_str", "bus_number", "driver_name", "actual_km", "diesel_km", "diesel", "km_per_litre", "alert_status"]
         ].rename(columns={
-            "date_str":    "Date",    "bus_number":  "Bus",
-            "driver_name": "Driver",  "actual_km":   "Actual KM",
-            "diesel_km":   "Diesel KM","diesel":     "Diesel (L)",
+            "date_str":    "Date",      "bus_number":  "Bus",
+            "driver_name": "Driver",    "actual_km":   "Actual KM",
+            "diesel_km":   "Diesel KM", "diesel":      "Diesel (L)",
             "km_per_litre":"Mileage (KM/L)", "alert_status": "Status",
         }).sort_values("Date")
 
@@ -523,7 +485,6 @@ def quick_overview(bus_list: list):
             f"Threshold: {MIN_NORMAL_MILEAGE} km/L."
         )
 
-    # ── Tab 8: Income per KM (conductor) ──
     with tab8:
         ipk_conductor = (df.assign(conductor_name=df["conductor_name"].str.strip().str.lower())
             .groupby("conductor_name")
@@ -561,11 +522,10 @@ def quick_overview(bus_list: list):
             )
             st.dataframe(ipk_conductor, use_container_width=True, hide_index=True)
 
-    # ── Tab 9: Monthly Summary ──
     with tab9:
-        total_gross    = df["income"].sum()
+        total_income   = df["income"].sum()
         total_est_cost = summary["Est_Diesel_Cost"].sum()
-        net_profit     = total_gross - total_est_cost
+        net_profit     = total_income - total_est_cost
         total_alerts   = (df["alert_status"] == "🚨 Red flag").sum()
 
         best_conductor_row = (
@@ -575,7 +535,7 @@ def quick_overview(bus_list: list):
         )
 
         s1, s2, s3, s4 = st.columns(4)
-        s1.metric("💰 Income",       f"₹{total_gross:,.0f}")
+        s1.metric("💰 Income",             f"₹{total_income:,.0f}")
         s2.metric("⛽ Est. Diesel Cost",   f"₹{total_est_cost:,.0f}")
         s3.metric("📈 Net (est.)",         f"₹{net_profit:,.0f}")
         s4.metric("🚨 Alerts this period", int(total_alerts))
@@ -597,8 +557,8 @@ def quick_overview(bus_list: list):
         st.dataframe(display_summary, use_container_width=True, hide_index=True)
 
         _show_insight(
-            f"Monthly fleet summary {period_label}: Gross ₹{total_gross:,.0f}, "
-            f"Diesel cost ₹{total_est_cost:,.0f}, Net ₹{net_profit:,.0f}, "
+            f"Monthly fleet summary {period_label}: Income Rs{total_income:,.0f}, "
+            f"Diesel cost Rs{total_est_cost:,.0f}, Net Rs{net_profit:,.0f}, "
             f"{int(total_alerts)} red flags. Bus detail: {display_summary.to_dict('records')}."
         )
 
