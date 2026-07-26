@@ -15,7 +15,6 @@ ALL_BUSES = [("3131", "3131_E"), ("0303", "0303_E"), ("7389", "7389_E"), ("2350"
 
 
 def _get_diesel_cost(bus: str, start, end, month: int, period: str) -> float:
-    """Diesel cost = total diesel litre × saved rate for that period."""
     diesel_df = get_diesel_summary(bus, str(start.date()), str(end.date()))
     if diesel_df.empty:
         return 0.0
@@ -25,7 +24,6 @@ def _get_diesel_cost(bus: str, start, end, month: int, period: str) -> float:
 
 
 def _get_salary_cost(bus: str, start, end) -> float:
-    """Driver salary cost for this bus in the period."""
     sal_df = get_driver_salary(bus_number=bus)
     if sal_df.empty:
         return 0.0
@@ -35,7 +33,6 @@ def _get_salary_cost(bus: str, start, end) -> float:
 
 
 def _get_maintenance_cost(bus: str, start, end) -> float:
-    """Maintenance cost for this bus in the period."""
     maint_df = get_maintenance_records(bus)
     if maint_df.empty:
         return 0.0
@@ -45,41 +42,35 @@ def _get_maintenance_cost(bus: str, start, end) -> float:
 
 
 def _show_bus_detail(bus: str, start, end, month: int, period: str):
-    """Expandable detailed breakdown for a bus."""
-
-    # ── Vehicle Expenses (category wise) ──
     exp_df = get_vehicle_expenses(bus)
     if not exp_df.empty:
         exp_df["Date"] = pd.to_datetime(exp_df["Date"])
         exp_df = exp_df[(exp_df["Date"] >= start) & (exp_df["Date"] <= end)]
 
     vehicle_exp_total = float(exp_df["Amount"].sum()) if not exp_df.empty else 0.0
+    diesel_cost  = _get_diesel_cost(bus, start, end, month, period)
+    salary_cost  = _get_salary_cost(bus, start, end)
+    maint_cost   = _get_maintenance_cost(bus, start, end)
+    grand_total  = vehicle_exp_total + diesel_cost + salary_cost + maint_cost
 
-    # ── Diesel Cost ──
-    diesel_cost = _get_diesel_cost(bus, start, end, month, period)
+    st.markdown(f"""
+    <div style='background:#1E1E3A;border-radius:16px;padding:24px;
+                border:1px solid #7B8CFF;margin:12px 0;'>
+        <div style='font-size:1.3rem;font-weight:700;color:#7B8CFF;margin-bottom:16px;'>
+            🚌 Bus {bus} — Detailed Expenses
+        </div>
+    """, unsafe_allow_html=True)
 
-    # ── Driver Salary ──
-    salary_cost = _get_salary_cost(bus, start, end)
-
-    # ── Maintenance ──
-    maint_cost = _get_maintenance_cost(bus, start, end)
-
-    # ── Grand Total ──
-    grand_total = vehicle_exp_total + diesel_cost + salary_cost + maint_cost
-
-    st.markdown(f"### 🚌 Bus {bus} — Detailed Expenses")
-
-    # Summary metric cards
     c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("🧾 Vehicle Exp", f"₹{vehicle_exp_total:,.0f}")
-    c2.metric("⛽ Diesel",      f"₹{diesel_cost:,.0f}")
-    c3.metric("👤 Salary",      f"₹{salary_cost:,.0f}")
-    c4.metric("🔧 Maintenance", f"₹{maint_cost:,.0f}")
-    c5.metric("📊 Total",       f"₹{grand_total:,.0f}")
+    c1.metric("🧾 Vehicle Exp",  f"₹{vehicle_exp_total:,.0f}")
+    c2.metric("⛽ Diesel",       f"₹{diesel_cost:,.0f}")
+    c3.metric("👤 Salary",       f"₹{salary_cost:,.0f}")
+    c4.metric("🔧 Maintenance",  f"₹{maint_cost:,.0f}")
+    c5.metric("📊 Grand Total",  f"₹{grand_total:,.0f}")
 
+    st.markdown("</div>", unsafe_allow_html=True)
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # Category wise breakdown
     if not exp_df.empty:
         st.markdown("**🧾 Vehicle Expenses — Category wise:**")
         cat_df = exp_df.groupby("Category")["Amount"].sum().reset_index()
@@ -87,7 +78,6 @@ def _show_bus_detail(bus: str, start, end, month: int, period: str):
         cat_df["Amount"] = cat_df["Amount"].apply(lambda x: f"₹{x:,.0f}")
         st.dataframe(cat_df, use_container_width=True, hide_index=True)
 
-    # Salary breakdown
     sal_df = get_driver_salary(bus_number=bus)
     if not sal_df.empty:
         sal_df["Date"] = pd.to_datetime(sal_df["Date"])
@@ -95,21 +85,21 @@ def _show_bus_detail(bus: str, start, end, month: int, period: str):
         if not sal_df.empty:
             st.markdown("**👤 Driver Salary Records:**")
             show_sal = sal_df[["Date", "Driver Name", "Salary", "Transaction"]].copy()
-            show_sal["Date"] = show_sal["Date"].dt.strftime("%Y-%m-%d")
+            show_sal["Date"]   = show_sal["Date"].dt.strftime("%Y-%m-%d")
             show_sal["Salary"] = show_sal["Salary"].apply(lambda x: f"₹{x:,.0f}")
             st.dataframe(show_sal, use_container_width=True, hide_index=True)
 
-    # Grand total bar
     st.markdown(f"""
     <div style='background:linear-gradient(135deg,#2D2D5E,#1E1E3A);border-radius:12px;
-                padding:16px;text-align:center;margin-top:8px;border:1px solid #7B8CFF;'>
+                padding:16px;text-align:center;margin-top:12px;border:1px solid #7B8CFF;'>
         <span style='color:#aaa;font-size:0.9rem;'>Grand Total — Bus {bus}: </span>
         <span style='color:#7B8CFF;font-size:1.6rem;font-weight:bold;'>₹{grand_total:,.0f}</span>
     </div>
     """, unsafe_allow_html=True)
 
-    if st.button("✖ Close", key=f"close_{bus}", type="secondary"):
-        st.session_state.pop(f"show_detail_{bus}", None)
+    st.markdown("<br>", unsafe_allow_html=True)
+    if st.button("✖ Close Detail", key=f"close_{bus}", type="secondary"):
+        st.session_state["open_bus_detail"] = None
         st.rerun()
 
 
@@ -127,7 +117,7 @@ def expenses():
     visible_buses = [(bus, state) for bus, state in ALL_BUSES if bus in accessible]
 
     if not visible_buses:
-        st.warning("⚠️ Aapko kisi bhi vehicle ka access nahi hai. Admin se contact karo.")
+        st.warning("⚠️ Aapko kisi bhi vehicle ka access nahi hai.")
         return
 
     # ── Vehicle buttons ──
@@ -144,7 +134,7 @@ def expenses():
 
     # ── Period filter ──
     st.markdown("### Expenses Summary 📊")
-    fc1, fc2 = st.columns([2, 3])
+    fc1, fc2, fc3 = st.columns([2, 3, 1])
     with fc1:
         summary_month = st.selectbox(
             "Month",
@@ -158,66 +148,100 @@ def expenses():
             "Period", ["1-15", "16-31", "01-31"],
             index=2, horizontal=True, key="summary_period",
         )
+    with fc3:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("🔄 Refresh", key="exp_refresh", use_container_width=True):
+            for bus, _ in visible_buses:
+                st.session_state.pop(f"exp_cache_{bus}", None)
+            st.session_state["open_bus_detail"] = None
+            st.rerun()
 
     year       = date.today().year
     start, end = _get_date_range(year, summary_month, summary_period)
 
-    # ── Per bus total (vehicle exp + diesel + salary + maintenance) ──
-    bus_totals = {}
+    # ── Per bus totals (cached) ──
+    bus_data = {}
     for bus, _ in visible_buses:
-        exp_df = get_vehicle_expenses(bus)
-        if not exp_df.empty:
-            exp_df["Date"] = pd.to_datetime(exp_df["Date"])
-            exp_df = exp_df[(exp_df["Date"] >= start) & (exp_df["Date"] <= end)]
-            vehicle_exp = float(exp_df["Amount"].sum()) if not exp_df.empty else 0.0
-        else:
-            vehicle_exp = 0.0
+        cache_key = f"exp_cache_{bus}_{summary_month}_{summary_period}"
+        if cache_key not in st.session_state:
+            exp_df = get_vehicle_expenses(bus)
+            if not exp_df.empty:
+                exp_df["Date"] = pd.to_datetime(exp_df["Date"])
+                exp_df = exp_df[(exp_df["Date"] >= start) & (exp_df["Date"] <= end)]
+                vehicle_exp = float(exp_df["Amount"].sum()) if not exp_df.empty else 0.0
+            else:
+                vehicle_exp = 0.0
+            diesel_cost = _get_diesel_cost(bus, start, end, summary_month, summary_period)
+            salary_cost = _get_salary_cost(bus, start, end)
+            maint_cost  = _get_maintenance_cost(bus, start, end)
+            st.session_state[cache_key] = {
+                "vehicle_exp": vehicle_exp,
+                "diesel":      diesel_cost,
+                "salary":      salary_cost,
+                "maint":       maint_cost,
+                "total":       vehicle_exp + diesel_cost + salary_cost + maint_cost,
+            }
+        bus_data[bus] = st.session_state[cache_key]
 
-        diesel_cost = _get_diesel_cost(bus, start, end, summary_month, summary_period)
-        salary_cost = _get_salary_cost(bus, start, end)
-        maint_cost  = _get_maintenance_cost(bus, start, end)
-        bus_totals[bus] = vehicle_exp + diesel_cost + salary_cost + maint_cost
-
-    # ── Summary Cards — clickable ──
+    # ── Summary Cards ──
     card_cols = st.columns(len(visible_buses))
     for i, (bus, _) in enumerate(visible_buses):
+        d = bus_data[bus]
         with card_cols[i]:
-            total = bus_totals.get(bus, 0)
+            is_open = st.session_state.get("open_bus_detail") == bus
+
+            # Card HTML
+            border = "2px solid #7B8CFF" if is_open else "1px solid #2D2D5E"
+            st.markdown(f"""
+            <div style='background:#1E1E3A;border-radius:14px;padding:20px;
+                        text-align:center;border:{border};margin-bottom:4px;'>
+                <div style='font-size:1.7rem;color:#7B8CFF;font-weight:bold;'>
+                    ₹{d["total"]:,.0f}
+                </div>
+                <div style='color:#ccc;margin-top:6px;font-size:0.95rem;font-weight:600;'>
+                    Bus {bus}
+                </div>
+                <div style='color:#888;margin-top:6px;font-size:0.75rem;'>
+                    Exp ₹{d["vehicle_exp"]:,.0f} · Diesel ₹{d["diesel"]:,.0f}
+                    · Salary ₹{d["salary"]:,.0f}
+                </div>
+                <div style='color:#7B8CFF;margin-top:8px;font-size:0.8rem;'>
+                    {"▲ Tap to close" if is_open else "▼ Tap for breakdown →"}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            # Toggle button (invisible — sits over the card visually)
             if st.button(
-                f"₹{total:,.0f}\nBus {bus}",
-                key=f"card_btn_{bus}",
+                "▼ Details" if not is_open else "▲ Close",
+                key=f"card_toggle_{bus}",
                 use_container_width=True,
                 type="secondary",
             ):
-                # Toggle detail view
-                key = f"show_detail_{bus}"
-                st.session_state[key] = not st.session_state.get(key, False)
+                if is_open:
+                    st.session_state["open_bus_detail"] = None
+                else:
+                    # ✅ sirf ek hi open — baaki sab band
+                    st.session_state["open_bus_detail"] = bus
                 st.rerun()
 
-            # Styled card below button (decorative)
-            st.markdown(f"""
-            <div style='background:#1E1E3A;border-radius:12px;padding:16px;text-align:center;
-                        border:1px solid #2D2D5E;margin-top:-8px;'>
-                <div style='font-size:1.6rem;color:#7B8CFF;font-weight:bold;'>₹{total:,.0f}</div>
-                <div style='color:#aaa;margin-top:6px;font-size:0.85rem;'>Bus {bus}</div>
-                <div style='color:#555;font-size:0.75rem;margin-top:4px;'>Click card to expand ↑</div>
-            </div>""", unsafe_allow_html=True)
+    # ── Detail view — sirf ek bus ka ──
+    open_bus = st.session_state.get("open_bus_detail")
+    if open_bus and open_bus in [b for b, _ in visible_buses]:
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown("---")
+        _show_bus_detail(open_bus, start, end, summary_month, summary_period)
+        st.markdown("---")
 
-    # ── Detail view for selected bus ──
-    for bus, _ in visible_buses:
-        if st.session_state.get(f"show_detail_{bus}", False):
-            st.markdown("<br>", unsafe_allow_html=True)
-            st.markdown("---")
-            _show_bus_detail(bus, start, end, summary_month, summary_period)
-            st.markdown("---")
-
+    # ── Grand total ──
     st.markdown("<br>", unsafe_allow_html=True)
-    grand_total = sum(bus_totals.values())
+    grand_total = sum(d["total"] for d in bus_data.values())
     st.markdown(f"""
     <div style='background:#2D2D5E;border-radius:12px;padding:16px;text-align:center;'>
         <span style='color:#aaa;font-size:1rem;'>Total Expenses (All Buses): </span>
         <span style='color:#9B59B6;font-size:1.5rem;font-weight:bold;'>₹{grand_total:,.0f}</span>
-    </div>""", unsafe_allow_html=True)
+    </div>
+    """, unsafe_allow_html=True)
 
     st.markdown("""
     <div style='position:fixed;bottom:20px;width:100%;text-align:center;color:white;font-size:0.9rem;'>
