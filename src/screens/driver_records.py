@@ -18,19 +18,32 @@ def driver_records():
 
     home_layout()
 
-    tab1, tab2, tab3 = st.tabs(["📊 Salary Check", "💵 Add Salary", "⚙️ Set Rate"])
-    with tab1:
+    if "driver_records_view" not in st.session_state:
+        st.session_state["driver_records_view"] = "salary_check"
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("📊 Salary Check", type='primary' if st.session_state["driver_records_view"] == "salary_check" else 'secondary',
+                     use_container_width=True, key="btn_salary_check"):
+            st.session_state["driver_records_view"] = "salary_check"
+            st.rerun()
+    with col2:
+        if st.button("💵 Add Salary", type='primary' if st.session_state["driver_records_view"] == "add_salary" else 'secondary',
+                     use_container_width=True, key="btn_add_salary"):
+            st.session_state["driver_records_view"] = "add_salary"
+            st.rerun()
+
+    st.markdown("---")
+
+    if st.session_state["driver_records_view"] == "salary_check":
         salary_check_view()
-    with tab2:
+    else:
         add_driver_salary_view()
-    with tab3:
-        set_driver_rate_view()
 
     st.markdown("""
     <div style='position:fixed;bottom:20px;width:100%;text-align:center;color:white;font-size:0.9rem;'>
         <p>Created with ❤️ by Dev-developer69</p>
     </div>""", unsafe_allow_html=True)
-
 # ──────────────────────────────────────────────
 # SALARY CHECK VIEW
 # ──────────────────────────────────────────────
@@ -177,19 +190,21 @@ def set_driver_rate_view():
     st.markdown("### Set Driver Salary Rate ⚙️")
 
     accessible = get_accessible_vehicles()
-    drivers = get_drivers_for_buses(accessible)
-
-    if not drivers:
-        st.info("Koi driver nahi mila.")
+    if not accessible:
+        st.info("Koi accessible vehicle nahi mila.")
         return
 
-    col1, col2 = st.columns([2, 2])
-    with col1:
-        bus_number = st.selectbox("Bus Number", options=accessible or ["-"], key="rate_bus")
-    with col2:
-        driver_name = st.selectbox("Driver Name", options=drivers, key="rate_driver")
+    bus_number = st.selectbox("Bus Number", options=accessible, key="rate_bus")
 
-    # Existing rate dikhado (agar hai to)
+    # ✅ Sirf isi selected bus ke drivers
+    drivers = get_drivers_for_buses([bus_number])
+
+    if not drivers:
+        st.info(f"Bus {bus_number} ke liye koi driver nahi mila.")
+        return
+
+    driver_name = st.selectbox("Driver Name", options=drivers, key="rate_driver")
+
     current_rate = get_driver_rate(bus_number, driver_name)
     st.caption(f"Current Rate: ₹{current_rate:,.2f} / duty")
 
@@ -207,8 +222,7 @@ def set_driver_rate_view():
         save_driver_rate(bus_number, driver_name, new_rate, updated_by)
         st.success(f"{driver_name} ka rate ₹{new_rate:,.2f} set ho gaya.")
         st.rerun()
-
-
+        
 # ──────────────────────────────────────────────
 # ADD DRIVER SALARY (payment entry)
 # ──────────────────────────────────────────────
@@ -216,19 +230,26 @@ def add_driver_salary_view():
     st.markdown("### Add Driver Salary 💵")
 
     accessible = get_accessible_vehicles()
-    drivers = get_drivers_for_buses(accessible)
+    if not accessible:
+        st.info("Koi accessible vehicle nahi mila.")
+        return
+
+    bus_number = st.selectbox("Bus Number", options=accessible, key="add_sal_bus")
+
+    # ✅ Sirf isi selected bus ke drivers
+    drivers = get_drivers_for_buses([bus_number])
 
     if not drivers:
-        st.info("Koi driver nahi mila.")
+        st.info(f"Bus {bus_number} ke liye koi driver nahi mila.")
         return
 
     with st.form("add_salary_form", clear_on_submit=True):
-        col1, col2 = st.columns([2, 2])
+        driver_name = st.selectbox("Driver Name", options=drivers, key="add_sal_driver")
+
+        col1, col2 = st.columns(2)
         with col1:
-            bus_number = st.selectbox("Bus Number", options=accessible or ["-"], key="add_sal_bus")
-            driver_name = st.selectbox("Driver Name", options=drivers, key="add_sal_driver")
-        with col2:
             sal_date = st.date_input("Date", value=date.today(), key="add_sal_date")
+        with col2:
             amount = st.number_input("Amount", min_value=0.0, step=100.0, key="add_sal_amount")
 
         transaction = st.radio("Transaction Type", ["Cash", "Online"], horizontal=True, key="add_sal_txn")
