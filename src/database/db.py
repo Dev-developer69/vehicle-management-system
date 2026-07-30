@@ -261,26 +261,127 @@ def save_driver_salary(df: pd.DataFrame, bus_number: str = "") -> None:
         st.error("⚠️ Save failed — error logged.")
 
 
-def get_driver_salary(bus_number: str = "") -> pd.DataFrame:
-    query = supabase.table("driver_salary").select("*").order("date", desc=True)
-    if bus_number:
-        query = query.eq("bus_number", bus_number)
+def get_salary_check(from_date: str = None, to_date: str = None, bus_numbers: list = None) -> pd.DataFrame:
+    query = supabase.table("vehicle_records").select("driver_name, bus_number, date")
+    if from_date:
+        query = query.gte("date", from_date)
+    if to_date:
+        query = query.lte("date", to_date)
+    if bus_numbers:
+        query = query.in_("bus_number", bus_numbers)
     res = query.execute()
 
     if not res.data:
-        return pd.DataFrame(columns=["id", "Date", "Driver Name", "Salary", "Transaction", "Updated By"])
+        return pd.DataFrame(columns=["Sr No", "Driver Name", "Bus Number", "Duties", "Salary Due", "Salary Given", "Remaining"])
 
     df = pd.DataFrame(res.data)
-    df = df.rename(columns={
-        "date":        "Date",
-        "driver_name": "Driver Name",
-        "salary":      "Salary",
-        "transaction": "Transaction",
-        "updated_by":  "Updated By",
-    })
-    df["Updated By"] = df["Updated By"].fillna("")
-    return df[["id", "Date", "Driver Name", "Salary", "Transaction", "Updated By"]]
+    df = df[df["driver_name"].notna()]
+    df = df[~df["driver_name"].str.strip().str.lower().isin(["no", "test", "none", ""])]
 
+    grouped = df.groupby(
+        [df["driver_name"].str.strip().str.lower(), "bus_number"]
+    ).agg(
+        driver_name=("driver_name", "first"),
+        bus_number=("bus_number", "first"),
+        duties=("date", "nunique"),
+    ).reset_index(drop=True)
+
+    # ── Salary paid (already given) merge ──
+    sal_query = supabase.table("driver_salary").select("driver_name, salary, bus_number, date")
+    if from_date:
+        sal_query = sal_query.gte("date", from_date)
+    if to_date:
+        sal_query = sal_query.lte("date", to_date)
+    if bus_numbers:
+        sal_query = sal_query.in_("bus_number", bus_numbers)
+    sal_res = sal_query.execute()
+    sal_df  = pd.DataFrame(sal_res.data) if sal_res.data else pd.DataFrame(
+        columns=["driver_name", "salary", "bus_number", "date"])
+
+    grouped["key"] = grouped["driver_name"].str.strip().str.lower() + "_" + grouped["bus_number"].fillna("")
+
+    if not sal_df.empty:
+        sal_df["key"]  = sal_df["driver_name"].str.strip().str.lower() + "_" + sal_df["bus_number"].fillna("")
+        sal_sum        = sal_df.groupby("key")["salary"].sum().reset_index()
+        grouped        = grouped.merge(sal_sum, on="key", how="left")
+        grouped["salary"] = grouped["salary"].fillna(0)
+    else:
+        grouped["salary"] = 0
+
+    # ── Driver rate merge (Salary Due nikalne ke liye) ──
+    rates_query = supabase.table("driver_salary_rates").select("driver_name, bus_number, rate")
+    if bus_numbers:
+        rates_query = rates_query.in_("bus_number", bus_numbers)
+    rates_res = rates_query.execute()
+    rates_df = pd.DataFrame(rates_res.data) if rates_res.data else pd.DataFrame(
+        columns=["driver_name", "bus_number", "rate"])
+
+    if not rates_df.empty:
+        rates_df["key"] = rates_df["driver_name"].str.strip().str.lower() + "_" + rates_df["bus_number"].fillna("")
+        rate_map = rates_df.groupby("key")["rate"].first()
+        grouped["rate"] = grouped["key"].map(rate_map).fillna(0)
+    else:
+        grouped["rate"] = 0
+
+    # ── Due aur Remaining calculate karo ──
+    grouped["salary_due"] = grouped["duties"] * grouped["rate"]
+    grouped["remaining"]  = grouped["salary_due"] - grouped["salary"]
+
+    grouped = grouped[["driver_name", "bus_number", "duties", "salary_due", "salary", "remaining"]]
+    grouped.columns = ["Driver Name", "Bus Number", "Duties", "Salary Due", "Salary Given", "Remaining"]
+    grouped.insert(0, "Sr No", range(1, len(grouped) + 1))
+    return grouped
+
+# ══════════════════════════════════════════════
+# DRIVER SALARY RATE
+# ══════════════════════════════════════════════
+
+def get_driver_rate(bus_number: str, driver_name: str) -> float:
+    res = supabase.table("driver_salary_rates") \
+        .select("rate") \
+        .eq("bus_number", bus_number) \
+        .eq("driver_name", driver_name) \
+        .execute()
+    if res.data:
+        return float(res.data[0]["rate"] or 0)
+    return 0.0
+
+
+def save_driver_rate(bus_number: str, driver_name: str, rate: float, updated_by: str) -> None:
+    supabase.table("driver_salary_rates").upsert({
+        "bus_number":   bus_number,
+        "driver_name":  driver_name.strip(),
+        "rate":         float(rate),
+        "updated_by":   updated_by,
+    }, on_conflict="bus_number,driver_name").execute()
+
+
+def get_all_driver_rates(bus_numbers: list = None) -> pd.DataFrame:
+    query = supabase.table("driver_salary_rates").select("*").order("driver_name")
+    if bus_numbers:
+        query = query.in_("bus_number", bus_numbers)
+    res = query.execute()
+    if not res.data:
+        return pd.DataFrame(columns=["Bus Number", "Driver Name", "Rate"])
+    df = pd.DataFrame(res.data)
+    df = df.rename(columns={"bus_number": "Bus Number", "driver_name": "Driver Name", "rate": "Rate"})
+    return df[["Bus Number", "Driver Name", "Rate"]]
+
+
+def get_drivers_for_buses(bus_numbers: list = None) -> list:
+    """Access-scoped driver dropdown ke liye — vehicle_records se distinct driver names"""
+    query = supabase.table("vehicle_records").select("driver_name, bus_number")
+    if bus_numbers:
+        query = query.in_("bus_number", bus_numbers)
+    res = query.execute()
+    if not res.data:
+        return []
+    names = {
+        row["driver_name"].strip()
+        for row in res.data
+        if row.get("driver_name") and row["driver_name"].strip().lower() not in ("no", "test", "none", "")
+    }
+    return sorted(names)
 
 def update_driver_salary(record_id: str, updates: dict) -> None:
     rename = {"Date": "date", "Driver Name": "driver_name",
