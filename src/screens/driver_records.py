@@ -21,7 +21,7 @@ def driver_records():
     if "driver_records_view" not in st.session_state:
         st.session_state["driver_records_view"] = "salary_check"
 
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     with col1:
         if st.button("📊 Salary Check", type='primary' if st.session_state["driver_records_view"] == "salary_check" else 'secondary',
                      use_container_width=True, key="btn_salary_check"):
@@ -32,21 +32,29 @@ def driver_records():
                      use_container_width=True, key="btn_add_salary"):
             st.session_state["driver_records_view"] = "add_salary"
             st.rerun()
+    with col3:
+        if st.button("⚙️ Set Rate", type='primary' if st.session_state["driver_records_view"] == "set_rate" else 'secondary',
+                     use_container_width=True, key="btn_set_rate"):
+            st.session_state["driver_records_view"] = "set_rate"
+            st.rerun()
 
     st.markdown("---")
 
     if st.session_state["driver_records_view"] == "salary_check":
         salary_check_view()
-    else:
+    elif st.session_state["driver_records_view"] == "add_salary":
         add_driver_salary_view()
+    else:
+        set_driver_rate_view()
 
     st.markdown("""
     <div style='position:fixed;bottom:20px;width:100%;text-align:center;color:white;font-size:0.9rem;'>
         <p>Created with ❤️ by Dev-developer69</p>
     </div>""", unsafe_allow_html=True)
-# ──────────────────────────────────────────────
+
+#---------------------------------------------
 # SALARY CHECK VIEW
-# ──────────────────────────────────────────────
+# ---------------------------------------------
 def salary_check_view():
     st.markdown("### Salary Check 📊")
 
