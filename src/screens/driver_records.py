@@ -3,8 +3,12 @@ import streamlit as st
 import pandas as pd
 from datetime import date
 from src.ui.home_base_layout import home_layout
-from src.database.db import get_salary_check, get_driver_salary
+
 from src.database.auth import get_accessible_vehicles, get_current_role
+from src.database.db import (
+    get_salary_check, get_driver_salary, save_driver_salary,
+    get_driver_rate, save_driver_rate, get_drivers_for_buses,
+)
 
 
 def driver_records():
@@ -13,13 +17,19 @@ def driver_records():
         st.rerun()
 
     home_layout()
-    salary_check_view()
+
+    tab1, tab2, tab3 = st.tabs(["📊 Salary Check", "💵 Add Salary", "⚙️ Set Rate"])
+    with tab1:
+        salary_check_view()
+    with tab2:
+        add_driver_salary_view()
+    with tab3:
+        set_driver_rate_view()
 
     st.markdown("""
     <div style='position:fixed;bottom:20px;width:100%;text-align:center;color:white;font-size:0.9rem;'>
         <p>Created with ❤️ by Dev-developer69</p>
     </div>""", unsafe_allow_html=True)
-
 
 # ──────────────────────────────────────────────
 # SALARY CHECK VIEW
@@ -157,3 +167,83 @@ def salary_check_view():
             st.dataframe(pd.DataFrame([total]), use_container_width=True, hide_index=True)
         else:
             st.info("No salary records found for this period.")
+
+
+
+# ──────────────────────────────────────────────
+# SET DRIVER SALARY RATE
+# ──────────────────────────────────────────────
+def set_driver_rate_view():
+    st.markdown("### Set Driver Salary Rate ⚙️")
+
+    accessible = get_accessible_vehicles()
+    drivers = get_drivers_for_buses(accessible)
+
+    if not drivers:
+        st.info("Koi driver nahi mila.")
+        return
+
+    col1, col2 = st.columns([2, 2])
+    with col1:
+        bus_number = st.selectbox("Bus Number", options=accessible or ["-"], key="rate_bus")
+    with col2:
+        driver_name = st.selectbox("Driver Name", options=drivers, key="rate_driver")
+
+    # Existing rate dikhado (agar hai to)
+    current_rate = get_driver_rate(bus_number, driver_name)
+    st.caption(f"Current Rate: ₹{current_rate:,.2f} / duty")
+
+    new_rate = st.number_input(
+        "Rate (per duty)",
+        min_value=0.0,
+        value=float(current_rate),
+        step=50.0,
+        key="rate_input",
+    )
+
+    if st.button("💾 Save Rate", type='primary', key="save_rate_btn"):
+        user = st.session_state.get("user")
+        updated_by = user.email if user else "unknown"
+        save_driver_rate(bus_number, driver_name, new_rate, updated_by)
+        st.success(f"{driver_name} ka rate ₹{new_rate:,.2f} set ho gaya.")
+        st.rerun()
+
+
+# ──────────────────────────────────────────────
+# ADD DRIVER SALARY (payment entry)
+# ──────────────────────────────────────────────
+def add_driver_salary_view():
+    st.markdown("### Add Driver Salary 💵")
+
+    accessible = get_accessible_vehicles()
+    drivers = get_drivers_for_buses(accessible)
+
+    if not drivers:
+        st.info("Koi driver nahi mila.")
+        return
+
+    with st.form("add_salary_form", clear_on_submit=True):
+        col1, col2 = st.columns([2, 2])
+        with col1:
+            bus_number = st.selectbox("Bus Number", options=accessible or ["-"], key="add_sal_bus")
+            driver_name = st.selectbox("Driver Name", options=drivers, key="add_sal_driver")
+        with col2:
+            sal_date = st.date_input("Date", value=date.today(), key="add_sal_date")
+            amount = st.number_input("Amount", min_value=0.0, step=100.0, key="add_sal_amount")
+
+        transaction = st.radio("Transaction Type", ["Cash", "Online"], horizontal=True, key="add_sal_txn")
+
+        submitted = st.form_submit_button("💾 Save Payment", type='primary', use_container_width=True)
+        if submitted:
+            if amount <= 0:
+                st.error("Amount 0 se zyada hona chahiye.")
+            else:
+                df = pd.DataFrame([{
+                    "Driver Name": driver_name,
+                    "Date": str(sal_date),
+                    "Salary": amount,
+                    "Transaction": transaction.lower(),
+                }])
+                save_driver_salary(df, bus_number=bus_number)
+                st.success(f"₹{amount:,.2f} {driver_name} ko diya gaya — record ho gaya.")
+                st.rerun()
