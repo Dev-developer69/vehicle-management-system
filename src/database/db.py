@@ -260,6 +260,26 @@ def save_driver_salary(df: pd.DataFrame, bus_number: str = "") -> None:
         import streamlit as st
         st.error("⚠️ Save failed — error logged.")
 
+def get_driver_salary(bus_number: str = "") -> pd.DataFrame:
+    query = supabase.table("driver_salary").select("*").order("date", desc=True)
+    if bus_number:
+        query = query.eq("bus_number", bus_number)
+    res = query.execute()
+
+    if not res.data:
+        return pd.DataFrame(columns=["id", "Date", "Driver Name", "Salary", "Transaction", "Updated By"])
+
+    df = pd.DataFrame(res.data)
+    df = df.rename(columns={
+        "date":        "Date",
+        "driver_name": "Driver Name",
+        "salary":      "Salary",
+        "transaction": "Transaction",
+        "updated_by":  "Updated By",
+    })
+    df["Updated By"] = df["Updated By"].fillna("")
+    return df[["id", "Date", "Driver Name", "Salary", "Transaction", "Updated By"]]
+
 
 def get_salary_check(from_date: str = None, to_date: str = None, bus_numbers: list = None) -> pd.DataFrame:
     query = supabase.table("vehicle_records").select("driver_name, bus_number, date")
@@ -441,61 +461,6 @@ def update_vehicle_expense(expense_id: str, updates: dict) -> None:
 
 def delete_vehicle_expense(expense_id: str) -> None:
     supabase.table("vehicle_expenses").delete().eq("id", expense_id).execute()
-
-
-# ══════════════════════════════════════════════
-# SALARY CHECK
-# ══════════════════════════════════════════════
-
-def get_salary_check(from_date: str = None, to_date: str = None, bus_numbers: list = None) -> pd.DataFrame:
-    query = supabase.table("vehicle_records").select("driver_name, bus_number, date")
-    if from_date:
-        query = query.gte("date", from_date)
-    if to_date:
-        query = query.lte("date", to_date)
-    if bus_numbers:
-        query = query.in_("bus_number", bus_numbers)
-    res = query.execute()
-
-    if not res.data:
-        return pd.DataFrame(columns=["Sr No", "Driver Name", "Bus Number", "Duties", "Salary Given"])
-
-    df = pd.DataFrame(res.data)
-    df = df[df["driver_name"].notna()]
-    df = df[~df["driver_name"].str.strip().str.lower().isin(["no", "test", "none", ""])]
-
-    grouped = df.groupby(
-        [df["driver_name"].str.strip().str.lower(), "bus_number"]
-    ).agg(
-        driver_name=("driver_name", "first"),
-        bus_number=("bus_number", "first"),
-        duties=("date", "nunique"),
-    ).reset_index(drop=True)
-
-    sal_query = supabase.table("driver_salary").select("driver_name, salary, bus_number, date")
-    if from_date:
-        sal_query = sal_query.gte("date", from_date)
-    if to_date:
-        sal_query = sal_query.lte("date", to_date)
-    if bus_numbers:
-        sal_query = sal_query.in_("bus_number", bus_numbers)
-    sal_res = sal_query.execute()
-    sal_df  = pd.DataFrame(sal_res.data) if sal_res.data else pd.DataFrame(
-        columns=["driver_name", "salary", "bus_number", "date"])
-
-    if not sal_df.empty:
-        sal_df["key"]  = sal_df["driver_name"].str.strip().str.lower() + "_" + sal_df["bus_number"].fillna("")
-        sal_sum        = sal_df.groupby("key")["salary"].sum().reset_index()
-        grouped["key"] = grouped["driver_name"].str.strip().str.lower() + "_" + grouped["bus_number"].fillna("")
-        grouped        = grouped.merge(sal_sum, on="key", how="left")
-        grouped["salary"] = grouped["salary"].fillna(0)
-    else:
-        grouped["salary"] = 0
-
-    grouped = grouped[["driver_name", "bus_number", "duties", "salary"]]
-    grouped.columns = ["Driver Name", "Bus Number", "Duties", "Salary Given"]
-    grouped.insert(0, "Sr No", range(1, len(grouped) + 1))
-    return grouped
 
 
 def log_error(function_name: str, error_message: str, bus_number: str = "", extra_data: str = "") -> None:
