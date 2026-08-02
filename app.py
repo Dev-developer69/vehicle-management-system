@@ -10,7 +10,7 @@ st.set_page_config(
   #  initial_sidebar_state="expanded"
 )
 
-#from src.screens.home_page import home_page
+from src.screens.chat_assistant import chat_assistant_page
 from src.screens.driver_records import driver_records
 from src.screens.expanses import expenses
 from src.screens.vehicle_records import vehicle_records
@@ -56,6 +56,11 @@ def render_sidebar():
             st.session_state['login_state'] = None
             st.rerun()
 
+        if st.button("💬 Data Assistant", key="sb_chat_assistant", use_container_width=True):
+            st.session_state['login_state'] = 'chat_assistant'
+            st.rerun()
+
+        
         st.divider()
         if st.button("🚪 Logout", key="sb_logout", use_container_width=True):
             try:
@@ -146,6 +151,9 @@ def main():
                 else:
                     st.error("❌ Access denied..")
 
+        case 'chat_assistant':
+            chat_assistant_page()
+    
         case 'maintenance':
             if get_maintenance_access():
                 maintenance_page()
