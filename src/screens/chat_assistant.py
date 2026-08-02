@@ -3,16 +3,20 @@
 
 User types a plain-language sentence like:
     "bus 2547 mein aaj 90 litre diesel dala, actual km 420, driver ramesh"
-and Claude parses it into structured fields, then calls one of the existing
-db.py save functions (save_vehicle_records / save_vehicle_expenses /
-save_driver_salary) — same functions the regular forms use, so merge-with-
-existing-row behaviour, updated_by tracking, etc. all stay identical.
+and/or attaches a photo (log sheet, receipt, odometer, etc.). Claude reads
+both and calls one of the existing db.py save functions (save_vehicle_records
+/ save_vehicle_expenses / save_driver_salary / save_driver_rate) — same
+functions the regular forms use, so merge-with-existing-row behaviour,
+updated_by tracking, etc. all stay identical. If a photo shows a whole table
+of rows, Claude can call the same tool multiple times in one turn to save
+every row.
 
 The assistant NEVER reads data back to the user — it only fills it in. If a
 required field is missing or ambiguous, it asks a short follow-up question
 instead of guessing.
 """
 
+import base64
 import json
 from datetime import date
 
@@ -29,13 +33,14 @@ from src.database.db import (
     get_scheduled_km,
     log_error,
 )
+from src.screens.products_manager import _compress_image
 
 TOOLS = [
     {
         "name": "save_vehicle_record",
         "description": (
             "Save/update a single day's vehicle record — KM, diesel, income. "
-            "Only include fields the user actually mentioned; omit the rest."
+            "Only include fields the user actually mentioned or that are visible in a photo; omit the rest."
         ),
         "input_schema": {
             "type": "object",
@@ -158,12 +163,24 @@ def _run_tool(name: str, tool_input: dict, accessible: list, updated_by: str) ->
 
 
 def chat_assistant_page():
-    st.header("💬 Data Assistant")
-    st.caption("Plain language mein likho, seedha database mein save ho jayega — jaise: \"bus 2547 mein aaj 90 litre diesel dala, 420 km chali, driver ramesh\"")
+    st.markdown("""
+        <style>
+        .block-container { max-width: 680px; }
+        </style>
+    """, unsafe_allow_html=True)
 
-    if st.button("🏠 Home page", type="primary", icon=":material/home:"):
-        st.session_state["login_state"] = None
-        st.rerun()
+    col1, col2 = st.columns([5, 1])
+    with col1:
+        st.header("💬 Data Assistant")
+    with col2:
+        if st.button("✕ Close", key="chat_close"):
+            st.session_state["login_state"] = None
+            st.rerun()
+
+    st.caption(
+        "Plain language mein likho, ya photo attach karo — seedha database mein save ho jayega. "
+        "Jaise: \"bus 2547 mein aaj 90 litre diesel dala, 420 km chali, driver ramesh\""
+    )
 
     accessible = get_accessible_vehicles()
     if not accessible:
@@ -176,18 +193,68 @@ def chat_assistant_page():
 
     if "chat_assistant_history" not in st.session_state:
         st.session_state["chat_assistant_history"] = []
+    if "chat_img_reset" not in st.session_state:
+        st.session_state["chat_img_reset"] = 0
 
     for msg in st.session_state["chat_assistant_history"]:
         with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
+            st.markdown(msg["display"])
+
+    uploader_key = f"chat_img_{st.session_state['chat_img_reset']}"
+    img_col1, img_col2 = st.columns(2)
+    with img_col1:
+        uploaded1 = st.file_uploader(
+            "📷 Photo 1 (optional) — log sheet, receipt, odometer",
+            type=["jpg", "jpeg", "png", "webp"],
+            key=f"{uploader_key}_1",
+        )
+    with img_col2:
+        uploaded2 = st.file_uploader(
+            "📷 Photo 2 (optional) — chaudi sheet ho to baaki columns",
+            type=["jpg", "jpeg", "png", "webp"],
+            key=f"{uploader_key}_2",
+        )
+    if uploaded2 and not uploaded1:
+        st.caption("⚠️ Photo 2 se pehle Photo 1 bhi lagao.")
 
     user_input = st.chat_input("Apni entry likho...")
     if not user_input:
         return
 
-    st.session_state["chat_assistant_history"].append({"role": "user", "content": user_input})
+    api_content = user_input
+    display_text = user_input
+    raw_images = []
+
+    if uploaded1 is not None:
+        for f in [uploaded1, uploaded2] if uploaded2 is not None else [uploaded1]:
+            raw_images.append(f.read())
+
+    if raw_images:
+        image_blocks = []
+        for raw in raw_images:
+            compressed = _compress_image(raw)
+            b64 = base64.standard_b64encode(compressed).decode("utf-8")
+            image_blocks.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64}})
+
+        text_note = user_input
+        if len(raw_images) == 2:
+            text_note += (
+                "\n\n(Note: two photos are attached — they show the SAME rows in the SAME order, "
+                "just different columns of a wide table split across two photos. Merge them "
+                "row-by-row by position before saving.)"
+            )
+        api_content = image_blocks + [{"type": "text", "text": text_note}]
+        display_text = f"{user_input}\n\n📷 _({len(raw_images)} photo{'s' if len(raw_images) > 1 else ''} attached)_"
+        # fresh uploader widgets next render, so the same photos aren't resent
+        st.session_state["chat_img_reset"] += 1
+
+    st.session_state["chat_assistant_history"].append(
+        {"role": "user", "content": api_content, "display": display_text}
+    )
     with st.chat_message("user"):
-        st.markdown(user_input)
+        st.markdown(display_text)
+        for raw in raw_images:
+            st.image(raw, width=200)
 
     user = st.session_state.get("user")
     updated_by = user.email if user else "unknown"
@@ -197,11 +264,14 @@ def chat_assistant_page():
     system = (
         f"Today's date is {today}. The current user can save records for these buses: "
         f"{', '.join(accessible)}. You ONLY fill in data — you never answer questions or "
-        f"report existing numbers back. Parse the user's message and call the matching tool "
-        f"with the fields they mentioned. If the bus number, date, or another required field "
-        f"is missing or unclear, ask ONE short follow-up question instead of guessing — do not "
-        f"call a tool with made-up values. If today's date applies, use it. Reply in the same "
-        f"language/style the user wrote in (Hindi/Hinglish or English), keep replies short."
+        f"report existing numbers back. Parse the user's message (and any attached photo — "
+        f"it may be a log sheet with a table of rows, a fuel receipt, an odometer photo, etc.) "
+        f"and call the matching tool with the fields you can determine. If a photo shows a table "
+        f"with multiple rows, call the appropriate tool once per row. If the bus number, date, or "
+        f"another required field is missing or unclear, ask ONE short follow-up question instead "
+        f"of guessing — do not call a tool with made-up values. If today's date applies, use it. "
+        f"Reply in the same language/style the user wrote in (Hindi/Hinglish or English), keep "
+        f"replies short."
     )
 
     messages = [{"role": m["role"], "content": m["content"]} for m in st.session_state["chat_assistant_history"]]
@@ -210,10 +280,10 @@ def chat_assistant_page():
         with st.spinner("Samajh raha hoon..."):
             try:
                 final_text = ""
-                for _ in range(4):
+                for _ in range(6):
                     response = client.messages.create(
                         model="claude-sonnet-4-6",
-                        max_tokens=1024,
+                        max_tokens=1536,
                         system=system,
                         tools=TOOLS,
                         messages=messages,
@@ -243,4 +313,6 @@ def chat_assistant_page():
 
         st.markdown(final_text)
 
-    st.session_state["chat_assistant_history"].append({"role": "assistant", "content": final_text})
+    st.session_state["chat_assistant_history"].append(
+        {"role": "assistant", "content": final_text, "display": final_text}
+    )
