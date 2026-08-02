@@ -25,7 +25,7 @@ def home_page():
                      icon=':material/payments:', icon_position='right'):
             st.session_state['login_state'] = 'expenses'
             st.rerun()
-   
+
     st.divider()
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
