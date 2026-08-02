@@ -10,7 +10,7 @@ st.set_page_config(
   #  initial_sidebar_state="expanded"
 )
 
-from src.screens.chat_assistant import chat_assistant_page
+#from src.screens.home_page import home_page
 from src.screens.driver_records import driver_records
 from src.screens.expanses import expenses
 from src.screens.vehicle_records import vehicle_records
@@ -21,6 +21,7 @@ from src.vehicle_records.vehicle_31 import page_3131, expense_3131
 from src.vehicle_records.vehicle_89 import page_7389, expense_7389
 from src.vehicle_records.vehicle_50 import page_2350, expense_2350
 from src.screens.products_manager import products_page
+from src.screens.chat_assistant import chat_assistant_page
 from src.database.auth import (
     login_page, is_logged_in, get_current_role,
     get_accessible_vehicles, is_admin_or_manager,
@@ -60,7 +61,6 @@ def render_sidebar():
             st.session_state['login_state'] = 'chat_assistant'
             st.rerun()
 
-        
         st.divider()
         if st.button("🚪 Logout", key="sb_logout", use_container_width=True):
             try:
@@ -72,6 +72,37 @@ def render_sidebar():
             st.rerun()
 
 
+def inject_floating_chat_button():
+    if st.session_state.get('login_state') == 'chat_assistant':
+        return  # already on the chat page, no need for the launcher
+    st.markdown("""
+        <style>
+        .floating-chat-btn {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            z-index: 9999;
+            width: 58px;
+            height: 58px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #FF9900, #E47911);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 26px;
+            text-decoration: none;
+            box-shadow: 0 6px 18px rgba(0,0,0,0.35);
+            transition: transform 0.15s ease;
+        }
+        .floating-chat-btn:hover {
+            transform: scale(1.08);
+            text-decoration: none;
+        }
+        </style>
+        <a href="?open_chat=1" target="_self" class="floating-chat-btn" title="Data Assistant">💬</a>
+    """, unsafe_allow_html=True)
+
+
 def main():
     if 'login_state' not in st.session_state:
         st.session_state['login_state'] = None
@@ -80,9 +111,15 @@ def main():
         login_page()
         return
 
+    if st.query_params.get('open_chat') == '1':
+        st.session_state['login_state'] = 'chat_assistant'
+        st.query_params.clear()
+        st.rerun()
+
     # Sidebar har page pe
     render_sidebar()
     inject_sidebar_shortcut()
+    inject_floating_chat_button()
 
     # ── Routing ──
     match st.session_state['login_state']:
@@ -153,7 +190,6 @@ def main():
 
         case 'chat_assistant':
             chat_assistant_page()
-    
         case 'maintenance':
             if get_maintenance_access():
                 maintenance_page()
