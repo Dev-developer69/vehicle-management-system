@@ -162,21 +162,7 @@ def _run_tool(name: str, tool_input: dict, accessible: list, updated_by: str) ->
         return {"ok": False, "message": f"❌ Save fail ho gaya: {e}"}
 
 
-def chat_assistant_page():
-    st.markdown("""
-        <style>
-        .block-container { max-width: 680px; }
-        </style>
-    """, unsafe_allow_html=True)
-
-    col1, col2 = st.columns([5, 1])
-    with col1:
-        st.header("💬 Data Assistant")
-    with col2:
-        if st.button("✕ Close", key="chat_close"):
-            st.session_state["login_state"] = None
-            st.rerun()
-
+def _render_chat_body():
     st.caption(
         "Plain language mein likho, ya photo attach karo — seedha database mein save ho jayega. "
         "Jaise: \"bus 2547 mein aaj 90 litre diesel dala, 420 km chali, driver ramesh\""
@@ -204,7 +190,7 @@ def chat_assistant_page():
     img_col1, img_col2 = st.columns(2)
     with img_col1:
         uploaded1 = st.file_uploader(
-            "📷 Photo 1 (optional) — log sheet, receipt, odometer",
+            "📷 Photo 1 (optional)",
             type=["jpg", "jpeg", "png", "webp"],
             key=f"{uploader_key}_1",
         )
@@ -316,3 +302,12 @@ def chat_assistant_page():
     st.session_state["chat_assistant_history"].append(
         {"role": "assistant", "content": final_text, "display": final_text}
     )
+
+
+@st.dialog("💬 Data Assistant", width="large")
+def chat_assistant_dialog():
+    """Opens as a proper modal (not full-screen) that overlays whatever page
+    the user is currently on. Calling this function IS what opens it —
+    Streamlit manages showing/closing it internally, no session_state routing
+    or page navigation required (which is what caused the earlier logout bug)."""
+    _render_chat_body()
