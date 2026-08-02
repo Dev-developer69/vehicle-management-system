@@ -9,7 +9,7 @@ def home_page():
     image_backgroung()
     st.text('Choose one')
 
-    col1, col2, col3 = st.columns(3, gap='small')
+    col1, col2, col3, col4 = st.columns(4, gap='small')
     with col1:
         if st.button("Vehicle Records", type='secondary', key='btn1', width='stretch',
                      icon=':material/article:', icon_position='right'):
@@ -24,6 +24,11 @@ def home_page():
         if st.button("Expenses", type='secondary', key='btn3', width='stretch',
                      icon=':material/payments:', icon_position='right'):
             st.session_state['login_state'] = 'expenses'
+            st.rerun()
+    with col4:
+        if st.button("Data Assistant", type='secondary', key='btn4', width='stretch',
+                     icon=':material/chat:', icon_position='right'):
+            st.session_state['login_state'] = 'chat_assistant'
             st.rerun()
 
     st.divider()
