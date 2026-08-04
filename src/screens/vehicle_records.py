@@ -365,9 +365,12 @@ def quick_overview(bus_list: list):
 
     with tab1:
         pivot = df.pivot_table(
-            index="date_str", columns="bus_number",
+            index="date", columns="bus_number",   # actual datetime column, not date_str
             values="actual_km", aggfunc="sum"
-        ).fillna(0)
+        ).sort_index()                             # chronological order
+        pivot = pivot.ffill().fillna(0)            # carry forward last known value instead of dropping to 0
+        pivot.index = pivot.index.strftime("%d %b")  # format labels AFTER sorting
+    
         fig = go.Figure()
         for i, col in enumerate(pivot.columns):
             fig.add_trace(go.Scatter(
@@ -442,9 +445,11 @@ Max 2 bullets per section. Be specific with numbers.
 
     with tab3:
         eff_pivot = df.pivot_table(
-            index="date_str", columns="bus_number",
+            index="date", columns="bus_number",
             values="efficiency_pct", aggfunc="mean"
-        ).fillna(0)
+        ).sort_index()
+        eff_pivot = eff_pivot.ffill().fillna(0)
+        eff_pivot.index = eff_pivot.index.strftime("%d %b")
         fig = go.Figure()
         for i, col in enumerate(eff_pivot.columns):
             fig.add_trace(go.Scatter(
