@@ -165,7 +165,7 @@ def vehicle_records():
     with col1:
         st.header("Select Vehicle", text_alignment='center')
     with col2:
-        if st.button('Home page', type='primary', width='stretch',
+        if st.button('Home page', type='primary', use_container_width=True,
                      icon=':material/home:', shortcut='control+backspace'):
             st.session_state['login_state'] = None
             st.rerun()
@@ -184,7 +184,7 @@ def vehicle_records():
                 btn_type = 'secondary' if i < 2 else 'tertiary'
                 if st.button(
                     bus, type=btn_type, key=f"btn_v_{bus}",
-                    width='stretch', icon=':material/bus_railway:', icon_position='right'
+                    use_container_width=True, icon=':material/bus_railway:', icon_position='right'
                 ):
                     st.session_state['login_state'] = VEHICLE_MAP[bus]
                     st.rerun()
