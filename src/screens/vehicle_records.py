@@ -372,54 +372,24 @@ def quick_overview(bus_list: list):
         fig = go.Figure()
         for i, col in enumerate(pivot.columns):
             color = bus_color_map.get(str(col), COLORS[i % len(COLORS)])
-            series = pivot[col].dropna()
+            series = pivot[col].dropna()   # only real recorded points, no fake 0
             if series.empty:
                 continue
-            x_vals = series.index
+            fig.add_trace(go.Scatter(
+                x=series.index, y=series.values,
+                mode="lines+markers", name=col,
+                line=dict(color=color, width=2),
+                marker=dict(size=6, color=color),
+                hovertemplate="<b>%{fullData.name}</b><br>%{x|%d %b}<br>%{y:.0f} km<extra></extra>",
+            ))
     
-            hover = "<b>%{fullData.name}</b><br>%{x|%d %b}<br>%{y:.0f} km<extra></extra>"
-    
-            if len(series) >= 2:
-                fig.add_trace(go.Scatter(
-                    x=x_vals[:-1], y=series.values[:-1],
-                    mode="lines+markers", name=col, legendgroup=col,
-                    line=dict(color=color, width=3, shape="spline", smoothing=0.3),
-                    marker=dict(size=7, color=color, line=dict(width=1.5, color="#0d2626")),
-                    hovertemplate=hover,
-                ))
-                fig.add_trace(go.Scatter(
-                    x=x_vals[-2:], y=series.values[-2:],
-                    mode="lines+markers", name=col, legendgroup=col, showlegend=False,
-                    line=dict(color=color, width=3, dash="dot"),
-                    marker=dict(size=[0, 9], color=color, line=dict(width=2, color="white")),
-                    hovertemplate=hover,
-                ))
-            else:
-                fig.add_trace(go.Scatter(
-                    x=x_vals, y=series.values, mode="markers",
-                    name=col, legendgroup=col,
-                    marker=dict(size=9, color=color, line=dict(width=1.5, color="#0d2626")),
-                    hovertemplate=hover,
-                ))
-    
-        # Base dark theme first
         fig = _plotly_dark(fig)
-    
-        # Then FORCE override the axis — this must come last, nothing after this touches xaxis
         fig.update_layout(
-            xaxis=dict(
-                type="date",
-                tickformat="%d %b",
-                gridcolor="rgba(255,255,255,0.08)",
-                tickangle=0,
-            ),
+            xaxis=dict(type="date", tickformat="%d %b", gridcolor="rgba(255,255,255,0.08)"),
             yaxis=dict(rangemode="tozero", gridcolor="rgba(255,255,255,0.08)"),
             xaxis_title="Date", yaxis_title="Actual KM",
             hovermode="x unified",
-            height=460,
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         )
-    
         st.plotly_chart(fig, use_container_width=True)
         
         _show_insight(f"""
