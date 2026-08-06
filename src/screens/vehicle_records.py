@@ -370,25 +370,65 @@ def quick_overview(bus_list: list):
         ).sort_index()
     
         fig = go.Figure()
+    
         for i, col in enumerate(pivot.columns):
             color = bus_color_map.get(str(col), COLORS[i % len(COLORS)])
-            series = pivot[col].dropna()   # only real recorded points, no fake 0
+            series = pivot[col].dropna()
             if series.empty:
                 continue
+    
+            # convert hex to rgba for soft fill
+            h = color.lstrip("#")
+            r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+            fill_color = f"rgba({r},{g},{b},0.12)"
+    
+            # Glowing gradient area under the line
             fig.add_trace(go.Scatter(
                 x=series.index, y=series.values,
-                mode="lines+markers", name=col,
-                line=dict(color=color, width=2),
-                marker=dict(size=6, color=color),
+                mode="lines", name=col, legendgroup=col,
+                line=dict(color=color, width=3, shape="spline", smoothing=0.4),
+                fill="tozeroy", fillcolor=fill_color,
                 hovertemplate="<b>%{fullData.name}</b><br>%{x|%d %b}<br>%{y:.0f} km<extra></extra>",
             ))
     
+            # Markers on top (separate trace so fill doesn't clip them)
+            fig.add_trace(go.Scatter(
+                x=series.index, y=series.values,
+                mode="markers", name=col, legendgroup=col, showlegend=False,
+                marker=dict(size=7, color=color, line=dict(width=1.5, color="#0d2626")),
+                hoverinfo="skip",
+            ))
+    
+            # Highlight ring on the latest point
+            fig.add_trace(go.Scatter(
+                x=[series.index[-1]], y=[series.values[-1]],
+                mode="markers", legendgroup=col, showlegend=False,
+                marker=dict(size=16, color="rgba(0,0,0,0)",
+                            line=dict(width=2, color=color)),
+                hoverinfo="skip",
+            ))
+    
+            # Callout on the best day
+            best_idx = series.idxmax()
+            fig.add_annotation(
+                x=best_idx, y=series[best_idx],
+                text=f"🏆 {int(series[best_idx])} km",
+                showarrow=True, arrowhead=0, arrowcolor=color,
+                ax=0, ay=-30,
+                font=dict(size=11, color=color),
+                bgcolor="rgba(13,38,38,0.85)", bordercolor=color, borderwidth=1, borderpad=4,
+            )
+    
         fig = _plotly_dark(fig)
         fig.update_layout(
-            xaxis=dict(type="date", tickformat="%d %b", gridcolor="rgba(255,255,255,0.08)"),
-            yaxis=dict(rangemode="tozero", gridcolor="rgba(255,255,255,0.08)"),
+            xaxis=dict(type="date", tickformat="%d %b", gridcolor="rgba(255,255,255,0.06)",
+                       showspikes=True, spikemode="across", spikecolor="rgba(255,255,255,0.2)", spikethickness=1),
+            yaxis=dict(rangemode="tozero", gridcolor="rgba(255,255,255,0.06)"),
             xaxis_title="Date", yaxis_title="Actual KM",
             hovermode="x unified",
+            height=480,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            plot_bgcolor="rgba(0,0,0,0)",
         )
         st.plotly_chart(fig, use_container_width=True)
         
