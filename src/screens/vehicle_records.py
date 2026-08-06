@@ -375,7 +375,7 @@ def quick_overview(bus_list: list):
             series = pivot[col].dropna()
             if series.empty:
                 continue
-            x_vals = series.index  # actual datetime, NOT strftime string
+            x_vals = series.index
     
             hover = "<b>%{fullData.name}</b><br>%{x|%d %b}<br>%{y:.0f} km<extra></extra>"
     
@@ -402,16 +402,26 @@ def quick_overview(bus_list: list):
                     hovertemplate=hover,
                 ))
     
+        # Base dark theme first
+        fig = _plotly_dark(fig)
+    
+        # Then FORCE override the axis — this must come last, nothing after this touches xaxis
         fig.update_layout(
+            xaxis=dict(
+                type="date",
+                tickformat="%d %b",
+                gridcolor="rgba(255,255,255,0.08)",
+                tickangle=0,
+            ),
+            yaxis=dict(rangemode="tozero", gridcolor="rgba(255,255,255,0.08)"),
             xaxis_title="Date", yaxis_title="Actual KM",
             hovermode="x unified",
             height=460,
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            yaxis=dict(rangemode="tozero"),
         )
-        st.plotly_chart(_plotly_dark(fig), use_container_width=True)
-        # override category axis from _plotly_dark with a proper date axis
-        fig.update_xaxes(type="date", tickformat="%d %b")
+    
+        st.plotly_chart(fig, use_container_width=True)
+        
         _show_insight(f"""
 Period: {period_label}
 Daily Actual KM per bus: {pivot.to_dict()}
