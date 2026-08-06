@@ -499,30 +499,64 @@ Max 2 bullets per section. Be specific with numbers.
             index="date", columns="bus_number",
             values="efficiency_pct", aggfunc="mean"
         ).sort_index()
-        eff_pivot = eff_pivot.ffill().fillna(0)
-        eff_pivot.index = eff_pivot.index.strftime("%d %b")
+    
         fig = go.Figure()
+    
         for i, col in enumerate(eff_pivot.columns):
+            color = bus_color_map.get(str(col), COLORS[i % len(COLORS)])
+            series = eff_pivot[col].dropna()
+            if series.empty:
+                continue
+    
+            h = color.lstrip("#")
+            r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+            fill_color = f"rgba({r},{g},{b},0.12)"
+    
+            # Glowing gradient area under the line
             fig.add_trace(go.Scatter(
-                x=eff_pivot.index, y=eff_pivot[col],
-                mode="lines+markers", name=col,
-                line=dict(color=bus_color_map.get(str(col), COLORS[i % len(COLORS)]), width=2),
+                x=series.index, y=series.values,
+                mode="lines", name=col, legendgroup=col,
+                line=dict(color=color, width=3, shape="spline", smoothing=0.4),
+                fill="tozeroy", fillcolor=fill_color,
+                hovertemplate="<b>%{fullData.name}</b><br>%{x|%d %b}<br>%{y:.1f}%<extra></extra>",
             ))
+    
+            # Markers on top
+            fig.add_trace(go.Scatter(
+                x=series.index, y=series.values,
+                mode="markers", name=col, legendgroup=col, showlegend=False,
+                marker=dict(size=7, color=color, line=dict(width=1.5, color="#0d2626")),
+                hoverinfo="skip",
+            ))
+    
+            # Highlight ring on the latest point
+            fig.add_trace(go.Scatter(
+                x=[series.index[-1]], y=[series.values[-1]],
+                mode="markers", legendgroup=col, showlegend=False,
+                marker=dict(size=16, color="rgba(0,0,0,0)",
+                            line=dict(width=2, color=color)),
+                hoverinfo="skip",
+            ))
+    
+            # Callout on the best (highest efficiency) day
+            best_idx = series.idxmax()
+            fig.add_annotation(
+                x=best_idx, y=series[best_idx],
+                text=f"🏆 {series[best_idx]:.1f}%",
+                showarrow=True, arrowhead=0, arrowcolor=color,
+                ax=0, ay=-30,
+                font=dict(size=11, color=color),
+                bgcolor="rgba(13,38,38,0.85)", bordercolor=color, borderwidth=1, borderpad=4,
+            )
+    
         fig.add_hline(y=100, line_dash="dash", line_color="gray", annotation_text="100% target")
-        fig.update_layout(xaxis_title="Date", yaxis_title="Efficiency %")
-        st.plotly_chart(_plotly_dark(fig), use_container_width=True)
-
-        st.markdown("**Best & Worst Day per Bus:**")
-        bw_cols = st.columns(len(summary))
-        for i, (_, row) in enumerate(summary.iterrows()):
-            with bw_cols[i]:
-                st.markdown(f"""
-                <div style='background:#1e1e3a;border-radius:8px;padding:10px;text-align:center;'>
-                    <b>🚌 {row["Bus"]}</b><br>
-                    <span style='color:#69F0AE;'>Best: {int(row["Best_KM_Day"])} km</span><br>
-                    <span style='color:#FF5252;'>Worst: {int(row["Worst_KM_Day"])} km</span>
-                </div>
-                """, unsafe_allow_html=True)
+    
+        fig = _plotly_dark(fig)
+        fig.update_layout(
+            xaxis=dict(type="date", tickformat="%d %b", gridcolor="rgba(255,255,255,0.06)",
+                       showspikes=True, spikemode="across", spikecolor="rgba(255,255,255,0.2)", spikethickness=1),
+            yaxis=dict(rangemode="tozero", gridcolor="rgba(255,255,255,0.06)"),
+                
         _show_insight(f"""
 Avg KM Efficiency per bus: {eff_pivot.mean().to_dict()}
 Best/Worst day per bus: {summary[['Bus','Best_KM_Day','Worst_KM_Day']].to_dict('records')}
