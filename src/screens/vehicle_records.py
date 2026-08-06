@@ -365,21 +365,50 @@ def quick_overview(bus_list: list):
 
     with tab1:
         pivot = df.pivot_table(
-            index="date", columns="bus_number",   # actual datetime column, not date_str
+            index="date", columns="bus_number",
             values="actual_km", aggfunc="sum"
-        ).sort_index()                             # chronological order
-        pivot = pivot.ffill().fillna(0)            # carry forward last known value instead of dropping to 0
-        pivot.index = pivot.index.strftime("%d %b")  # format labels AFTER sorting
+        ).sort_index()
     
         fig = go.Figure()
         for i, col in enumerate(pivot.columns):
-            fig.add_trace(go.Scatter(
-                x=pivot.index, y=pivot[col],
-                mode="lines+markers", name=col,
-                line=dict(color=bus_color_map.get(str(col), COLORS[i % len(COLORS)]), width=2),
-                marker=dict(size=6),
-            ))
-        fig.update_layout(xaxis_title="Date", yaxis_title="Actual KM", hovermode="x unified")
+            color = bus_color_map.get(str(col), COLORS[i % len(COLORS)])
+            series = pivot[col].dropna()
+            if series.empty:
+                continue
+            x_labels = series.index.strftime("%d %b")
+    
+            hover = "<b>%{fullData.name}</b><br>%{x}<br>%{y:.0f} km<extra></extra>"
+    
+            if len(series) >= 2:
+                fig.add_trace(go.Scatter(
+                    x=x_labels[:-1], y=series.values[:-1],
+                    mode="lines+markers", name=col, legendgroup=col,
+                    line=dict(color=color, width=3, shape="spline", smoothing=0.3),
+                    marker=dict(size=7, color=color, line=dict(width=1.5, color="#0d2626")),
+                    hovertemplate=hover,
+                ))
+                fig.add_trace(go.Scatter(
+                    x=x_labels[-2:], y=series.values[-2:],
+                    mode="lines+markers", name=col, legendgroup=col, showlegend=False,
+                    line=dict(color=color, width=3, dash="dot"),
+                    marker=dict(size=[0, 9], color=color, line=dict(width=2, color="white")),
+                    hovertemplate=hover,
+                ))
+            else:
+                fig.add_trace(go.Scatter(
+                    x=x_labels, y=series.values, mode="markers",
+                    name=col, legendgroup=col,
+                    marker=dict(size=9, color=color, line=dict(width=1.5, color="#0d2626")),
+                    hovertemplate=hover,
+                ))
+    
+        fig.update_layout(
+            xaxis_title="Date", yaxis_title="Actual KM",
+            hovermode="x unified",
+            height=460,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            yaxis=dict(rangemode="tozero"),
+        )
         st.plotly_chart(_plotly_dark(fig), use_container_width=True)
         _show_insight(f"""
 Period: {period_label}
