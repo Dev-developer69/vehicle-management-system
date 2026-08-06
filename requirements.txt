@@ -1,6 +1,6 @@
 pandas
 numpy
-streamlit==1.47.1
+streamlit>=1.42.0
 supabase==2.15.0
 bcrypt
 fpdf2
