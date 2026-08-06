@@ -375,20 +375,20 @@ def quick_overview(bus_list: list):
             series = pivot[col].dropna()
             if series.empty:
                 continue
-            x_labels = series.index.strftime("%d %b")
+            x_vals = series.index  # actual datetime, NOT strftime string
     
-            hover = "<b>%{fullData.name}</b><br>%{x}<br>%{y:.0f} km<extra></extra>"
+            hover = "<b>%{fullData.name}</b><br>%{x|%d %b}<br>%{y:.0f} km<extra></extra>"
     
             if len(series) >= 2:
                 fig.add_trace(go.Scatter(
-                    x=x_labels[:-1], y=series.values[:-1],
+                    x=x_vals[:-1], y=series.values[:-1],
                     mode="lines+markers", name=col, legendgroup=col,
                     line=dict(color=color, width=3, shape="spline", smoothing=0.3),
                     marker=dict(size=7, color=color, line=dict(width=1.5, color="#0d2626")),
                     hovertemplate=hover,
                 ))
                 fig.add_trace(go.Scatter(
-                    x=x_labels[-2:], y=series.values[-2:],
+                    x=x_vals[-2:], y=series.values[-2:],
                     mode="lines+markers", name=col, legendgroup=col, showlegend=False,
                     line=dict(color=color, width=3, dash="dot"),
                     marker=dict(size=[0, 9], color=color, line=dict(width=2, color="white")),
@@ -396,7 +396,7 @@ def quick_overview(bus_list: list):
                 ))
             else:
                 fig.add_trace(go.Scatter(
-                    x=x_labels, y=series.values, mode="markers",
+                    x=x_vals, y=series.values, mode="markers",
                     name=col, legendgroup=col,
                     marker=dict(size=9, color=color, line=dict(width=1.5, color="#0d2626")),
                     hovertemplate=hover,
@@ -410,6 +410,8 @@ def quick_overview(bus_list: list):
             yaxis=dict(rangemode="tozero"),
         )
         st.plotly_chart(_plotly_dark(fig), use_container_width=True)
+        # override category axis from _plotly_dark with a proper date axis
+        fig.update_xaxes(type="date", tickformat="%d %b")
         _show_insight(f"""
 Period: {period_label}
 Daily Actual KM per bus: {pivot.to_dict()}
