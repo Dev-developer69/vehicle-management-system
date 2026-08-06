@@ -556,27 +556,45 @@ Max 2 bullets per section. Be specific with numbers.
             xaxis=dict(type="date", tickformat="%d %b", gridcolor="rgba(255,255,255,0.06)",
                        showspikes=True, spikemode="across", spikecolor="rgba(255,255,255,0.2)", spikethickness=1),
             yaxis=dict(rangemode="tozero", gridcolor="rgba(255,255,255,0.06)"),
-                
+            xaxis_title="Date", yaxis_title="Efficiency %",
+            hovermode="x unified",
+            height=480,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            plot_bgcolor="rgba(0,0,0,0)",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    
+        st.markdown("**Best & Worst Day per Bus:**")
+        bw_cols = st.columns(len(summary))
+        for i, (_, row) in enumerate(summary.iterrows()):
+            with bw_cols[i]:
+                st.markdown(f"""
+                <div style='background:#1e1e3a;border-radius:8px;padding:10px;text-align:center;'>
+                    <b>🚌 {row["Bus"]}</b><br>
+                    <span style='color:#69F0AE;'>Best: {int(row["Best_KM_Day"])} km</span><br>
+                    <span style='color:#FF5252;'>Worst: {int(row["Worst_KM_Day"])} km</span>
+                </div>
+                """, unsafe_allow_html=True)
         _show_insight(f"""
-Avg KM Efficiency per bus: {eff_pivot.mean().to_dict()}
-Best/Worst day per bus: {summary[['Bus','Best_KM_Day','Worst_KM_Day']].to_dict('records')}
-
-Analyze efficiency and respond in this exact format:
-🟢 Strengths
-• [highest efficiency bus — name and % avg]
-
-🟠 Opportunities
-• [bus with large best/worst gap — name it]
-
-🔴 Critical Issues
-• [bus below 80% efficiency — name it, possible cause]
-
-💡 Recommendations
-• [maintenance check, load balancing, or route review]
-
-📈 Overall Status: Excellent / Good / Average / Poor
-Max 2 bullets per section. Plain text only.
-""")
+    Avg KM Efficiency per bus: {eff_pivot.mean().to_dict()}
+    Best/Worst day per bus: {summary[['Bus','Best_KM_Day','Worst_KM_Day']].to_dict('records')}
+    
+    Analyze efficiency and respond in this exact format:
+    🟢 Strengths
+    - [highest efficiency bus — name and % avg]
+    
+    🟠 Opportunities
+    - [bus with large best/worst gap — name it]
+    
+    🔴 Critical Issues
+    - [bus below 80% efficiency — name it, possible cause]
+    
+    💡 Recommendations
+    - [maintenance check, load balancing, or route review]
+    
+    📈 Overall Status: Excellent / Good / Average / Poor
+    Max 2 bullets per section. Plain text only.
+    """)
 
     with tab4:
         donut_cols = st.columns(len(bus_list))
