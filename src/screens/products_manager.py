@@ -479,13 +479,20 @@ def _supplier_details_tab():
                     with st.spinner("Image se supplier details read ho rahi hain..."):
                         result = _extract_data_from_image(
                             sup_uploaded.read(), sup_uploaded.type,
-                            "Extract supplier/business details from ALL business cards in this image. "
-                            "For each card: use COMPANY/BUSINESS name as name (not person's name). "
-                            "If no company name, use person's name. "
-                            "Save ALL phone numbers from each card as comma-separated string in phone field. "
-                            "Return ONLY a JSON array, one object per card with keys: "
+                            "This image can be EITHER a business card OR a printed document such as a "
+                            "TAX INVOICE / bill / letterhead. Extract the SUPPLIER (the SELLER / company "
+                            "that issued the document) details — NOT the buyer. "
+                            "On a tax invoice, the supplier/seller is usually printed at the TOP "
+                            "(company name, address, mobile/phone, GSTIN, email) — do NOT confuse it with "
+                            "the 'Buyer', 'Bill to', 'Consignee', or 'Ship to' section, which belongs to the customer. "
+                            "If the image has multiple business cards instead, extract each one separately. "
+                            "For each supplier/card found: use the COMPANY/BUSINESS name as name (not a person's name, "
+                            "unless no company name is printed, in which case use the person's or authorised signatory's name). "
+                            "Save ALL phone/mobile numbers found for that supplier as a comma-separated string in the phone field. "
+                            "Combine the full postal address (including city, state, pincode) into the address field. "
+                            "Return ONLY a JSON array, one object per supplier, with keys: "
                             "name (company name), phone (all numbers comma-separated as string), address (full address). "
-                            "If any field not found set it to null. "
+                            "If any field not found set it to null. Never return the buyer's details. "
                             "No explanation, no markdown, just raw JSON array. "
                             "Example: [{\"name\": \"Rohit Textile Inc\", \"phone\": \"+91 9582297932, +91 9871221331\", \"address\": \"GF 2892/5, Singhara Chowk, Sadar Bazar, Delhi-110006\"}]"
                         )
