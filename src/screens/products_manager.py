@@ -11,6 +11,27 @@ from src.database.db import (
     get_requirements, save_requirement, fulfill_requirement, delete_requirement,
 )
 
+# Shared by both the Claude and Groq extraction paths for supplier images —
+# keeps behaviour identical regardless of which model the user picks.
+SUPPLIER_EXTRACT_PROMPT = (
+    "This image can be EITHER a business card OR a printed document such as a "
+    "TAX INVOICE / bill / letterhead. Extract the SUPPLIER (the SELLER / company "
+    "that issued the document) details — NOT the buyer. "
+    "On a tax invoice, the supplier/seller is usually printed at the TOP "
+    "(company name, address, mobile/phone, GSTIN, email) — do NOT confuse it with "
+    "the 'Buyer', 'Bill to', 'Consignee', or 'Ship to' section, which belongs to the customer. "
+    "If the image has multiple business cards instead, extract each one separately. "
+    "For each supplier/card found: use the COMPANY/BUSINESS name as name (not a person's name, "
+    "unless no company name is printed, in which case use the person's or authorised signatory's name). "
+    "Save ALL phone/mobile numbers found for that supplier as a comma-separated string in the phone field. "
+    "Combine the full postal address (including city, state, pincode) into the address field. "
+    "Return ONLY a JSON array, one object per supplier, with keys: "
+    "name (company name), phone (all numbers comma-separated as string), address (full address). "
+    "If any field not found set it to null. Never return the buyer's details. "
+    "No explanation, no markdown, just raw JSON array. "
+    "Example: [{\"name\": \"Rohit Textile Inc\", \"phone\": \"+91 9582297932, +91 9871221331\", \"address\": \"GF 2892/5, Singhara Chowk, Sadar Bazar, Delhi-110006\"}]"
+)
+
 def _compress_image(image_bytes: bytes, max_dimension: int = 900, quality: int = 55) -> bytes:
     """Image ko resize + compress karo taaki vision model ke token usage kam ho"""
     try:
@@ -67,6 +88,45 @@ def _compress_image(image_bytes: bytes, max_dimension: int = 900, quality: int =
 #         return []
 
 # ──────────────────────────────────────────────
+# HELPER: Image → structured data via Claude Vision (direct, one-step)
+# ──────────────────────────────────────────────
+def _extract_with_claude(image_bytes: bytes, mime_type: str, prompt: str) -> list:
+    try:
+        import anthropic, base64, json, re
+        image_bytes = _compress_image(image_bytes)
+        mime_type = "image/jpeg"
+
+        client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
+        b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
+        msg = client.messages.create(
+            model="claude-sonnet-5",
+            max_tokens=2000,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "image", "source": {"type": "base64", "media_type": mime_type, "data": b64}},
+                    {"type": "text", "text": prompt},
+                ],
+            }],
+        )
+        raw = re.sub(r"```json|```", "", msg.content[0].text.strip()).strip()
+
+        # Same "Extra data" fix as the Groq path — only parse the first
+        # complete JSON array, ignore any trailing text the model adds.
+        start = raw.find("[")
+        if start == -1:
+            st.error("Image read failed: response mein koi JSON array nahi mila.")
+            return []
+        parsed, _ = json.JSONDecoder().raw_decode(raw[start:])
+        if isinstance(parsed, dict):
+            parsed = [parsed]
+        return parsed if isinstance(parsed, list) else []
+    except Exception as e:
+        st.error(f"Image read failed: {e}")
+        return []
+
+
+# ──────────────────────────────────────────────
 # HELPER: Verify/correct Groq's extraction via Claude
 # ──────────────────────────────────────────────
 def _verify_with_claude(image_bytes: bytes, mime_type: str, groq_result: list) -> list:
@@ -75,7 +135,7 @@ def _verify_with_claude(image_bytes: bytes, mime_type: str, groq_result: list) -
         client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
         b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
         msg = client.messages.create(
-            model="claude-sonnet-4-6",
+            model="claude-sonnet-5",
             max_tokens=1000,   # verification hai, chhota output expected
             messages=[{
                 "role": "user",
@@ -138,12 +198,22 @@ def _extract_data_from_image(image_bytes: bytes, mime_type: str, prompt: str) ->
 
         raw = re.sub(r"```json|```", "", raw).strip()
 
-    
-        match = re.search(r"\[.*\]", raw, re.DOTALL)
-        if match:
-            raw = match.group(0)
+        # ✅ FIX: the old greedy regex (\[.*\]) grabbed from the FIRST '[' to the
+        # LAST ']' in the whole response — if the model added any extra text or
+        # a second/duplicate JSON block after the real array, both got glued
+        # together into one invalid string, causing "Extra data" JSONDecodeError.
+        # raw_decode() instead parses only the first complete JSON value starting
+        # at the first '[' and safely ignores anything the model appended after it.
+        start = raw.find("[")
+        if start == -1:
+            st.error("Image read failed: response mein koi JSON array nahi mila.")
+            return []
+        try:
+            parsed, _ = json.JSONDecoder().raw_decode(raw[start:])
+        except json.JSONDecodeError as e:
+            st.error(f"Image read failed: {e}")
+            return []
 
-        parsed = json.loads(raw)
         if isinstance(parsed, dict):
             parsed = [parsed]
         return parsed if isinstance(parsed, list) else []
@@ -468,6 +538,11 @@ def _supplier_details_tab():
                             horizontal=True, key="sup_input_mode")
 
         if sup_mode == "📷 From Card/Image":
+            sup_ai_choice = st.radio(
+                "AI Model", ["🤖 Claude (Accurate)", "⚡ Groq (Fast)"],
+                horizontal=True, key="sup_ai_choice",
+                help="Claude: invoices/tax bills better padhta hai, thoda slow | Groq: free & fast",
+            )
             sup_img_reset = st.session_state.get("sup_img_reset", 0)
             sup_uploaded = st.file_uploader(
                 "Business card ya supplier info ki image upload karo",
@@ -476,26 +551,12 @@ def _supplier_details_tab():
             )
             if sup_uploaded:
                 if "sup_extracted" not in st.session_state:
-                    with st.spinner("Image se supplier details read ho rahi hain..."):
-                        result = _extract_data_from_image(
-                            sup_uploaded.read(), sup_uploaded.type,
-                            "This image can be EITHER a business card OR a printed document such as a "
-                            "TAX INVOICE / bill / letterhead. Extract the SUPPLIER (the SELLER / company "
-                            "that issued the document) details — NOT the buyer. "
-                            "On a tax invoice, the supplier/seller is usually printed at the TOP "
-                            "(company name, address, mobile/phone, GSTIN, email) — do NOT confuse it with "
-                            "the 'Buyer', 'Bill to', 'Consignee', or 'Ship to' section, which belongs to the customer. "
-                            "If the image has multiple business cards instead, extract each one separately. "
-                            "For each supplier/card found: use the COMPANY/BUSINESS name as name (not a person's name, "
-                            "unless no company name is printed, in which case use the person's or authorised signatory's name). "
-                            "Save ALL phone/mobile numbers found for that supplier as a comma-separated string in the phone field. "
-                            "Combine the full postal address (including city, state, pincode) into the address field. "
-                            "Return ONLY a JSON array, one object per supplier, with keys: "
-                            "name (company name), phone (all numbers comma-separated as string), address (full address). "
-                            "If any field not found set it to null. Never return the buyer's details. "
-                            "No explanation, no markdown, just raw JSON array. "
-                            "Example: [{\"name\": \"Rohit Textile Inc\", \"phone\": \"+91 9582297932, +91 9871221331\", \"address\": \"GF 2892/5, Singhara Chowk, Sadar Bazar, Delhi-110006\"}]"
-                        )
+                    icon = "🔵 Claude" if sup_ai_choice.startswith("🤖") else "🟢 Groq"
+                    with st.spinner(f"Image se supplier details read ho rahi hain ({icon})..."):
+                        if sup_ai_choice.startswith("🤖"):
+                            result = _extract_with_claude(sup_uploaded.read(), sup_uploaded.type, SUPPLIER_EXTRACT_PROMPT)
+                        else:
+                            result = _extract_data_from_image(sup_uploaded.read(), sup_uploaded.type, SUPPLIER_EXTRACT_PROMPT)
                         if isinstance(result, dict):  result = [result]
                         if not isinstance(result, list): result = []
                         result = [s for s in result if isinstance(s, dict)]
