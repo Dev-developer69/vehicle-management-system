@@ -195,29 +195,61 @@ def editable_grid(bus_number: str):
     st.markdown(f"### Vehicle Records {bus_number} 🚐")
 
     # ── Extract Records from Image ──
+    FIELD_DEFS = {
+        "Diesel":         ("diesel",         "'Diesel', 'DSL', 'Fuel' (litres)"),
+        "Income":         ("income",         "'Income', 'INCOME', 'Base Fare' (NOT per-km, NOT load factor)"),
+        "Gross Income":   ("gross_income",   "'Gross', 'GROSS', 'Total Income'"),
+        "Remark":         ("remark",         "'Remark', 'REMARK' column — copy the exact text as-is (e.g. 'ON ROUTE', 'LEAVE APPROVED', 'ABSENT', 'NEXT PERIOD'). If empty set null."),
+        "Driver Name":    ("driver_name",    "'Driver', 'Driver Name', 'DRIVER' column — copy exact name as-is"),
+        "Conductor Name": ("conductor_name", "'Conductor', 'Conductor Name', 'COND' column — copy exact name as-is"),
+        "Scheduled KM":   ("scheduled_km",   "'Scheduled KM', 'SCH KM', 'Sch.KM' column (numeric)"),
+        "Actual KM":      ("actual_km",      "'Actual KM', 'ACT KM', 'Actual' column (numeric)"),
+    }
+
     with st.expander("📷 Extract Records from Image (optional)"):
         st.caption("Agar sheet chaudi hai aur do photos mein aayi hai, dono upload karo.")
-        
-        # ✅ AI choice
+
+        st.markdown("**Kya extract karna hai?**")
+        selected_fields = st.pills(
+            "Fields",
+            options=list(FIELD_DEFS.keys()),
+            selection_mode="multi",
+            default=["Diesel", "Income", "Gross Income", "Remark"],
+            key=f"extract_fields_{bus_number}",
+            label_visibility="collapsed",
+        )
+        if not selected_fields:
+            st.caption("⚠️ Kam se kam ek field select karo.")
+
         ai_choice = st.radio(
             "🤖 AI Model",
             ["🤖 Claude (Accurate — 2 images ek saath)", "⚡ Groq (Fast — 1 image at a time)"],
             horizontal=True,
             key=f"ai_choice_{bus_number}"
         )
-    
+
         img_file_1 = st.file_uploader("Image 1 (Date wali, ya poori image)",
                                        type=["jpg","jpeg","png","webp"],
                                        key=f"inc_img1_{bus_number}")
         img_file_2 = st.file_uploader("Image 2 (optional — baaki columns wali)",
                                        type=["jpg","jpeg","png","webp"],
                                        key=f"inc_img2_{bus_number}")
-    
-        if img_file_1 and st.button("🔍 Extract", key=f"inc_extract_{bus_number}"):
+
+        if img_file_1 and selected_fields and st.button("🔍 Extract", key=f"inc_extract_{bus_number}"):
             with st.spinner("Extracting..."):
                 from src.screens.products_manager import (
                     _extract_data_from_images, _compress_image
                 )
+
+                field_bullets = "\n".join(
+                    f"- {FIELD_DEFS[f][0]}: {FIELD_DEFS[f][1]}" for f in selected_fields
+                )
+                json_keys = ", ".join(["date"] + [FIELD_DEFS[f][0] for f in selected_fields])
+
+                always_ignore = {"IPKM", "LF", "OTH.INC", "load factor", "per-km rates"}
+                km_labels = {"Scheduled KM", "Actual KM"}
+                ignore_extra = km_labels - set(selected_fields)
+                ignore_list = ", ".join(sorted(ignore_extra | always_ignore))
 
                 prompt = (
                     "This is a vehicle log table with varying column names across different sheets. "
@@ -228,20 +260,14 @@ def editable_grid(bus_number: str):
                     + "Extract every row (skip the TOTAL/summary row). "
                     "For each row extract these fields if matching column exists:\n"
                     "- date: Convert to YYYY-MM-DD.\n"
-                    "- diesel: 'Diesel', 'DSL', 'Fuel' (litres)\n"
-                    "- income: 'Income', 'INCOME', 'Base Fare' (NOT per-km, NOT load factor)\n"
-                    "- gross_income: 'Gross', 'GROSS', 'Total Income'\n"
-                    "- remark: 'Remark', 'REMARK' column — copy the exact text as-is "
-                    "(e.g. 'ON ROUTE', 'LEAVE APPROVED', 'ABSENT', 'NEXT PERIOD'). "
-                    "If empty set null.\n\n"
-                    "IGNORE: Scheduled KM, Actual KM, IPKM, LF, OTH.INC, load factor, per-km rates. "
+                    f"{field_bullets}\n\n"
+                    f"IGNORE: {ignore_list}. "
                     "If field not present set null. "
-                    "Return ONLY JSON array with keys: date, diesel, income, gross_income, remark. "
+                    f"Return ONLY JSON array with keys: {json_keys}. "
                     "No explanation, no markdown."
                 )
 
                 if "Claude" in ai_choice:
-                    # ✅ Claude — dono images ek saath ek call mein
                     import anthropic, base64, json, re
                     client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
 
@@ -276,7 +302,6 @@ def editable_grid(bus_number: str):
                         result = []
 
                 else:
-                    # ✅ Groq — sequentially with delay
                     images = [(img_file_1.read(), img_file_1.type)]
                     if img_file_2:
                         images.append((img_file_2.read(), img_file_2.type))
@@ -285,26 +310,23 @@ def editable_grid(bus_number: str):
             if result:
                 rows = []
                 for r in result:
-                    remark_text = str(r.get("remark") or "").strip().upper()
+                    remark_text = str(r.get("remark") or "").strip().upper() if "Remark" in selected_fields else ""
 
-                    # ✅ Status Remark text se decide hota hai
                     is_absent_or_leave = ("ABSENT" in remark_text) or ("LEAVE APPROVED" in remark_text) or ("LEAVE" in remark_text and "APPROV" in remark_text)
                     status = "On Leave" if is_absent_or_leave else "Present"
-
-                    # ✅ Next flag "NEXT PERIOD" remark text se set hota hai
                     is_next = "NEXT" in remark_text and "PERIOD" in remark_text
 
                     rows.append({
                         "Date":           pd.to_datetime(r.get("date"), errors="coerce"),
                         "Status":         status,
-                        "Driver Name":    "None",
-                        "Conductor Name": "None",
-                        "Scheduled KM":   0 if is_absent_or_leave else None,
-                        "Actual KM":      0 if is_absent_or_leave else None,
-                        "Diesel":         r.get("diesel"),
+                        "Driver Name":    (r.get("driver_name") or "None") if "Driver Name" in selected_fields else "None",
+                        "Conductor Name": (r.get("conductor_name") or "None") if "Conductor Name" in selected_fields else "None",
+                        "Scheduled KM":   (0 if is_absent_or_leave else (r.get("scheduled_km") if "Scheduled KM" in selected_fields else None)),
+                        "Actual KM":      (0 if is_absent_or_leave else (r.get("actual_km") if "Actual KM" in selected_fields else None)),
+                        "Diesel":         r.get("diesel") if "Diesel" in selected_fields else None,
                         "Diesel KM":      None,
-                        "Income":         r.get("income"),
-                        "Gross Income":   r.get("gross_income") or 0,
+                        "Income":         r.get("income") if "Income" in selected_fields else None,
+                        "Gross Income":   (r.get("gross_income") or 0) if "Gross Income" in selected_fields else None,
                         "Remark":         "",
                         "Next":           is_next,
                     })
@@ -312,7 +334,7 @@ def editable_grid(bus_number: str):
                 new_df = new_df.dropna(subset=["Date"])
                 new_df["Date"] = new_df["Date"].dt.date
                 st.session_state[key] = new_df
-                st.success(f"✅ {len(new_df)} rows extracted — Scheduled/Actual KM, Driver/Conductor Name bhar ke Save karo")
+                st.success(f"✅ {len(new_df)} rows extracted — baaki fields bhar ke Save karo")
                 st.rerun()
             else:
                 st.warning("⚠️ Extraction failed, fill manually.")
