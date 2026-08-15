@@ -20,7 +20,7 @@ def get_current_role() -> str:
     return role
 
 
-ALL_VEHICLES = ["7389", "2350", "0303", "3131"]
+ALL_VEHICLES = ["7389", "2350", "0303", "3131", "AT7389"]
 
 def get_accessible_vehicles() -> list:
     """Subordinate ke liye assigned vehicles, admin/manager ko sab"""
