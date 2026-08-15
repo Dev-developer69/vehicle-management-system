@@ -54,6 +54,11 @@ def _highlight_due(row):
 # ──────────────────────────────────────────────
 def _maintenance_home():
     home_layout()
+    st.markdown("""
+        <style>
+            .block-container { padding-top: 1rem !important; }
+        </style>
+    """, unsafe_allow_html=True)
     st.markdown("### 🔧 Maintenance Manager")
     st.caption("Choose Vehicle")
 
@@ -74,15 +79,27 @@ def _maintenance_home():
         st.warning("⚠️ No Vehicle access. Contact Admin....")
         return
 
-    # ── Vehicle buttons — 2 per row ──
-    for row_start in range(0, len(vehicles), 2):
-        row_vehicles = vehicles[row_start:row_start + 2]
-        cols = st.columns(2)
-        for i, bus in enumerate(row_vehicles):
-            with cols[i]:
+    # ── Vehicle buttons — 2 per row, akela bacha last vehicle center me ──
+    n = len(vehicles)
+    i = 0
+    while i < n:
+        if i == n - 1:
+            _, ccenter, _ = st.columns([1, 2, 1])
+            bus = vehicles[i]
+            with ccenter:
                 if st.button(f"🚐 {bus}", key=f"maint_veh_{bus}", use_container_width=True):
                     st.session_state["maintenance_selected_vehicle"] = bus
                     st.rerun()
+            i += 1
+        else:
+            cols = st.columns(2)
+            for j in range(2):
+                bus = vehicles[i + j]
+                with cols[j]:
+                    if st.button(f"🚐 {bus}", key=f"maint_veh_{bus}", use_container_width=True):
+                        st.session_state["maintenance_selected_vehicle"] = bus
+                        st.rerun()
+            i += 2
 
     st.divider()
 
