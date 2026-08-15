@@ -118,13 +118,27 @@ def expenses():
         return
 
     # ── Vehicle buttons ──
-    col1, col2 = st.columns(2, gap='small')
-    for i, (bus, state) in enumerate(visible_buses):
-        col = col1 if i % 2 == 0 else col2
-        with col:
-            if st.button(f"🚌 Bus {bus}", type='secondary', width='stretch', key=f"exp_btn_{bus}"):
-                st.session_state['login_state'] = state
-                st.rerun()
+    n = len(visible_buses)
+    i = 0
+    while i < n:
+        if i == n - 1:
+            # akela bacha last bus — center me dikhao
+            _, ccenter, _ = st.columns([1, 2, 1], gap='small')
+            bus, state = visible_buses[i]
+            with ccenter:
+                if st.button(f"🚌 Bus {bus}", type='secondary', width='stretch', key=f"exp_btn_{bus}"):
+                    st.session_state['login_state'] = state
+                    st.rerun()
+            i += 1
+        else:
+            col1, col2 = st.columns(2, gap='small')
+            for j, col in enumerate([col1, col2]):
+                bus, state = visible_buses[i + j]
+                with col:
+                    if st.button(f"🚌 Bus {bus}", type='secondary', width='stretch', key=f"exp_btn_{bus}"):
+                        st.session_state['login_state'] = state
+                        st.rerun()
+            i += 2
 
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown("---")
