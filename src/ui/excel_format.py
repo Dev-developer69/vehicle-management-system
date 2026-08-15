@@ -20,6 +20,13 @@ from src.database.db import (
 )
 
 # ──────────────────────────────────────────────
+# HELPER: Diesel vs CNG label (AT7389 is CNG)
+# ──────────────────────────────────────────────
+def fuel_label(bus_number: str) -> str:
+    return "CNG" if bus_number == "AT7389" else "Diesel"
+
+
+# ──────────────────────────────────────────────
 # HELPER: Editor widget state → DataFrame
 # ──────────────────────────────────────────────
 def _apply_editor_state(original_df: pd.DataFrame, editor_state: dict) -> pd.DataFrame:
@@ -371,8 +378,8 @@ def editable_grid(bus_number: str):
             "Conductor Name": st.column_config.TextColumn("Conductor Name"),
             "Scheduled KM":   st.column_config.NumberColumn("Scheduled KM", min_value=0, default=scheduled_km),
             "Actual KM":      st.column_config.NumberColumn("Actual KM", min_value=0, default=0),
-            "Diesel":         st.column_config.NumberColumn("Diesel", min_value=0.0, step=0.01, format="%.2f"),
-            "Diesel KM":      st.column_config.NumberColumn("Diesel KM", min_value=0),
+            "Diesel":         st.column_config.NumberColumn(fuel_label(bus_number), min_value=0.0, step=0.01, format="%.2f"),
+            "Diesel KM":      st.column_config.NumberColumn(f"{fuel_label(bus_number)} KM", min_value=0),
             "Income":         st.column_config.NumberColumn("Income", min_value=0),
             "Gross Income":   st.column_config.NumberColumn("Gross Income", min_value=0),
             "Remark":         st.column_config.TextColumn("Remark"),
@@ -712,7 +719,8 @@ def expenses(bus_number: str = ""):
 # 4. DIESEL VIEW — har row ka alag rate
 # ──────────────────────────────────────────────
 def diesel_view(bus_number: str = ""):
-    st.markdown("### Diesel View ⛽")
+    fuel = fuel_label(bus_number)
+    st.markdown(f"### {fuel} View ⛽")
 
     col1, col2, col3 = st.columns([2, 2, 1])
     with col1:
@@ -736,7 +744,7 @@ def diesel_view(bus_number: str = ""):
     saved = st.session_state[state_key]
 
     universal_rate = st.number_input(
-        "⛽ Set rate for whole table ",
+        f"⛽ Set rate for whole table ({fuel})",
         min_value=0.0, step=0.01, format="%.2f",
         value=saved["rate"],
         key=f"diesel_rate_input_{bus_number}_{d_month}_{d_period}"
@@ -776,7 +784,7 @@ def diesel_view(bus_number: str = ""):
         key=ed_key,
         column_config={
             "Date":       st.column_config.TextColumn("Date", disabled=True),
-            "Diesel":     st.column_config.NumberColumn("Diesel (L)", disabled=True, format="%.2f"),
+            "Diesel":     st.column_config.NumberColumn(f"{fuel} (L)", disabled=True, format="%.2f"),
             "Rate (₹/L)": st.column_config.NumberColumn("Rate (₹/L)", min_value=0.0,
                                                            step=0.01, format="%.2f"),
         }
@@ -817,7 +825,7 @@ def diesel_view(bus_number: str = ""):
     <div style='background:#1e1e3a;border-radius:10px;padding:16px 24px;margin:12px 0;
                 display:flex;gap:40px;flex-wrap:wrap;'>
         <div>
-            <div style='color:#aaa;font-size:0.85rem;'>Total Diesel</div>
+            <div style='color:#aaa;font-size:0.85rem;'>Total {fuel}</div>
             <div style='color:#7B8CFF;font-size:1.3rem;font-weight:bold;'>{total_diesel:.2f} L</div>
         </div>
         <div>
