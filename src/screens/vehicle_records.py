@@ -15,6 +15,7 @@ VEHICLE_MAP = {
     "2350": "page_2350",
     "0303": "page_0303",
     "3131": "page_3131",
+    "AT7389": "page_AT7389",
 }
 
 MIN_NORMAL_MILEAGE = 4.0
