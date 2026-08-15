@@ -183,13 +183,12 @@ def vehicle_records():
         i = 0
         while i < n:
             if i == n - 1:
-                # akela bacha last vehicle — center me dikhao
+                # akela bacha last vehicle — center me dikhao, purple (Home page jaisa)
                 _, ccenter, _ = st.columns([1, 2, 1])
                 bus = visible_vehicles[i]
                 with ccenter:
-                    btn_type = 'secondary' if i < 2 else 'tertiary'
                     if st.button(
-                        bus, type=btn_type, key=f"btn_v_{bus}",
+                        bus, type='primary', key=f"btn_v_{bus}",
                         use_container_width=True, icon=':material/bus_railway:', icon_position='right'
                     ):
                         st.session_state['login_state'] = VEHICLE_MAP[bus]
