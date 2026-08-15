@@ -10,7 +10,7 @@ from src.database.db import (
 )
 from src.database.auth import get_accessible_vehicles, is_admin_or_manager
 
-BUS_NUMBERS = ["0303", "2350", "7389", "3131"]
+BUS_NUMBERS = ["0303", "2350", "7389", "3131", "AT7389"]
 
 
 def _compute_row_km(bus_number: str, service_type: str, record_date, is_latest: bool):
