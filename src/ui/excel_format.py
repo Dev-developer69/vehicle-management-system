@@ -8,7 +8,7 @@ from src.screens.products_manager import _extract_data_from_image
 from src.database.db import (
     save_vehicle_records, save_driver_salary, save_vehicle_expenses,
     get_vehicle_records, get_driver_salary, get_vehicle_expenses,
-    get_salary_check, get_scheduled_km, save_scheduled_km, get_diesel_summary,
+    get_salary_check, get_scheduled_km, get_diesel_summary,
     update_vehicle_expense, delete_vehicle_expense,
     update_driver_salary, delete_driver_salary,delete_vehicle_record,
     get_diesel_rate_payment, save_diesel_rate_payment,
@@ -184,25 +184,6 @@ def editable_grid(bus_number: str):
     scheduled_km = st.session_state[sched_km_key]
 
     st.markdown(f"### Vehicle Records {bus_number} 🚐")
-
-    # ── Scheduled KM selector (390 / 552 hi) — sirf AT7389 (CNG) ke liye, Supabase me save ──
-    if bus_number == "AT7389":
-        SCH_KM_OPTIONS = [390, 552]
-        dd_col1, dd_col2 = st.columns([1, 3])
-        with dd_col1:
-            current_idx = SCH_KM_OPTIONS.index(scheduled_km) if scheduled_km in SCH_KM_OPTIONS else 0
-            new_sch_km = st.selectbox(
-                "Scheduled KM (default)",
-                options=SCH_KM_OPTIONS,
-                index=current_idx,
-                key=f"sch_km_dropdown_{bus_number}",
-            )
-        if new_sch_km != scheduled_km:
-            save_scheduled_km(bus_number, new_sch_km)
-            st.session_state[sched_km_key] = new_sch_km
-            scheduled_km = new_sch_km
-            st.toast(f"✅ Scheduled KM {bus_number} ke liye {new_sch_km} save ho gaya")
-            st.rerun()
 
     if key not in st.session_state:
         st.session_state[key] = pd.DataFrame({
