@@ -20,6 +20,7 @@ from src.vehicle_records.vehicle_0303 import page_0303, expense_0303
 from src.vehicle_records.vehicle_31 import page_3131, expense_3131
 from src.vehicle_records.vehicle_89 import page_7389, expense_7389
 from src.vehicle_records.vehicle_50 import page_2350, expense_2350
+from src.vehicle_records.vehicle_at7389 import page_AT7389, expense_AT7389
 from src.screens.products_manager import products_page
 from src.screens.chat_assistant import chat_assistant_dialog
 from src.database.auth import (
@@ -142,6 +143,16 @@ def main():
         case 'page_3131':
             if '3131' in get_accessible_vehicles():
                 page_3131()
+            else:
+                st.error("❌ You don't have access. Contact Admin.")
+        case 'page_AT7389':
+            if 'AT7389' in get_accessible_vehicles():
+                page_AT7389()
+            else:
+                st.error("❌ You don't have access. Contact Admin.")
+        case 'AT7389_E':
+            if 'AT7389' in get_accessible_vehicles():
+                expense_AT7389()
             else:
                 st.error("❌ You don't have access. Contact Admin.")
         case '3131_E':
