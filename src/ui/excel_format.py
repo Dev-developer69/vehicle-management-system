@@ -185,7 +185,7 @@ def editable_grid(bus_number: str):
 
     st.markdown(f"### Vehicle Records {bus_number} 🚐")
 
-    # ── Scheduled KM selector (390 / 552) — sirf AT7389 (CNG) ke liye, Supabase me save ──
+    # ── Scheduled KM selector (390 / 552 hi) — sirf AT7389 (CNG) ke liye, Supabase me save ──
     if bus_number == "AT7389":
         SCH_KM_OPTIONS = [390, 552]
         dd_col1, dd_col2 = st.columns([1, 3])
