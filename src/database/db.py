@@ -16,6 +16,13 @@ def get_scheduled_km(bus_number: str) -> int:
     return 466
 
 
+def save_scheduled_km(bus_number: str, scheduled_km: int) -> None:
+    supabase_admin.table("vehicle_scheduled_km").upsert({
+        "bus_number":   bus_number,
+        "scheduled_km": scheduled_km,
+    }, on_conflict="bus_number").execute()
+
+
 def delete_vehicle_record(bus_number: str, date_str: str) -> None:
     supabase.table("vehicle_records") \
         .delete() \
