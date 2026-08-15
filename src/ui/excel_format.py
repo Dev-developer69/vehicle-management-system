@@ -368,7 +368,7 @@ def editable_grid(bus_number: str):
     st.data_editor(
         st.session_state[key],
         num_rows="dynamic",
-        use_container_width=True,
+        width='stretch',
         hide_index=True,
         key=ed_key,
         column_config={
@@ -408,7 +408,7 @@ def editable_grid(bus_number: str):
                 st.session_state.pop(pending_key, None)
                 st.rerun()
     else:
-        if st.button("💾 Save Changes", key=f"save_{bus_number}", use_container_width=True):
+        if st.button("💾 Save Changes", key=f"save_{bus_number}", width='stretch'):
             cleaned_df = edited_df[
                 edited_df["Driver Name"].notna() &
                 (edited_df["Driver Name"].astype(str).str.strip() != "")
@@ -457,7 +457,7 @@ def editable_grid(bus_number: str):
                         horizontal=True, key=f"half_{bus_number}")
     with col3:
         st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("🔄 Load", key=f"refresh_{bus_number}", use_container_width=True):
+        if st.button("🔄 Load", key=f"refresh_{bus_number}", width='stretch'):
             st.session_state.pop(fetch_key, None)
             st.rerun()
 
@@ -484,9 +484,9 @@ def editable_grid(bus_number: str):
         display_df = display_df[["Date", "Status", "Driver Name", "Conductor Name",
                                   "Scheduled KM", "Actual KM", "Diesel", "Diesel KM",
                                   "Avg", "Income", "Gross Income", "Remark", "Next"]]
-        st.dataframe(display_df, use_container_width=True, hide_index=True)
+        st.dataframe(display_df, width='stretch', hide_index=True)
         total_row = build_total_row(display_df, numeric_cols, label_col="Driver Name")
-        st.dataframe(total_row, use_container_width=True, hide_index=True)
+        st.dataframe(total_row, width='stretch', hide_index=True)
         pdf_bytes = _generate_pdf(display_df, total_row, bus_number, month, half)
         st.download_button("📥 Download PDF", data=pdf_bytes,
                            file_name=f"vehicle_records_{bus_number}_{date(2000,month,1).strftime('%B')}_{half.replace('-','_')}.pdf",
@@ -515,7 +515,7 @@ def driver_salary(bus_number: str = ""):
     st.data_editor(
     st.session_state[key],
     num_rows="dynamic",
-    use_container_width=True,
+    width='stretch',
     hide_index=True,
     key=ed_key,
     column_config={
@@ -556,7 +556,7 @@ def driver_salary(bus_number: str = ""):
                             horizontal=True, key=f"sal_half_{bus_number}")
     with col3:
         st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("🔄 Load", key=f"ref_sal_{bus_number}", use_container_width=True):
+        if st.button("🔄 Load", key=f"ref_sal_{bus_number}", width='stretch'):
             st.session_state.pop(fetch_key, None)
             st.rerun()
 
@@ -572,7 +572,7 @@ def driver_salary(bus_number: str = ""):
         disp["Date"] = disp["Date"].dt.strftime("%Y-%m-%d")
 
         st.data_editor(
-            disp, use_container_width=True, hide_index=True, num_rows="dynamic",
+            disp, width='stretch', hide_index=True, num_rows="dynamic",
             key=f"edit_sal_{bus_number}",
             column_config={
                 "id":          None,
@@ -595,7 +595,7 @@ def driver_salary(bus_number: str = ""):
             st.rerun()
 
         total_row = build_total_row(disp, ["Salary"], label_col="Driver Name")
-        st.dataframe(total_row, use_container_width=True, hide_index=True)
+        st.dataframe(total_row, width='stretch', hide_index=True)
     else:
         st.info("No records found.")
 
@@ -620,7 +620,7 @@ def expenses(bus_number: str = ""):
     st.data_editor(
         st.session_state[key],
         num_rows="dynamic",
-        use_container_width=True,
+        width='stretch',
         hide_index=True,
         key=ed_key,
         column_config={
@@ -664,7 +664,7 @@ def expenses(bus_number: str = ""):
                               horizontal=True, key=f"exp_period_{bus_number}")
     with col3:
         st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("🔄 Refresh", key=f"ref_exp_{bus_number}", use_container_width=True):
+        if st.button("🔄 Refresh", key=f"ref_exp_{bus_number}", width='stretch'):
             st.session_state.pop(fetch_key, None)
             st.rerun()
 
@@ -676,7 +676,7 @@ def expenses(bus_number: str = ""):
         display_exp["Date"] = display_exp["Date"].dt.strftime("%Y-%m-%d")
 
         st.data_editor(
-            display_exp, use_container_width=True, hide_index=True, num_rows="dynamic",
+            display_exp, width='stretch', hide_index=True, num_rows="dynamic",
             key=f"edit_exp_{bus_number}",
             column_config={
                 "id":          None,
@@ -734,7 +734,7 @@ def diesel_view(bus_number: str = ""):
                             key=f"diesel_period_{bus_number}")
     with col3:
         st.markdown("<br>", unsafe_allow_html=True)
-        load = st.button("🔄 Load", key=f"diesel_load_{bus_number}", use_container_width=True)
+        load = st.button("🔄 Load", key=f"diesel_load_{bus_number}", width='stretch')
 
     # ✅ DB se rate + payment load karo (bus + month + period wise)
     state_key = f"diesel_state_{bus_number}_{d_month}_{d_period}"
@@ -779,7 +779,7 @@ def diesel_view(bus_number: str = ""):
     ed_key = f"diesel_editor_{bus_number}"
     st.data_editor(
         df[["Date", "Diesel", "Rate (₹/L)"]],
-        use_container_width=True,
+        width='stretch',
         hide_index=True,
         key=ed_key,
         column_config={
@@ -813,7 +813,7 @@ def diesel_view(bus_number: str = ""):
     # ✅ Full table with Amount column
     st.dataframe(
         display_df[["Date", "Diesel", "Rate (₹/L)", "Amount (₹)"]],
-        use_container_width=True,
+        width='stretch',
         hide_index=True,
     )
 
@@ -863,7 +863,7 @@ def diesel_view(bus_number: str = ""):
     btn_col1, btn_col2 = st.columns([1, 1])
     with btn_col1:
         if st.button("💾 Save Rate & Payment", key=f"diesel_save_{bus_number}_{d_month}_{d_period}",
-                     use_container_width=True):
+                     width='stretch'):
             save_diesel_rate_payment(bus_number, d_month, d_period,
                                       universal_rate, paid_amount, payment_done)
             st.session_state[state_key] = {
@@ -875,7 +875,7 @@ def diesel_view(bus_number: str = ""):
     with btn_col2:
         if saved["payment_done"] and not st.session_state[edit_mode_key]:
             if st.button("✏️ Edit Payment", key=f"diesel_edit_{bus_number}_{d_month}_{d_period}",
-                         use_container_width=True):
+                         width='stretch'):
                 st.session_state[edit_mode_key] = True
                 st.rerun()
 
@@ -914,6 +914,6 @@ def salary_check_view():
     if "salary_check_df" in st.session_state:
         df = st.session_state["salary_check_df"]
         if not df.empty:
-            st.dataframe(df, use_container_width=True, hide_index=True)
+            st.dataframe(df, width='stretch', hide_index=True)
         else:
             st.info("No data found.")
