@@ -13,7 +13,7 @@ def _get_all_users():
 
 
 def _get_all_vehicles():
-    return ["7389", "2350", "0303", "3131"]
+    return ["7389", "2350", "0303", "3131", "AT7389"]
 
 
 def _get_user_vehicles(user_id: str):
