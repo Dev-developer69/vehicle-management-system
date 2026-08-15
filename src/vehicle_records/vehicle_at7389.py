@@ -44,7 +44,7 @@ def expense_AT7389():
     if st.button('Driver Salary',type='tertiary', width='stretch', icon=':material/home:'):
         st.session_state['expense_tab'] = 'driver'
     
-    if st.button('Diesel View', type='tertiary', width='stretch', icon=':material/local_gas_station:'):
+    if st.button('CNG View', type='tertiary', width='stretch', icon=':material/local_gas_station:'):
         st.session_state['expense_tab'] = 'diesel'
 
 
