@@ -61,9 +61,10 @@ def _show_bus_detail(bus: str, start, end, month: int, period: str):
         </div>
     """, unsafe_allow_html=True)
 
+    fuel = "CNG" if bus == "AT7389" else "Diesel"
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("🧾 Vehicle Exp",  f"₹{vehicle_exp_total:,.0f}")
-    c2.metric("⛽ Diesel",       f"₹{diesel_cost:,.0f}")
+    c2.metric(f"⛽ {fuel}",       f"₹{diesel_cost:,.0f}")
     c3.metric("👤 Salary",       f"₹{salary_cost:,.0f}")
     c4.metric("🔧 Maintenance",  f"₹{maint_cost:,.0f}")
     c5.metric("📊 Grand Total",  f"₹{grand_total:,.0f}")
@@ -200,6 +201,7 @@ def expenses():
         d = bus_data[bus]
         with card_cols[i]:
             is_open = st.session_state.get("open_bus_detail") == bus
+            fuel = "CNG" if bus == "AT7389" else "Diesel"
 
             # Card HTML
             border = "2px solid #7B8CFF" if is_open else "1px solid #2D2D5E"
@@ -213,7 +215,7 @@ def expenses():
                     Bus {bus}
                 </div>
                 <div style='color:#888;margin-top:6px;font-size:0.75rem;'>
-                    Exp ₹{d["vehicle_exp"]:,.0f} · Diesel ₹{d["diesel"]:,.0f}
+                    Exp ₹{d["vehicle_exp"]:,.0f} · {fuel} ₹{d["diesel"]:,.0f}
                     · Salary ₹{d["salary"]:,.0f}
                 </div>
                 <div style='color:#7B8CFF;margin-top:8px;font-size:0.8rem;'>
