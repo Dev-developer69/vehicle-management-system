@@ -11,7 +11,7 @@ from src.database.db import (
 from src.database.auth import get_accessible_vehicles
 from src.ui.excel_format import _get_date_range
 
-ALL_BUSES = [("3131", "3131_E"), ("0303", "0303_E"), ("7389", "7389_E"), ("2350", "2350_E")]
+ALL_BUSES = [("3131", "3131_E"), ("0303", "0303_E"), ("7389", "7389_E"), ("2350", "2350_E"), ("AT7389", "AT7389_E")]
 
 
 def _get_diesel_cost(bus: str, start, end, month: int, period: str) -> float:
