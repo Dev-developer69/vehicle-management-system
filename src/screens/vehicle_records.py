@@ -179,16 +179,35 @@ def vehicle_records():
     if not visible_vehicles:
         st.warning("⚠️ Aapko kisi bhi vehicle ka access nahi diya gaya. Admin se contact karo.")
     else:
-        cols = st.columns(2)
-        for i, bus in enumerate(visible_vehicles):
-            with cols[i % 2]:
-                btn_type = 'secondary' if i < 2 else 'tertiary'
-                if st.button(
-                    bus, type=btn_type, key=f"btn_v_{bus}",
-                    use_container_width=True, icon=':material/bus_railway:', icon_position='right'
-                ):
-                    st.session_state['login_state'] = VEHICLE_MAP[bus]
-                    st.rerun()
+        n = len(visible_vehicles)
+        i = 0
+        while i < n:
+            if i == n - 1:
+                # akela bacha last vehicle — center me dikhao
+                _, ccenter, _ = st.columns([1, 2, 1])
+                bus = visible_vehicles[i]
+                with ccenter:
+                    btn_type = 'secondary' if i < 2 else 'tertiary'
+                    if st.button(
+                        bus, type=btn_type, key=f"btn_v_{bus}",
+                        use_container_width=True, icon=':material/bus_railway:', icon_position='right'
+                    ):
+                        st.session_state['login_state'] = VEHICLE_MAP[bus]
+                        st.rerun()
+                i += 1
+            else:
+                cols = st.columns(2)
+                for j in range(2):
+                    bus = visible_vehicles[i + j]
+                    with cols[j]:
+                        btn_type = 'secondary' if (i + j) < 2 else 'tertiary'
+                        if st.button(
+                            bus, type=btn_type, key=f"btn_v_{bus}",
+                            use_container_width=True, icon=':material/bus_railway:', icon_position='right'
+                        ):
+                            st.session_state['login_state'] = VEHICLE_MAP[bus]
+                            st.rerun()
+                i += 2
 
     st.markdown("<br>", unsafe_allow_html=True)
     quick_overview(visible_vehicles)
