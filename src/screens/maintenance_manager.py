@@ -87,7 +87,7 @@ def _maintenance_home():
             _, ccenter, _ = st.columns([1, 2, 1])
             bus = vehicles[i]
             with ccenter:
-                if st.button(f"🚐 {bus}", key=f"maint_veh_{bus}", use_container_width=True):
+                if st.button(f"🚐 {bus}", key=f"maint_veh_{bus}", width='stretch'):
                     st.session_state["maintenance_selected_vehicle"] = bus
                     st.rerun()
             i += 1
@@ -96,7 +96,7 @@ def _maintenance_home():
             for j in range(2):
                 bus = vehicles[i + j]
                 with cols[j]:
-                    if st.button(f"🚐 {bus}", key=f"maint_veh_{bus}", use_container_width=True):
+                    if st.button(f"🚐 {bus}", key=f"maint_veh_{bus}", width='stretch'):
                         st.session_state["maintenance_selected_vehicle"] = bus
                         st.rerun()
             i += 2
@@ -171,6 +171,11 @@ def _maintenance_home():
 # ──────────────────────────────────────────────
 def _maintenance_vehicle_page():
     background()
+    st.markdown("""
+        <style>
+            .stApp { background: #0D7377 !important; }
+        </style>
+    """, unsafe_allow_html=True)
     bus_number = st.session_state.get("maintenance_selected_vehicle")
 
     col1, col2 = st.columns(2)
@@ -221,7 +226,7 @@ def _maintenance_vehicle_page():
             with c6:
                 m_next_km = st.number_input("Next Due KM (optional)", min_value=0, step=1, key=f"m_next_km_{bus_number}")
     
-            if st.button("💾 Save Record", key=f"m_save_{bus_number}", type="primary", use_container_width=True):
+            if st.button("💾 Save Record", key=f"m_save_{bus_number}", type="primary", width='stretch'):
                 if not m_type.strip():
                     st.warning("⚠️ Service Type required.")
                 else:
@@ -275,7 +280,7 @@ def _maintenance_vehicle_page():
 
     display_df = pd.DataFrame(display_rows)
     styled = display_df.style.apply(_highlight_due, axis=1)
-    st.dataframe(styled, use_container_width=True, hide_index=True)
+    st.dataframe(styled, width='stretch', hide_index=True)
 
     # ── Delete record ──
     with st.expander("🗑️ Delete a record"):
