@@ -9,7 +9,7 @@ from src.database.db import (
     save_vehicle_records, save_driver_salary, save_vehicle_expenses,
     get_vehicle_records, get_driver_salary, get_vehicle_expenses,
     get_salary_check, get_scheduled_km, get_diesel_summary,
-    get_km_combine, save_km_combine, delete_km_combine,
+    get_km_combines, save_km_combine, delete_km_combine,
     update_vehicle_expense, delete_vehicle_expense,
     update_driver_salary, delete_driver_salary,delete_vehicle_record,
     get_diesel_rate_payment, save_diesel_rate_payment,
@@ -528,41 +528,51 @@ def editable_grid(bus_number: str):
         display_df = display_df[["Date", "Status", "Driver Name", "Conductor Name",
                                   "Scheduled KM", "Actual KM", "Diesel", "Diesel KM",
                                   "Avg", "Income", "Gross Income", "Remark", "Next"]]
-        # ── 2 din ka KM combine karo (Excel jaisa merge cell — sirf Scheduled/Actual KM) ──
+        # ── Do din ke KM combine karo (Excel jaisa merge cell) — same period me kayi pairs ho sakte hain ──
         date_options = display_df["Date"].tolist()
-        combine_key = f"km_combine_{bus_number}"
+        combine_key = f"km_combines_{bus_number}"
         if combine_key not in st.session_state:
-            st.session_state[combine_key] = get_km_combine(bus_number)
-        combined_pair = st.session_state[combine_key]
-        if combined_pair and not (combined_pair[0] in date_options and combined_pair[1] in date_options):
-            combined_pair = None
+            st.session_state[combine_key] = get_km_combines(bus_number)
+        # sirf wahi pairs rakho jinki dono dates is loaded period me maujood hain
+        active_pairs = [
+            (d1, d2) for d1, d2 in st.session_state[combine_key]
+            if d1 in date_options and d2 in date_options
+        ]
 
-        if combined_pair:
-            _render_km_merged_table(display_df, combined_pair[0], combined_pair[1])
+        if active_pairs:
+            _render_km_merged_table(display_df, active_pairs)
         else:
             st.dataframe(display_df, width='stretch', hide_index=True)
 
-        if len(date_options) >= 2:
+        used_dates = {d for pair in active_pairs for d in pair}
+        available_dates = [d for d in date_options if d not in used_dates]
+
+        if len(available_dates) >= 2:
             with st.expander("🔗 2 Din Ka KM Combine Karo"):
                 cc1, cc2 = st.columns(2)
                 with cc1:
-                    day1 = st.selectbox("Pehla din", options=date_options, key=f"combine_d1_{bus_number}")
+                    day1 = st.selectbox("Pehla din", options=available_dates, key=f"combine_d1_{bus_number}")
                 with cc2:
                     day2 = st.selectbox(
-                        "Doosra din", options=[d for d in date_options if d != day1],
+                        "Doosra din", options=[d for d in available_dates if d != day1],
                         key=f"combine_d2_{bus_number}"
                     )
-                bc1, bc2 = st.columns(2)
-                with bc1:
-                    if st.button("Combine Karo", key=f"combine_btn_{bus_number}"):
-                        pair = tuple(sorted([day1, day2]))
-                        save_km_combine(bus_number, pair[0], pair[1])
-                        st.session_state[combine_key] = pair
-                        st.rerun()
-                with bc2:
-                    if combined_pair and st.button("❌ Combine Hatao", key=f"uncombine_btn_{bus_number}"):
-                        delete_km_combine(bus_number)
-                        st.session_state[combine_key] = None
+                if st.button("Combine Karo", key=f"combine_btn_{bus_number}"):
+                    pair = tuple(sorted([day1, day2]))
+                    save_km_combine(bus_number, pair[0], pair[1])
+                    st.session_state[combine_key] = get_km_combines(bus_number)
+                    st.rerun()
+
+        if active_pairs:
+            st.caption("Combined pairs:")
+            for d1, d2 in active_pairs:
+                rc1, rc2 = st.columns([4, 1])
+                with rc1:
+                    st.write(f"🔗 {d1} + {d2}")
+                with rc2:
+                    if st.button("❌ Hatao", key=f"uncombine_btn_{bus_number}_{d1}_{d2}"):
+                        delete_km_combine(bus_number, d1, d2)
+                        st.session_state[combine_key] = get_km_combines(bus_number)
                         st.rerun()
 
         total_row = build_total_row(display_df, numeric_cols, label_col="Driver Name")
