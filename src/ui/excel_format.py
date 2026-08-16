@@ -9,6 +9,7 @@ from src.database.db import (
     save_vehicle_records, save_driver_salary, save_vehicle_expenses,
     get_vehicle_records, get_driver_salary, get_vehicle_expenses,
     get_salary_check, get_scheduled_km, get_diesel_summary,
+    get_km_combine, save_km_combine, delete_km_combine,
     update_vehicle_expense, delete_vehicle_expense,
     update_driver_salary, delete_driver_salary,delete_vehicle_record,
     get_diesel_rate_payment, save_diesel_rate_payment,
@@ -26,27 +27,37 @@ def fuel_label(bus_number: str) -> str:
     return "CNG" if bus_number == "AT7389" else "Diesel"
 
 
-def _render_km_merged_table(display_df: pd.DataFrame, d1: str, d2: str):
+def _render_km_merged_table(display_df: pd.DataFrame, pairs: list):
     """Renders display_df as an HTML table where Scheduled KM / Actual KM cells
-    for d1 & d2 are visually merged (rowspan) into a single combined value,
-    Excel-style — every other column stays per-row/unchanged."""
+    for each (d1, d2) pair are visually merged (rowspan) into a single combined
+    value, Excel-style — every other column stays per-row/unchanged.
+    Multiple non-overlapping pairs are supported at once."""
     rows = display_df.to_dict("records")
 
-    idx1 = next((i for i, r in enumerate(rows) if r["Date"] == d1), None)
-    idx2 = next((i for i, r in enumerate(rows) if r["Date"] == d2), None)
-    if idx1 is None or idx2 is None:
-        st.dataframe(display_df, width='stretch', hide_index=True)
-        return
+    # Har pair ke liye d2 ko d1 ke turant baad la do taaki rowspan adjacent rahe
+    for d1, d2 in pairs:
+        idx1 = next((i for i, r in enumerate(rows) if r["Date"] == d1), None)
+        idx2 = next((i for i, r in enumerate(rows) if r["Date"] == d2), None)
+        if idx1 is None or idx2 is None:
+            continue
+        if idx2 != idx1 + 1:
+            r2 = rows.pop(idx2)
+            idx1 = next(i for i, r in enumerate(rows) if r["Date"] == d1)
+            rows.insert(idx1 + 1, r2)
 
-    # d2 ko d1 ke turant baad la do taaki rowspan visually adjacent rahe
-    if idx2 != idx1 + 1:
-        r2 = rows.pop(idx2)
-        idx1 = next(i for i, r in enumerate(rows) if r["Date"] == d1)
-        rows.insert(idx1 + 1, r2)
-        idx2 = idx1 + 1
-
-    sch_sum = pd.to_numeric(rows[idx1]["Scheduled KM"], errors="coerce") + pd.to_numeric(rows[idx2]["Scheduled KM"], errors="coerce")
-    act_sum = pd.to_numeric(rows[idx1]["Actual KM"], errors="coerce") + pd.to_numeric(rows[idx2]["Actual KM"], errors="coerce")
+    # rowspan_at[idx] = (sch_sum, act_sum) — is row se rowspan shuru hoga
+    # skip_at = set of indices jo dusri row hain (unke KM cells skip honge)
+    rowspan_at = {}
+    skip_at    = set()
+    for d1, d2 in pairs:
+        idx1 = next((i for i, r in enumerate(rows) if r["Date"] == d1), None)
+        idx2 = next((i for i, r in enumerate(rows) if r["Date"] == d2), None)
+        if idx1 is None or idx2 is None or idx2 != idx1 + 1:
+            continue
+        sch_sum = pd.to_numeric(rows[idx1]["Scheduled KM"], errors="coerce") + pd.to_numeric(rows[idx2]["Scheduled KM"], errors="coerce")
+        act_sum = pd.to_numeric(rows[idx1]["Actual KM"], errors="coerce") + pd.to_numeric(rows[idx2]["Actual KM"], errors="coerce")
+        rowspan_at[idx1] = (sch_sum, act_sum)
+        skip_at.add(idx2)
 
     cols = list(display_df.columns)
     html = ["<div style='overflow-x:auto;border-radius:8px;border:1px solid #2D2D5E;'>"
@@ -59,13 +70,14 @@ def _render_km_merged_table(display_df: pd.DataFrame, d1: str, d2: str):
     for i, r in enumerate(rows):
         html.append("<tr>")
         for c in cols:
-            if c in ("Scheduled KM", "Actual KM") and i == idx1:
+            if c in ("Scheduled KM", "Actual KM") and i in rowspan_at:
+                sch_sum, act_sum = rowspan_at[i]
                 val = sch_sum if c == "Scheduled KM" else act_sum
                 html.append(
                     f"<td rowspan='2' style='border:1px solid #2D2D5E;padding:8px;text-align:center;"
-                    f"vertical-align:middle;background:#14304a;color:#7B8CFF;font-weight:bold;'>{val:,.0f}</td>"
+                    f"vertical-align:middle;'>{val:,.0f}</td>"
                 )
-            elif c in ("Scheduled KM", "Actual KM") and i == idx2:
+            elif c in ("Scheduled KM", "Actual KM") and i in skip_at:
                 continue  # rowspan se cover ho gaya
             else:
                 html.append(f"<td style='border:1px solid #2D2D5E;padding:8px;white-space:nowrap;'>{r.get(c, '')}</td>")
@@ -73,7 +85,8 @@ def _render_km_merged_table(display_df: pd.DataFrame, d1: str, d2: str):
 
     html.append("</tbody></table></div>")
     st.markdown("".join(html), unsafe_allow_html=True)
-    st.caption(f"🔗 {d1} + {d2} ke Scheduled KM aur Actual KM combine (merged) hain")
+    pairs_text = ", ".join(f"{d1} + {d2}" for d1, d2 in pairs)
+    st.caption(f"🔗 Combined: {pairs_text}")
 
 
 # ──────────────────────────────────────────────
@@ -517,7 +530,10 @@ def editable_grid(bus_number: str):
                                   "Avg", "Income", "Gross Income", "Remark", "Next"]]
         # ── 2 din ka KM combine karo (Excel jaisa merge cell — sirf Scheduled/Actual KM) ──
         date_options = display_df["Date"].tolist()
-        combined_pair = st.session_state.get(f"combined_pair_{bus_number}")
+        combine_key = f"km_combine_{bus_number}"
+        if combine_key not in st.session_state:
+            st.session_state[combine_key] = get_km_combine(bus_number)
+        combined_pair = st.session_state[combine_key]
         if combined_pair and not (combined_pair[0] in date_options and combined_pair[1] in date_options):
             combined_pair = None
 
@@ -527,7 +543,7 @@ def editable_grid(bus_number: str):
             st.dataframe(display_df, width='stretch', hide_index=True)
 
         if len(date_options) >= 2:
-            with st.expander("🔗 Combined dates"):
+            with st.expander("🔗 2 Din Ka KM Combine Karo"):
                 cc1, cc2 = st.columns(2)
                 with cc1:
                     day1 = st.selectbox("Pehla din", options=date_options, key=f"combine_d1_{bus_number}")
@@ -538,12 +554,15 @@ def editable_grid(bus_number: str):
                     )
                 bc1, bc2 = st.columns(2)
                 with bc1:
-                    if st.button("Create Combination", key=f"combine_btn_{bus_number}"):
-                        st.session_state[f"combined_pair_{bus_number}"] = tuple(sorted([day1, day2]))
+                    if st.button("Combine Karo", key=f"combine_btn_{bus_number}"):
+                        pair = tuple(sorted([day1, day2]))
+                        save_km_combine(bus_number, pair[0], pair[1])
+                        st.session_state[combine_key] = pair
                         st.rerun()
                 with bc2:
-                    if combined_pair and st.button("❌Remove Combine dates", key=f"uncombine_btn_{bus_number}"):
-                        st.session_state.pop(f"combined_pair_{bus_number}", None)
+                    if combined_pair and st.button("❌ Combine Hatao", key=f"uncombine_btn_{bus_number}"):
+                        delete_km_combine(bus_number)
+                        st.session_state[combine_key] = None
                         st.rerun()
 
         total_row = build_total_row(display_df, numeric_cols, label_col="Driver Name")
