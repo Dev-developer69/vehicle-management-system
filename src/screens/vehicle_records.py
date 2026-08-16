@@ -7,7 +7,7 @@ from datetime import date
 from src.ui.home_base_layout import home_layout
 from src.database.auth import get_accessible_vehicles
 from src.database.config import supabase
-from src.database.db import get_diesel_rate_payment
+from src.database.db import get_diesel_rate_payment, get_km_combines
 from src.ui.excel_format import shift_period_back, _get_date_range
 
 VEHICLE_MAP = {
@@ -166,7 +166,7 @@ def vehicle_records():
     with col1:
         st.header("Select Vehicle", text_alignment='center')
     with col2:
-        if st.button('Home page', type='primary', use_container_width=True,
+        if st.button('Home page', type='primary', width='stretch',
                      icon=':material/home:', shortcut='control+backspace'):
             st.session_state['login_state'] = None
             st.rerun()
@@ -189,7 +189,7 @@ def vehicle_records():
                 with ccenter:
                     if st.button(
                         bus, type='primary', key=f"btn_v_{bus}",
-                        use_container_width=True, icon=':material/bus_railway:', icon_position='right'
+                        width='stretch', icon=':material/bus_railway:', icon_position='right'
                     ):
                         st.session_state['login_state'] = VEHICLE_MAP[bus]
                         st.rerun()
@@ -202,7 +202,7 @@ def vehicle_records():
                         btn_type = 'secondary' if (i + j) < 2 else 'tertiary'
                         if st.button(
                             bus, type=btn_type, key=f"btn_v_{bus}",
-                            use_container_width=True, icon=':material/bus_railway:', icon_position='right'
+                            width='stretch', icon=':material/bus_railway:', icon_position='right'
                         ):
                             st.session_state['login_state'] = VEHICLE_MAP[bus]
                             st.rerun()
@@ -240,7 +240,7 @@ def quick_overview(bus_list: list):
         )
     with sel_col3:
         st.markdown("<br>", unsafe_allow_html=True)
-        load_clicked = st.button("🔄 Load", key="qo_load", use_container_width=True)
+        load_clicked = st.button("🔄 Load", key="qo_load", width='stretch')
 
     year = date.today().year
     raw_start, raw_end = _get_date_range(year, sel_month, sel_period)
@@ -297,8 +297,27 @@ def quick_overview(bus_list: list):
     df["diesel_km"]      = pd.to_numeric(df["diesel_km"] if "diesel_km" in df.columns else 0, errors="coerce").fillna(0)
     df["conductor_name"] = df["conductor_name"].fillna("") if "conductor_name" in df.columns else ""
     df["date"]           = pd.to_datetime(df["date"])
-    df["date_str"]       = df["date"].dt.strftime("%d %b")
     df["bus_number"]     = df["bus_number"].astype(str)
+
+    # ── Combined (merged) date-pairs apply karo — Saved Records table jaisa hi ──
+    df["date_key"] = df["date"].dt.strftime("%Y-%m-%d")
+    drop_indices = set()
+    for bus in df["bus_number"].unique():
+        pairs = get_km_combines(bus)
+        bus_mask = df["bus_number"] == bus
+        for d1, d2 in pairs:
+            idx1 = df[bus_mask & (df["date_key"] == d1)].index
+            idx2 = df[bus_mask & (df["date_key"] == d2)].index
+            if len(idx1) == 1 and len(idx2) == 1:
+                i1, i2 = idx1[0], idx2[0]
+                df.loc[i2, "actual_km"]    = df.loc[i1, "actual_km"] + df.loc[i2, "actual_km"]
+                df.loc[i2, "scheduled_km"] = df.loc[i1, "scheduled_km"] + df.loc[i2, "scheduled_km"]
+                drop_indices.add(i1)
+    if drop_indices:
+        df = df.drop(index=list(drop_indices)).reset_index(drop=True)
+    df = df.drop(columns=["date_key"])
+
+    df["date_str"]       = df["date"].dt.strftime("%d %b")
 
     df["efficiency_pct"] = (df["actual_km"] / df["scheduled_km"].replace(0, float("nan")) * 100).round(1)
     df["achieved"]       = df["actual_km"] >= df["scheduled_km"]
@@ -449,7 +468,7 @@ def quick_overview(bus_list: list):
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
             plot_bgcolor="rgba(0,0,0,0)",
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
         
         _show_insight(f"""
 Period: {period_label}
@@ -491,7 +510,7 @@ Keep each bullet to 1 line. Max 2 bullets per section.
             xaxis=dict(type="category", gridcolor="rgba(255,255,255,0.08)"),
             bargap=0.25, bargroupgap=0.05,
         )
-        st.plotly_chart(_plotly_dark(fig), use_container_width=True)
+        st.plotly_chart(_plotly_dark(fig), width='stretch')
         _show_insight(f"""
 Scheduled KM: {summary.set_index('Bus')['Scheduled_KM'].to_dict()}
 Actual KM: {summary.set_index('Bus')['Actual_KM'].to_dict()}
@@ -581,7 +600,7 @@ Max 2 bullets per section. Be specific with numbers.
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
             plot_bgcolor="rgba(0,0,0,0)",
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
     
         st.markdown("**Best & Worst Day per Bus:**")
         bw_cols = st.columns(len(summary))
@@ -629,7 +648,7 @@ Max 2 bullets per section. Be specific with numbers.
                              color_discrete_sequence=["#14A085","#7B8CFF","#FFB347","#FF5252","#00D4FF","#FF69B4"])
                 fig.update_traces(textposition="inside", textinfo="percent+label")
                 fig.update_layout(showlegend=False, margin=dict(t=10, b=10, l=10, r=10))
-                st.plotly_chart(_plotly_dark(fig), use_container_width=True)
+                st.plotly_chart(_plotly_dark(fig), width='stretch')
         st.caption("Har bus mein driver duty distribution")
 
     with tab5:
@@ -649,7 +668,7 @@ Max 2 bullets per section. Be specific with numbers.
         driver_perf["Avg_Efficiency"] = driver_perf["Avg_Efficiency"].round(1)
         driver_perf = driver_perf.sort_values("Total_KM", ascending=False)
         driver_perf.insert(0, "Rank", range(1, len(driver_perf) + 1))
-        st.dataframe(driver_perf, use_container_width=True, hide_index=True)
+        st.dataframe(driver_perf, width='stretch', hide_index=True)
 
         bar_colors = [COLORS[i % len(COLORS)] for i in range(len(driver_perf))]
         fig = go.Figure(go.Bar(
@@ -663,7 +682,7 @@ Max 2 bullets per section. Be specific with numbers.
             xaxis=dict(type="category"),
             yaxis=dict(range=[0, max_val * 1.2], gridcolor="rgba(255,255,255,0.08)"),
         )
-        st.plotly_chart(_plotly_dark(fig), use_container_width=True)
+        st.plotly_chart(_plotly_dark(fig), width='stretch')
         _show_insight(f"""
 Driver performance data: {driver_perf[['Driver','Total_KM','Days','Avg_Efficiency']].to_dict('records')}
 
@@ -705,7 +724,7 @@ Max 2 bullets per section. Mention driver names specifically.
                     xaxis=dict(type="category"),
                     yaxis=dict(range=[0, max_d * 1.2], gridcolor="rgba(255,255,255,0.08)"),
                 )
-                st.plotly_chart(_plotly_dark(fig), use_container_width=True)
+                st.plotly_chart(_plotly_dark(fig), width='stretch')
 
                 mileage = df[df["diesel"] > 0].groupby("bus_number").apply(
                     lambda x: (x["diesel_km"].sum() / x["diesel"].sum()).round(2)
@@ -713,7 +732,7 @@ Max 2 bullets per section. Mention driver names specifically.
                 ).reset_index()
                 mileage.columns = ["Bus", "KM per Litre"]
                 st.markdown("**Mileage (KM/L) per Bus:**")
-                st.dataframe(mileage, use_container_width=True, hide_index=True)
+                st.dataframe(mileage, width='stretch', hide_index=True)
 
             if has_income:
                 st.markdown("**💰 Income — Bus wise**")
@@ -729,7 +748,7 @@ Max 2 bullets per section. Mention driver names specifically.
                     xaxis=dict(type="category"),
                     yaxis=dict(range=[0, max_i * 1.2], gridcolor="rgba(255,255,255,0.08)"),
                 )
-                st.plotly_chart(_plotly_dark(fig), use_container_width=True)
+                st.plotly_chart(_plotly_dark(fig), width='stretch')
 
             if has_diesel and has_income:
                 st.markdown("**💰 Income vs ⛽ Est. Diesel Cost:**")
@@ -751,7 +770,7 @@ Max 2 bullets per section. Mention driver names specifically.
                     yaxis=dict(range=[0, max_v * 1.2], gridcolor="rgba(255,255,255,0.08)"),
                     bargap=0.25, bargroupgap=0.05,
                 )
-                st.plotly_chart(_plotly_dark(fig), use_container_width=True)
+                st.plotly_chart(_plotly_dark(fig), width='stretch')
                 _show_insight(f"""
 Bus financial data: {summary[['Bus','Income','Est_Diesel_Cost','Net']].to_dict('records')}
 
@@ -792,7 +811,7 @@ Max 2 bullets per section. Use rupee amounts.
 
         if len(red_flags) > 0:
             st.error(f"{len(red_flags)} din aisa hain jaha diesel liya gaya lekin gaadi chali nahi!")
-        st.dataframe(alert_df, use_container_width=True, hide_index=True)
+        st.dataframe(alert_df, width='stretch', hide_index=True)
         _show_insight(f"""
 Mileage threshold: {MIN_NORMAL_MILEAGE} km/L
 Red flags (diesel taken, 0 KM): {len(red_flags)}
@@ -847,7 +866,7 @@ Max 2 bullets per section. Name specific buses and drivers.
                 xaxis=dict(type="category"),
                 yaxis=dict(range=[0, max_v * 1.2], gridcolor="rgba(255,255,255,0.08)"),
             )
-            st.plotly_chart(_plotly_dark(fig), use_container_width=True)
+            st.plotly_chart(_plotly_dark(fig), width='stretch')
             _show_insight(f"""
 Conductor revenue data: {ipk_conductor[['Conductor','Income_per_KM','Actual_KM']].to_dict('records')}
 
@@ -867,7 +886,7 @@ Analyze conductor revenue efficiency and respond in this exact format:
 📈 Overall Status: Excellent / Good / Average / Poor
 Max 2 bullets per section. Name conductors specifically.
 """)
-            st.dataframe(ipk_conductor, use_container_width=True, hide_index=True)
+            st.dataframe(ipk_conductor, width='stretch', hide_index=True)
 
     with tab9:
         total_income   = df["income"].sum()
@@ -901,7 +920,7 @@ Max 2 bullets per section. Name conductors specifically.
         st.markdown("**Bus wise net profit (actual diesel rate):**")
         display_summary = summary[["Bus", "Income", "Diesel", "Diesel_Rate", "Est_Diesel_Cost", "Net"]].copy()
         display_summary.columns = ["Bus", "Income", "Diesel (L)", "Rate (₹/L)", "Est. Diesel Cost", "Net"]
-        st.dataframe(display_summary, use_container_width=True, hide_index=True)
+        st.dataframe(display_summary, width='stretch', hide_index=True)
 
         _show_insight(f"""
 Period: {period_label}
