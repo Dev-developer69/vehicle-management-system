@@ -26,6 +26,56 @@ def fuel_label(bus_number: str) -> str:
     return "CNG" if bus_number == "AT7389" else "Diesel"
 
 
+def _render_km_merged_table(display_df: pd.DataFrame, d1: str, d2: str):
+    """Renders display_df as an HTML table where Scheduled KM / Actual KM cells
+    for d1 & d2 are visually merged (rowspan) into a single combined value,
+    Excel-style — every other column stays per-row/unchanged."""
+    rows = display_df.to_dict("records")
+
+    idx1 = next((i for i, r in enumerate(rows) if r["Date"] == d1), None)
+    idx2 = next((i for i, r in enumerate(rows) if r["Date"] == d2), None)
+    if idx1 is None or idx2 is None:
+        st.dataframe(display_df, width='stretch', hide_index=True)
+        return
+
+    # d2 ko d1 ke turant baad la do taaki rowspan visually adjacent rahe
+    if idx2 != idx1 + 1:
+        r2 = rows.pop(idx2)
+        idx1 = next(i for i, r in enumerate(rows) if r["Date"] == d1)
+        rows.insert(idx1 + 1, r2)
+        idx2 = idx1 + 1
+
+    sch_sum = pd.to_numeric(rows[idx1]["Scheduled KM"], errors="coerce") + pd.to_numeric(rows[idx2]["Scheduled KM"], errors="coerce")
+    act_sum = pd.to_numeric(rows[idx1]["Actual KM"], errors="coerce") + pd.to_numeric(rows[idx2]["Actual KM"], errors="coerce")
+
+    cols = list(display_df.columns)
+    html = ["<div style='overflow-x:auto;border-radius:8px;border:1px solid #2D2D5E;'>"
+            "<table style='width:100%;border-collapse:collapse;color:#eee;font-size:0.88rem;'>"]
+    html.append("<thead><tr>")
+    for c in cols:
+        html.append(f"<th style='border:1px solid #2D2D5E;padding:8px;background:#1E1E3A;text-align:left;white-space:nowrap;'>{c}</th>")
+    html.append("</tr></thead><tbody>")
+
+    for i, r in enumerate(rows):
+        html.append("<tr>")
+        for c in cols:
+            if c in ("Scheduled KM", "Actual KM") and i == idx1:
+                val = sch_sum if c == "Scheduled KM" else act_sum
+                html.append(
+                    f"<td rowspan='2' style='border:1px solid #2D2D5E;padding:8px;text-align:center;"
+                    f"vertical-align:middle;background:#14304a;color:#7B8CFF;font-weight:bold;'>{val:,.0f}</td>"
+                )
+            elif c in ("Scheduled KM", "Actual KM") and i == idx2:
+                continue  # rowspan se cover ho gaya
+            else:
+                html.append(f"<td style='border:1px solid #2D2D5E;padding:8px;white-space:nowrap;'>{r.get(c, '')}</td>")
+        html.append("</tr>")
+
+    html.append("</tbody></table></div>")
+    st.markdown("".join(html), unsafe_allow_html=True)
+    st.caption(f"🔗 {d1} + {d2} ke Scheduled KM aur Actual KM combine (merged) hain")
+
+
 # ──────────────────────────────────────────────
 # HELPER: Editor widget state → DataFrame
 # ──────────────────────────────────────────────
@@ -465,12 +515,19 @@ def editable_grid(bus_number: str):
         display_df = display_df[["Date", "Status", "Driver Name", "Conductor Name",
                                   "Scheduled KM", "Actual KM", "Diesel", "Diesel KM",
                                   "Avg", "Income", "Gross Income", "Remark", "Next"]]
-        st.dataframe(display_df, width='stretch', hide_index=True)
-
-        # ── 2 din ka KM combine karo (gaadi lagatar 2 din chali) ──
+        # ── 2 din ka KM combine karo (Excel jaisa merge cell — sirf Scheduled/Actual KM) ──
         date_options = display_df["Date"].tolist()
+        combined_pair = st.session_state.get(f"combined_pair_{bus_number}")
+        if combined_pair and not (combined_pair[0] in date_options and combined_pair[1] in date_options):
+            combined_pair = None
+
+        if combined_pair:
+            _render_km_merged_table(display_df, combined_pair[0], combined_pair[1])
+        else:
+            st.dataframe(display_df, width='stretch', hide_index=True)
+
         if len(date_options) >= 2:
-            with st.expander("🔗 2 Din Ka KM Combine Karo"):
+            with st.expander("🔗 Combined dates"):
                 cc1, cc2 = st.columns(2)
                 with cc1:
                     day1 = st.selectbox("Pehla din", options=date_options, key=f"combine_d1_{bus_number}")
@@ -479,28 +536,15 @@ def editable_grid(bus_number: str):
                         "Doosra din", options=[d for d in date_options if d != day1],
                         key=f"combine_d2_{bus_number}"
                     )
-                if st.button("Combine Karo", key=f"combine_btn_{bus_number}"):
-                    st.session_state[f"combined_pair_{bus_number}"] = tuple(sorted([day1, day2]))
-                    st.rerun()
-                if f"combined_pair_{bus_number}" in st.session_state:
-                    if st.button("❌ Combine Hatao", key=f"uncombine_btn_{bus_number}"):
+                bc1, bc2 = st.columns(2)
+                with bc1:
+                    if st.button("Create Combination", key=f"combine_btn_{bus_number}"):
+                        st.session_state[f"combined_pair_{bus_number}"] = tuple(sorted([day1, day2]))
+                        st.rerun()
+                with bc2:
+                    if combined_pair and st.button("❌Remove Combine dates", key=f"uncombine_btn_{bus_number}"):
                         st.session_state.pop(f"combined_pair_{bus_number}", None)
                         st.rerun()
-
-        combined_pair = st.session_state.get(f"combined_pair_{bus_number}")
-        if combined_pair and combined_pair[0] in date_options and combined_pair[1] in date_options:
-            d1, d2 = combined_pair
-            row1 = display_df[display_df["Date"] == d1].iloc[0]
-            row2 = display_df[display_df["Date"] == d2].iloc[0]
-            merged_row = row2.copy()
-            merged_row["Date"]         = f"{d1} → {d2}"
-            merged_row["Scheduled KM"] = pd.to_numeric(row1["Scheduled KM"], errors="coerce") + pd.to_numeric(row2["Scheduled KM"], errors="coerce")
-            merged_row["Actual KM"]    = pd.to_numeric(row1["Actual KM"], errors="coerce") + pd.to_numeric(row2["Actual KM"], errors="coerce")
-            display_df = display_df[~display_df["Date"].isin([d1, d2])]
-            display_df = pd.concat([display_df, merged_row.to_frame().T], ignore_index=True)
-            display_df = display_df.sort_values("Date").reset_index(drop=True)
-            st.markdown(f"**Combined view — {d1} + {d2} ek row me:**")
-            st.dataframe(display_df, width='stretch', hide_index=True)
 
         total_row = build_total_row(display_df, numeric_cols, label_col="Driver Name")
         st.dataframe(total_row, width='stretch', hide_index=True)
