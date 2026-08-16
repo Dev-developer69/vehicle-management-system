@@ -54,9 +54,14 @@ def _render_km_merged_table(display_df: pd.DataFrame, pairs: list):
         idx2 = next((i for i, r in enumerate(rows) if r["Date"] == d2), None)
         if idx1 is None or idx2 is None or idx2 != idx1 + 1:
             continue
-        sch_sum = pd.to_numeric(rows[idx1]["Scheduled KM"], errors="coerce") + pd.to_numeric(rows[idx2]["Scheduled KM"], errors="coerce")
-        act_sum = pd.to_numeric(rows[idx1]["Actual KM"], errors="coerce") + pd.to_numeric(rows[idx2]["Actual KM"], errors="coerce")
-        rowspan_at[idx1] = (sch_sum, act_sum)
+        sch1 = pd.to_numeric(rows[idx1]["Scheduled KM"], errors="coerce")
+        act1 = pd.to_numeric(rows[idx1]["Actual KM"], errors="coerce")
+        sch2 = pd.to_numeric(rows[idx2]["Scheduled KM"], errors="coerce")
+        act2 = pd.to_numeric(rows[idx2]["Actual KM"], errors="coerce")
+        rowspan_at[idx1] = {
+            "sch_sum": sch1 + sch2, "act_sum": act1 + act2,
+            "d1": d1, "d2": d2, "sch1": sch1, "act1": act1, "sch2": sch2, "act2": act2,
+        }
         skip_at.add(idx2)
 
     cols = list(display_df.columns)
@@ -72,11 +77,16 @@ def _render_km_merged_table(display_df: pd.DataFrame, pairs: list):
         html.append("<tr>")
         for c in cols:
             if c in ("Scheduled KM", "Actual KM") and i in rowspan_at:
-                sch_sum, act_sum = rowspan_at[i]
-                val = sch_sum if c == "Scheduled KM" else act_sum
+                info = rowspan_at[i]
+                val = info["sch_sum"] if c == "Scheduled KM" else info["act_sum"]
+                tooltip = (
+                    f"{info['d1']} — Sch {info['sch1']:.0f} / Actual {info['act1']:.0f}\n"
+                    f"{info['d2']} — Sch {info['sch2']:.0f} / Actual {info['act2']:.0f}\n"
+                    f"Total — Sch {info['sch_sum']:.0f} / Actual {info['act_sum']:.0f}"
+                )
                 html.append(
-                    f"<td rowspan='2' style='border:1px solid #2D2D5E;padding:8px;text-align:center;"
-                    f"vertical-align:middle;background:{row_bg};color:#eee;'>{val:,.0f}</td>"
+                    f"<td rowspan='2' title=\"{tooltip}\" style='border:1px solid #2D2D5E;padding:8px;text-align:center;"
+                    f"vertical-align:middle;background:{row_bg};color:#eee;cursor:help;'>{val:,.0f}</td>"
                 )
             elif c in ("Scheduled KM", "Actual KM") and i in skip_at:
                 continue  # rowspan se cover ho gaya
@@ -550,33 +560,50 @@ def editable_grid(bus_number: str):
         used_dates = {d for pair in active_pairs for d in pair}
         available_dates = [d for d in date_options if d not in used_dates]
 
-        if len(available_dates) >= 2:
+        if active_pairs or len(available_dates) >= 2:
             with st.expander("🔗 2 Din Ka KM Combine Karo"):
-                cc1, cc2 = st.columns(2)
-                with cc1:
-                    day1 = st.selectbox("Pehla din", options=available_dates, key=f"combine_d1_{bus_number}")
-                with cc2:
-                    day2 = st.selectbox(
-                        "Doosra din", options=[d for d in available_dates if d != day1],
-                        key=f"combine_d2_{bus_number}"
-                    )
-                if st.button("Combine Karo", key=f"combine_btn_{bus_number}"):
-                    pair = tuple(sorted([day1, day2]))
-                    save_km_combine(bus_number, pair[0], pair[1])
-                    st.session_state[combine_key] = get_km_combines(bus_number)
-                    st.rerun()
-
-        if active_pairs:
-            st.caption("Combined pairs:")
-            for d1, d2 in active_pairs:
-                rc1, rc2 = st.columns([4, 1])
-                with rc1:
-                    st.write(f"🔗 {d1} + {d2}")
-                with rc2:
-                    if st.button("❌ Hatao", key=f"uncombine_btn_{bus_number}_{d1}_{d2}"):
-                        delete_km_combine(bus_number, d1, d2)
+                if len(available_dates) >= 2:
+                    cc1, cc2 = st.columns(2)
+                    with cc1:
+                        day1 = st.selectbox("Pehla din", options=available_dates, key=f"combine_d1_{bus_number}")
+                    with cc2:
+                        day2 = st.selectbox(
+                            "Doosra din", options=[d for d in available_dates if d != day1],
+                            key=f"combine_d2_{bus_number}"
+                        )
+                    if st.button("Combine Karo", key=f"combine_btn_{bus_number}"):
+                        pair = tuple(sorted([day1, day2]))
+                        save_km_combine(bus_number, pair[0], pair[1])
                         st.session_state[combine_key] = get_km_combines(bus_number)
                         st.rerun()
+
+                if active_pairs:
+                    st.caption("Combined pairs: (hover karo details ke liye)")
+                    for d1, d2 in active_pairs:
+                        row1 = display_df[display_df["Date"] == d1]
+                        row2 = display_df[display_df["Date"] == d2]
+                        sch1 = row1["Scheduled KM"].iloc[0] if not row1.empty else 0
+                        act1 = row1["Actual KM"].iloc[0] if not row1.empty else 0
+                        sch2 = row2["Scheduled KM"].iloc[0] if not row2.empty else 0
+                        act2 = row2["Actual KM"].iloc[0] if not row2.empty else 0
+                        sch_sum = pd.to_numeric(sch1, errors="coerce") + pd.to_numeric(sch2, errors="coerce")
+                        act_sum = pd.to_numeric(act1, errors="coerce") + pd.to_numeric(act2, errors="coerce")
+                        tooltip = (
+                            f"{d1} — Sch {sch1} / Actual {act1}\n"
+                            f"{d2} — Sch {sch2} / Actual {act2}\n"
+                            f"Total — Sch {sch_sum:.0f} / Actual {act_sum:.0f}"
+                        )
+                        rc1, rc2 = st.columns([4, 1])
+                        with rc1:
+                            st.markdown(
+                                f"<span title=\"{tooltip}\" style='cursor:help;'>🔗 {d1} + {d2}</span>",
+                                unsafe_allow_html=True,
+                            )
+                        with rc2:
+                            if st.button("❌ Hatao", key=f"uncombine_btn_{bus_number}_{d1}_{d2}"):
+                                delete_km_combine(bus_number, d1, d2)
+                                st.session_state[combine_key] = get_km_combines(bus_number)
+                                st.rerun()
 
         total_row = build_total_row(display_df, numeric_cols, label_col="Driver Name")
         st.dataframe(total_row, width='stretch', hide_index=True)
