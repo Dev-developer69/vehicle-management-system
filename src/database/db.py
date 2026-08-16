@@ -33,11 +33,11 @@ def get_km_combines(bus_number: str):
 
 
 def save_km_combine(bus_number: str, date1: str, date2: str) -> None:
-    supabase_admin.table("vehicle_km_combines").insert({
+    supabase_admin.table("vehicle_km_combines").upsert({
         "bus_number": bus_number,
         "date1":      date1,
         "date2":      date2,
-    }).execute()
+    }, on_conflict="bus_number,date1,date2").execute()
 
 
 def delete_km_combine(bus_number: str, date1: str, date2: str) -> None:
