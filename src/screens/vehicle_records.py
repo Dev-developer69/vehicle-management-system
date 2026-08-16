@@ -468,7 +468,7 @@ def quick_overview(bus_list: list):
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
             plot_bgcolor="rgba(0,0,0,0)",
         )
-        st.plotly_chart(fig, width='stretch')
+        st.plotly_chart(fig, width='stretch', key="qo_chart_daily_trend")
         
         _show_insight(f"""
 Period: {period_label}
@@ -510,7 +510,7 @@ Keep each bullet to 1 line. Max 2 bullets per section.
             xaxis=dict(type="category", gridcolor="rgba(255,255,255,0.08)"),
             bargap=0.25, bargroupgap=0.05,
         )
-        st.plotly_chart(_plotly_dark(fig), width='stretch')
+        st.plotly_chart(_plotly_dark(fig), width='stretch', key="qo_chart_sched_vs_actual")
         _show_insight(f"""
 Scheduled KM: {summary.set_index('Bus')['Scheduled_KM'].to_dict()}
 Actual KM: {summary.set_index('Bus')['Actual_KM'].to_dict()}
@@ -600,7 +600,7 @@ Max 2 bullets per section. Be specific with numbers.
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
             plot_bgcolor="rgba(0,0,0,0)",
         )
-        st.plotly_chart(fig, width='stretch')
+        st.plotly_chart(fig, width='stretch', key="qo_chart_efficiency")
     
         st.markdown("**Best & Worst Day per Bus:**")
         bw_cols = st.columns(len(summary))
@@ -648,7 +648,7 @@ Max 2 bullets per section. Be specific with numbers.
                              color_discrete_sequence=["#14A085","#7B8CFF","#FFB347","#FF5252","#00D4FF","#FF69B4"])
                 fig.update_traces(textposition="inside", textinfo="percent+label")
                 fig.update_layout(showlegend=False, margin=dict(t=10, b=10, l=10, r=10))
-                st.plotly_chart(_plotly_dark(fig), width='stretch')
+                st.plotly_chart(_plotly_dark(fig), width='stretch', key=f"qo_chart_donut_{bus}")
         st.caption("Har bus mein driver duty distribution")
 
     with tab5:
@@ -682,7 +682,7 @@ Max 2 bullets per section. Be specific with numbers.
             xaxis=dict(type="category"),
             yaxis=dict(range=[0, max_val * 1.2], gridcolor="rgba(255,255,255,0.08)"),
         )
-        st.plotly_chart(_plotly_dark(fig), width='stretch')
+        st.plotly_chart(_plotly_dark(fig), width='stretch', key="qo_chart_driver_perf")
         _show_insight(f"""
 Driver performance data: {driver_perf[['Driver','Total_KM','Days','Avg_Efficiency']].to_dict('records')}
 
@@ -724,7 +724,7 @@ Max 2 bullets per section. Mention driver names specifically.
                     xaxis=dict(type="category"),
                     yaxis=dict(range=[0, max_d * 1.2], gridcolor="rgba(255,255,255,0.08)"),
                 )
-                st.plotly_chart(_plotly_dark(fig), width='stretch')
+                st.plotly_chart(_plotly_dark(fig), width='stretch', key="qo_chart_diesel_bus")
 
                 mileage = df[df["diesel"] > 0].groupby("bus_number").apply(
                     lambda x: (x["diesel_km"].sum() / x["diesel"].sum()).round(2)
@@ -748,7 +748,7 @@ Max 2 bullets per section. Mention driver names specifically.
                     xaxis=dict(type="category"),
                     yaxis=dict(range=[0, max_i * 1.2], gridcolor="rgba(255,255,255,0.08)"),
                 )
-                st.plotly_chart(_plotly_dark(fig), width='stretch')
+                st.plotly_chart(_plotly_dark(fig), width='stretch', key="qo_chart_income_bus")
 
             if has_diesel and has_income:
                 st.markdown("**💰 Income vs ⛽ Est. Diesel Cost:**")
@@ -770,7 +770,7 @@ Max 2 bullets per section. Mention driver names specifically.
                     yaxis=dict(range=[0, max_v * 1.2], gridcolor="rgba(255,255,255,0.08)"),
                     bargap=0.25, bargroupgap=0.05,
                 )
-                st.plotly_chart(_plotly_dark(fig), width='stretch')
+                st.plotly_chart(_plotly_dark(fig), width='stretch', key="qo_chart_income_vs_diesel")
                 _show_insight(f"""
 Bus financial data: {summary[['Bus','Income','Est_Diesel_Cost','Net']].to_dict('records')}
 
@@ -866,7 +866,7 @@ Max 2 bullets per section. Name specific buses and drivers.
                 xaxis=dict(type="category"),
                 yaxis=dict(range=[0, max_v * 1.2], gridcolor="rgba(255,255,255,0.08)"),
             )
-            st.plotly_chart(_plotly_dark(fig), width='stretch')
+            st.plotly_chart(_plotly_dark(fig), width='stretch', key="qo_chart_income_per_km")
             _show_insight(f"""
 Conductor revenue data: {ipk_conductor[['Conductor','Income_per_KM','Actual_KM']].to_dict('records')}
 
