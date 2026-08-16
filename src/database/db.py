@@ -23,29 +23,29 @@ def save_scheduled_km(bus_number: str, scheduled_km: int) -> None:
     }, on_conflict="bus_number").execute()
 
 
-def get_km_combines(bus_number: str):
-    """Bus ke liye saare combined (merged) date-pairs return karta hai."""
+def get_km_combine(bus_number: str):
+    """Bus ke liye combined (merged) 2 dates return karta hai, agar set hain to."""
     res = supabase.table("vehicle_km_combines") \
         .select("date1, date2") \
         .eq("bus_number", bus_number) \
         .execute()
-    return [(r["date1"], r["date2"]) for r in (res.data or [])]
+    if res.data:
+        return res.data[0]["date1"], res.data[0]["date2"]
+    return None
 
 
 def save_km_combine(bus_number: str, date1: str, date2: str) -> None:
-    supabase_admin.table("vehicle_km_combines").insert({
+    supabase_admin.table("vehicle_km_combines").upsert({
         "bus_number": bus_number,
         "date1":      date1,
         "date2":      date2,
-    }).execute()
+    }, on_conflict="bus_number").execute()
 
 
-def delete_km_combine(bus_number: str, date1: str, date2: str) -> None:
+def delete_km_combine(bus_number: str) -> None:
     supabase_admin.table("vehicle_km_combines") \
         .delete() \
         .eq("bus_number", bus_number) \
-        .eq("date1", date1) \
-        .eq("date2", date2) \
         .execute()
 
 
