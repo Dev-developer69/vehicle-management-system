@@ -466,15 +466,11 @@ def editable_grid(bus_number: str):
                                   "Scheduled KM", "Actual KM", "Diesel", "Diesel KM",
                                   "Avg", "Income", "Gross Income", "Remark", "Next"]]
         st.dataframe(display_df, width='stretch', hide_index=True)
-        total_row = build_total_row(display_df, numeric_cols, label_col="Driver Name")
-        st.dataframe(total_row, width='stretch', hide_index=True)
 
-        # ── 2 din ka KM combine karo (gaadi lagatar 2 din chali, km split karna mushkil) ──
-        with st.expander("🔗 2 Din Ka KM Combine Karo"):
-            date_options = display_df["Date"].tolist()
-            if len(date_options) < 2:
-                st.info("Kam se kam 2 records chahiye combine karne ke liye.")
-            else:
+        # ── 2 din ka KM combine karo (gaadi lagatar 2 din chali) ──
+        date_options = display_df["Date"].tolist()
+        if len(date_options) >= 2:
+            with st.expander("🔗 2 Din Ka KM Combine Karo"):
                 cc1, cc2 = st.columns(2)
                 with cc1:
                     day1 = st.selectbox("Pehla din", options=date_options, key=f"combine_d1_{bus_number}")
@@ -483,16 +479,31 @@ def editable_grid(bus_number: str):
                         "Doosra din", options=[d for d in date_options if d != day1],
                         key=f"combine_d2_{bus_number}"
                     )
-                row1 = display_df[display_df["Date"] == day1].iloc[0]
-                row2 = display_df[display_df["Date"] == day2].iloc[0]
-                sch_sum  = pd.to_numeric(row1["Scheduled KM"], errors="coerce") + pd.to_numeric(row2["Scheduled KM"], errors="coerce")
-                act_sum  = pd.to_numeric(row1["Actual KM"], errors="coerce") + pd.to_numeric(row2["Actual KM"], errors="coerce")
-                diff_sum = pd.to_numeric(act_sum) - pd.to_numeric(sch_sum)
+                if st.button("Combine Karo", key=f"combine_btn_{bus_number}"):
+                    st.session_state[f"combined_pair_{bus_number}"] = tuple(sorted([day1, day2]))
+                    st.rerun()
+                if f"combined_pair_{bus_number}" in st.session_state:
+                    if st.button("❌ Combine Hatao", key=f"uncombine_btn_{bus_number}"):
+                        st.session_state.pop(f"combined_pair_{bus_number}", None)
+                        st.rerun()
 
-                m1, m2, m3 = st.columns(3)
-                m1.metric(f"Scheduled KM ({day1} + {day2})", f"{sch_sum:,.0f}")
-                m2.metric(f"Actual KM ({day1} + {day2})", f"{act_sum:,.0f}")
-                m3.metric("Diff (Actual − Scheduled)", f"{diff_sum:,.0f}")
+        combined_pair = st.session_state.get(f"combined_pair_{bus_number}")
+        if combined_pair and combined_pair[0] in date_options and combined_pair[1] in date_options:
+            d1, d2 = combined_pair
+            row1 = display_df[display_df["Date"] == d1].iloc[0]
+            row2 = display_df[display_df["Date"] == d2].iloc[0]
+            merged_row = row2.copy()
+            merged_row["Date"]         = f"{d1} → {d2}"
+            merged_row["Scheduled KM"] = pd.to_numeric(row1["Scheduled KM"], errors="coerce") + pd.to_numeric(row2["Scheduled KM"], errors="coerce")
+            merged_row["Actual KM"]    = pd.to_numeric(row1["Actual KM"], errors="coerce") + pd.to_numeric(row2["Actual KM"], errors="coerce")
+            display_df = display_df[~display_df["Date"].isin([d1, d2])]
+            display_df = pd.concat([display_df, merged_row.to_frame().T], ignore_index=True)
+            display_df = display_df.sort_values("Date").reset_index(drop=True)
+            st.markdown(f"**Combined view — {d1} + {d2} ek row me:**")
+            st.dataframe(display_df, width='stretch', hide_index=True)
+
+        total_row = build_total_row(display_df, numeric_cols, label_col="Driver Name")
+        st.dataframe(total_row, width='stretch', hide_index=True)
 
         pdf_bytes = _generate_pdf(display_df, total_row, bus_number, month, half)
         st.download_button("📥 Download PDF", data=pdf_bytes,
