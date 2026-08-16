@@ -68,6 +68,7 @@ def _render_km_merged_table(display_df: pd.DataFrame, pairs: list):
     html.append("</tr></thead><tbody>")
 
     for i, r in enumerate(rows):
+        row_bg = "#161629" if i % 2 == 0 else "#1E1E3A"
         html.append("<tr>")
         for c in cols:
             if c in ("Scheduled KM", "Actual KM") and i in rowspan_at:
@@ -75,12 +76,14 @@ def _render_km_merged_table(display_df: pd.DataFrame, pairs: list):
                 val = sch_sum if c == "Scheduled KM" else act_sum
                 html.append(
                     f"<td rowspan='2' style='border:1px solid #2D2D5E;padding:8px;text-align:center;"
-                    f"vertical-align:middle;'>{val:,.0f}</td>"
+                    f"vertical-align:middle;background:{row_bg};color:#eee;'>{val:,.0f}</td>"
                 )
             elif c in ("Scheduled KM", "Actual KM") and i in skip_at:
                 continue  # rowspan se cover ho gaya
             else:
-                html.append(f"<td style='border:1px solid #2D2D5E;padding:8px;white-space:nowrap;'>{r.get(c, '')}</td>")
+                cell_val = r.get(c, "")
+                cell_val = "" if pd.isna(cell_val) else cell_val
+                html.append(f"<td style='border:1px solid #2D2D5E;padding:8px;white-space:nowrap;background:{row_bg};color:#eee;'>{cell_val}</td>")
         html.append("</tr>")
 
     html.append("</tbody></table></div>")
