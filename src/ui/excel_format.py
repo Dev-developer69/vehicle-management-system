@@ -312,6 +312,7 @@ def editable_grid(bus_number: str):
         ai_choice = st.radio(
             "🤖 AI Model",
             ["🤖 Claude (Accurate — 2 images ek saath)", "⚡ Groq (Fast — 1 image at a time)"],
+            index=1,
             horizontal=True,
             key=f"ai_choice_{bus_number}"
         )
