@@ -31,38 +31,42 @@ def _render_km_merged_table(display_df: pd.DataFrame, pairs: list):
     """Renders display_df as an HTML table where Scheduled KM / Actual KM cells
     for each (d1, d2) pair are visually merged (rowspan) into a single combined
     value, Excel-style — every other column stays per-row/unchanged.
-    Multiple non-overlapping pairs are supported at once."""
+    Multiple non-overlapping pairs are supported at once.
+    Original row order (jaisa display_df me hai, e.g. descending date) ko
+    zyada se zyada preserve karta hai — sirf jab dono dates already adjacent
+    nahi hoti, tabhi minimum movement karta hai."""
     rows = display_df.to_dict("records")
 
-    # Har pair ke liye d2 ko d1 ke turant baad la do taaki rowspan adjacent rahe
+    rowspan_at = {}   # idx -> merge info, is row se rowspan shuru hoga
+    skip_at    = set()  # doosri row ke indices (KM cells yaha skip honge)
+
     for d1, d2 in pairs:
         idx1 = next((i for i, r in enumerate(rows) if r["Date"] == d1), None)
         idx2 = next((i for i, r in enumerate(rows) if r["Date"] == d2), None)
         if idx1 is None or idx2 is None:
             continue
-        if idx2 != idx1 + 1:
-            r2 = rows.pop(idx2)
-            idx1 = next(i for i, r in enumerate(rows) if r["Date"] == d1)
-            rows.insert(idx1 + 1, r2)
 
-    # rowspan_at[idx] = (sch_sum, act_sum) — is row se rowspan shuru hoga
-    # skip_at = set of indices jo dusri row hain (unke KM cells skip honge)
-    rowspan_at = {}
-    skip_at    = set()
-    for d1, d2 in pairs:
-        idx1 = next((i for i, r in enumerate(rows) if r["Date"] == d1), None)
-        idx2 = next((i for i, r in enumerate(rows) if r["Date"] == d2), None)
-        if idx1 is None or idx2 is None or idx2 != idx1 + 1:
-            continue
-        sch1 = pd.to_numeric(rows[idx1]["Scheduled KM"], errors="coerce")
-        act1 = pd.to_numeric(rows[idx1]["Actual KM"], errors="coerce")
-        sch2 = pd.to_numeric(rows[idx2]["Scheduled KM"], errors="coerce")
-        act2 = pd.to_numeric(rows[idx2]["Actual KM"], errors="coerce")
-        rowspan_at[idx1] = {
-            "sch_sum": sch1 + sch2, "act_sum": act1 + act2,
-            "d1": d1, "d2": d2, "sch1": sch1, "act1": act1, "sch2": sch2, "act2": act2,
+        low, high = (idx1, idx2) if idx1 < idx2 else (idx2, idx1)
+        if high != low + 1:
+            # Sirf jitni zaroorat hai utna hi move karo — 'high' wali row ko
+            # 'low' ke turant baad le aao, baaki poori list ka order waisa hi rahega
+            r_high = rows.pop(high)
+            rows.insert(low + 1, r_high)
+            high = low + 1
+
+        date_top    = rows[low]["Date"]
+        date_bottom = rows[high]["Date"]
+        sch_top     = pd.to_numeric(rows[low]["Scheduled KM"], errors="coerce")
+        act_top     = pd.to_numeric(rows[low]["Actual KM"], errors="coerce")
+        sch_bottom  = pd.to_numeric(rows[high]["Scheduled KM"], errors="coerce")
+        act_bottom  = pd.to_numeric(rows[high]["Actual KM"], errors="coerce")
+
+        rowspan_at[low] = {
+            "sch_sum": sch_top + sch_bottom, "act_sum": act_top + act_bottom,
+            "d1": date_top, "d2": date_bottom,
+            "sch1": sch_top, "act1": act_top, "sch2": sch_bottom, "act2": act_bottom,
         }
-        skip_at.add(idx2)
+        skip_at.add(high)
 
     cols = list(display_df.columns)
     html = ["<div style='overflow-x:auto;border-radius:8px;border:1px solid #2D2D5E;'>"
