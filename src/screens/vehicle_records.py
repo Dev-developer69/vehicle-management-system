@@ -187,6 +187,11 @@ def vehicle_records():
             st.rerun()
 
     home_layout()
+    st.markdown("""
+        <style>
+            .stApp { background: #1B3B6F !important; }
+        </style>
+    """, unsafe_allow_html=True)
 
     accessible = get_accessible_vehicles()
     visible_vehicles = [bus for bus in VEHICLE_MAP.keys() if bus in accessible]
