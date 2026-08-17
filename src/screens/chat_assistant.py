@@ -425,7 +425,8 @@ def _render_chat_body():
         ai_options.append("🤖 Claude (Accurate)")
     if has_groq:
         ai_options.append("⚡ Groq (Fast)")
-    ai_choice = st.radio("AI Model", ai_options, horizontal=True, key="chat_ai_choice") if len(ai_options) > 1 else ai_options[0]
+    default_idx = ai_options.index("⚡ Groq (Fast)") if "⚡ Groq (Fast)" in ai_options else 0
+    ai_choice = st.radio("AI Model", ai_options, index=default_idx, horizontal=True, key="chat_ai_choice") if len(ai_options) > 1 else ai_options[0]
     using_claude = ai_choice.startswith("🤖")
 
     if "chat_assistant_history" not in st.session_state:
