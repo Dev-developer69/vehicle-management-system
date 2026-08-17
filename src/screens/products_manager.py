@@ -306,7 +306,7 @@ def products_page():
         with cols[i]:
             if st.button(
                 label,
-                use_container_width=True,
+                width='stretch',
                 type="primary" if st.session_state[nav_key] == key else "secondary",
                 key=f"pm_tab_{key}",
             ):
@@ -335,7 +335,7 @@ def _product_details_tab():
             st.dataframe(
                 filtered[["Name", "MRP", "Latest Price", "Old Price",
                            "Quantity", "Remark", "Supplier", "Purchased Date"]],
-                use_container_width=True, hide_index=True,
+                width='stretch', hide_index=True,
             )
         with st.expander("🗑️ Delete a product"):
             del_name = st.selectbox("Select a product", filtered["Name"].tolist(), key="del_prod_select")
@@ -411,7 +411,7 @@ def _product_details_tab():
 
                 edited = st.data_editor(
                     edit_df,
-                    use_container_width=True,
+                    width='stretch',
                     hide_index=True,
                     num_rows="dynamic",
                     key="img_editor",
@@ -427,7 +427,7 @@ def _product_details_tab():
                 bc1, bc2 = st.columns([3,1])
                 with bc1:
                     if st.button("💾 Save All Products", type="primary",
-                                 use_container_width=True, key="save_all_img"):
+                                 width='stretch', key="save_all_img"):
                         saved, skipped = 0, 0
                         for _, row in edited.iterrows():
                             name = str(row["Name"] or "").strip()
@@ -445,7 +445,7 @@ def _product_details_tab():
                         st.session_state["img_reset_key"] = img_reset_key + 1
                         st.rerun()
                 with bc2:
-                    if st.button("🗑️ Clear", key="clear_img_list", use_container_width=True):
+                    if st.button("🗑️ Clear", key="clear_img_list", width='stretch'):
                         st.session_state.pop("img_products_list", None)
                         st.session_state["img_reset_key"] = img_reset_key + 1
                         st.rerun()
@@ -477,7 +477,7 @@ def _product_details_tab():
 
             bc1, bc2 = st.columns([3,1])
             with bc1:
-                if st.button("💾 Save Product", use_container_width=True,
+                if st.button("💾 Save Product", width='stretch',
                              key="save_prod_btn", type="primary"):
                     if not p_name.strip():
                         st.warning("⚠️ Product name required.")
@@ -488,7 +488,7 @@ def _product_details_tab():
                         st.session_state.pop("products_df", None)
                         st.rerun()
             with bc2:
-                if st.button("🔄 Refresh", use_container_width=True, key="refresh_prod"):
+                if st.button("🔄 Refresh", width='stretch', key="refresh_prod"):
                     st.session_state.pop("products_df", None)
                     st.rerun()
 
@@ -505,7 +505,7 @@ def _supplier_details_tab():
     if not filtered_sup.empty:
         with st.container(border=True):
             st.dataframe(filtered_sup[["Name", "Phone", "Address", "Remark"]],
-                         use_container_width=True, hide_index=True)
+                         width='stretch', hide_index=True)
 
         st.markdown("#### 📦 Supplier's products")
         sel_sup = st.selectbox("Select Supplier", filtered_sup["Name"].tolist(), key="sup_sel_view")
@@ -514,7 +514,7 @@ def _supplier_details_tab():
             sup_prods = get_supplier_products(sid)
             if not sup_prods.empty:
                 with st.container(border=True):
-                    st.dataframe(sup_prods, use_container_width=True, hide_index=True)
+                    st.dataframe(sup_prods, width='stretch', hide_index=True)
             else:
                 st.info("NO PRODUCTS PURCHASED.")
 
@@ -540,6 +540,7 @@ def _supplier_details_tab():
         if sup_mode == "📷 From Card/Image":
             sup_ai_choice = st.radio(
                 "AI Model", ["🤖 Claude (Accurate)", "⚡ Groq (Fast)"],
+                index=1,
                 horizontal=True, key="sup_ai_choice",
                 help="Claude: invoices/tax bills better padhta hai, thoda slow | Groq: free & fast",
             )
@@ -575,7 +576,7 @@ def _supplier_details_tab():
 
                     edited_sup = st.data_editor(
                         sup_edit_df,
-                        use_container_width=True,
+                        width='stretch',
                         hide_index=True,
                         num_rows="dynamic",
                         key="sup_editor",
@@ -588,7 +589,7 @@ def _supplier_details_tab():
                     )
                     sc1, sc2 = st.columns([3,1])
                     with sc1:
-                        if st.button("💾 Save All Suppliers", use_container_width=True,
+                        if st.button("💾 Save All Suppliers", width='stretch',
                                      key="save_sup_img_btn", type="primary"):
                             saved, skipped, duplicate, no_phone = 0, 0, 0, 0
                             for _, row in edited_sup.iterrows():
@@ -613,7 +614,7 @@ def _supplier_details_tab():
                             st.session_state["sup_img_reset"] = sup_img_reset + 1
                             st.rerun()
                     with sc2:
-                        if st.button("🗑️ Clear", use_container_width=True, key="clear_sup_img"):
+                        if st.button("🗑️ Clear", width='stretch', key="clear_sup_img"):
                             st.session_state.pop("sup_extracted", None)
                             st.session_state["sup_img_reset"] = sup_img_reset + 1
                             st.rerun()
@@ -635,7 +636,7 @@ def _supplier_details_tab():
 
             bc1, bc2 = st.columns([3,1])
             with bc1:
-                if st.button("💾 Save Supplier", use_container_width=True,
+                if st.button("💾 Save Supplier", width='stretch',
                              key="save_sup_btn", type="primary"):
                     if not s_name.strip():
                         st.warning("⚠️ Supplier name required.")
@@ -652,7 +653,7 @@ def _supplier_details_tab():
                         elif reason == "no_phone":
                             st.warning("⚠️ Phone number required.")
             with bc2:
-                if st.button("🔄 Refresh", use_container_width=True, key="refresh_sup"):
+                if st.button("🔄 Refresh", width='stretch', key="refresh_sup"):
                     st.session_state.pop("suppliers_df", None)
                     st.rerun()
 
@@ -674,12 +675,12 @@ def _requirements_tab():
                     st.caption(f"Qty: {row['Quantity']}  ·  {row['Remark']}  ·  Added: {row['Created']}")
                 with c2:
                     if not row["Fulfilled"]:
-                        if st.button("✅ Fulfill", key=f"fulfill_{row['id']}", use_container_width=True):
+                        if st.button("✅ Fulfill", key=f"fulfill_{row['id']}", width='stretch'):
                             st.session_state[f"fmodal_{row['id']}"] = True
                     else:
                         st.success("Fulfilled")
                 with c3:
-                    if st.button("🗑️", key=f"del_req_{row['id']}", use_container_width=True):
+                    if st.button("🗑️", key=f"del_req_{row['id']}", width='stretch'):
                         delete_requirement(row["id"])
                         st.session_state.pop("req_df", None)
                         st.rerun()
@@ -706,7 +707,7 @@ def _requirements_tab():
 
                     ok1, ok2 = st.columns(2)
                     with ok1:
-                        if st.button("✅ Confirm", key=f"fc_{row['id']}", type="primary", use_container_width=True):
+                        if st.button("✅ Confirm", key=f"fc_{row['id']}", type="primary", width='stretch'):
                             fulfill_requirement(row["id"], row["Product Name"],
                                                 f_price, f_mrp, sup_opts[f_sup], str(f_date))
                             st.session_state.pop(f"fmodal_{row['id']}", None)
@@ -715,7 +716,7 @@ def _requirements_tab():
                             st.success(f"✅ {row['Product Name']} saved!")
                             st.rerun()
                     with ok2:
-                        if st.button("❌ Cancel", key=f"fcancel_{row['id']}", use_container_width=True):
+                        if st.button("❌ Cancel", key=f"fcancel_{row['id']}", width='stretch'):
                             st.session_state.pop(f"fmodal_{row['id']}", None)
                             st.rerun()
     else:
@@ -734,7 +735,7 @@ def _requirements_tab():
 
         bc1, bc2 = st.columns([3,1])
         with bc1:
-            if st.button("💾 Add Requirement", use_container_width=True, key="save_req", type="primary"):
+            if st.button("💾 Add Requirement", width='stretch', key="save_req", type="primary"):
                 if not r_name.strip():
                     st.warning("⚠️ Product name required.")
                 else:
@@ -743,6 +744,6 @@ def _requirements_tab():
                     st.session_state.pop("req_df", None)
                     st.rerun()
         with bc2:
-            if st.button("🔄 Refresh", use_container_width=True, key="refresh_req"):
+            if st.button("🔄 Refresh", width='stretch', key="refresh_req"):
                 st.session_state.pop("req_df", None)
                 st.rerun()
