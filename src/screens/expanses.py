@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import calendar
 from datetime import date
-from src.ui.home_base_layout import home_layout
+from src.ui.home_base_layout import home_layout, page_bg
 from src.database.db import (
     get_vehicle_expenses, get_driver_salary,
     get_diesel_rate_payment, get_diesel_summary,
@@ -77,7 +77,7 @@ def _show_bus_detail(bus: str, start, end, month: int, period: str):
         cat_df = exp_df.groupby("Category")["Amount"].sum().reset_index()
         cat_df = cat_df.sort_values("Amount", ascending=False)
         cat_df["Amount"] = cat_df["Amount"].apply(lambda x: f"₹{x:,.0f}")
-        st.dataframe(cat_df, use_container_width=True, hide_index=True)
+        st.dataframe(cat_df, width='stretch', hide_index=True)
 
     sal_df = get_driver_salary(bus_number=bus)
     if not sal_df.empty:
@@ -88,7 +88,7 @@ def _show_bus_detail(bus: str, start, end, month: int, period: str):
             show_sal = sal_df[["Date", "Driver Name", "Salary", "Transaction"]].copy()
             show_sal["Date"]   = show_sal["Date"].dt.strftime("%Y-%m-%d")
             show_sal["Salary"] = show_sal["Salary"].apply(lambda x: f"₹{x:,.0f}")
-            st.dataframe(show_sal, use_container_width=True, hide_index=True)
+            st.dataframe(show_sal, width='stretch', hide_index=True)
 
     st.markdown(f"""
     <div style='background:linear-gradient(135deg,#2D2D5E,#1E1E3A);border-radius:12px;
@@ -108,6 +108,7 @@ def expenses():
         st.rerun()
 
     home_layout()
+    page_bg("#5C3D2E")  # Burnt Amber
     st.markdown("<h2 style='text-align:center;'>Expenses 🧾</h2>", unsafe_allow_html=True)
     st.markdown("<br>", unsafe_allow_html=True)
 
@@ -162,7 +163,7 @@ def expenses():
         )
     with fc3:
         st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("🔄 Refresh", key="exp_refresh", use_container_width=True):
+        if st.button("🔄 Refresh", key="exp_refresh", width='stretch'):
             for bus, _ in visible_buses:
                 st.session_state.pop(f"exp_cache_{bus}", None)
             st.session_state["open_bus_detail"] = None
@@ -228,7 +229,7 @@ def expenses():
             if st.button(
                 "▼ Details" if not is_open else "▲ Close",
                 key=f"card_toggle_{bus}",
-                use_container_width=True,
+                width='stretch',
                 type="secondary",
             ):
                 if is_open:
