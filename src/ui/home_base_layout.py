@@ -7,7 +7,7 @@ def get_base64_image(image_path):
         data = base64.b64encode(f.read()).decode()
     return data
 
-def image_backgroung():
+def image_backgroung(overlay_color="rgba(0, 0, 0, 0.7)"):
     img_data = get_base64_image("cv-banner.jpg")
 
     st.markdown(f"""
@@ -26,7 +26,7 @@ def image_backgroung():
             left: 0;
             width: 100%;
             height: 100%;
-            background: rgba(0, 0, 0, 0.7);
+            background: {overlay_color};
             z-index: 0;
         }}
     </style>    
@@ -120,6 +120,17 @@ def home_layout():
         </style>
     """, unsafe_allow_html=True)
 
+
+def page_bg(hex_color: str):
+    """home_layout() ke baad call karo — is page ka background alag color me override kar deta hai."""
+    st.markdown(f"""
+        <style>
+            .stApp {{ background: {hex_color} !important; }}
+        </style>
+    """, unsafe_allow_html=True)
+
+
+
 def background():
     st.markdown('''
     <style>
@@ -179,5 +190,3 @@ def background():
             }
     </style>
 ''', unsafe_allow_html=True)
-
-
