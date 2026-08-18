@@ -1,9 +1,10 @@
 import streamlit as st
 from src.ui.excel_format import editable_grid, driver_salary, expenses, diesel_view
-from src.ui.home_base_layout import background,home_layout
+from src.ui.home_base_layout import background,home_layout,page_bg
 
 def page_0303():
     home_layout()
+    page_bg("#1B4B72")  # Steel Blue
     col1, col2 = st.columns(2)
     with col1:
         if st.button('Home page',type='secondary', width='stretch', icon=':material/home:', shortcut='control+backspace'):
