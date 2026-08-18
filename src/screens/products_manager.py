@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 from datetime import date
-from src.ui.home_base_layout import home_layout
+from src.ui.home_base_layout import home_layout, page_bg
 from PIL import Image
 import io
 
@@ -252,6 +252,7 @@ def _extract_data_from_images(images: list, prompt: str) -> list:
 # ──────────────────────────────────────────────
 def products_page():
     home_layout()
+    page_bg("#3D1E56")  # Plum Purple
     from src.database.config import supabase
     from src.database.auth import get_current_role
 
