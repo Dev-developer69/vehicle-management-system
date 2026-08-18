@@ -2,12 +2,6 @@ import streamlit as st
 from src.ui.excel_format import editable_grid, expenses, driver_salary, diesel_view
 from src.ui.home_base_layout import background, home_layout, page_bg
 
-from supabase import create_client
-
-SUPABASE_URL = st.secrets["SUPABASE_URL"]
-SUPABASE_KEY = st.secrets["SUPABASE_API_KEY"]
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-
 
 def page_3131():
     home_layout()
