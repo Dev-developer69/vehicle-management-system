@@ -1,5 +1,6 @@
 import streamlit as st
 from src.database.config import supabase
+from src.ui.home_base_layout import image_backgroung
 
 
 # ──────────────────────────────────────────────
@@ -98,10 +99,33 @@ def get_maintenance_access() -> bool:
 # LOGIN PAGE
 # ──────────────────────────────────────────────
 def login_page():
+    image_backgroung(overlay_color="rgba(20, 35, 70, 0.72)")  # black ki jagah navy-blue tint
+
+    st.markdown("""
+        <style>
+            [data-testid="stForm"] {
+                background: rgba(15, 20, 40, 0.55);
+                backdrop-filter: blur(14px);
+                -webkit-backdrop-filter: blur(14px);
+                border: 1px solid rgba(255,255,255,0.12);
+                border-radius: 18px;
+                padding: 28px 24px 12px 24px;
+                box-shadow: 0 8px 32px rgba(0,0,0,0.35);
+            }
+            [data-testid="stForm"] button[kind="primary"] {
+                background: linear-gradient(135deg, #7B8CFF 0%, #C566E8 100%) !important;
+                border: none !important;
+            }
+            [data-testid="stForm"] button[kind="primary"]:hover {
+                filter: brightness(1.1);
+            }
+        </style>
+    """, unsafe_allow_html=True)
+
     st.markdown("""
         <div style='text-align: center; padding: 40px 0 20px 0;'>
-            <h1>🚌 Vehicle Maintenance</h1>
-            <p style='color: gray;'>Login to continue</p>
+            <h1 style='color: white;'>🚌 Vehicle Maintenance</h1>
+            <p style='color: rgba(255,255,255,0.65);'>Login to continue</p>
         </div>
     """, unsafe_allow_html=True)
 
@@ -110,7 +134,7 @@ def login_page():
         with st.form("login_form"):
             email    = st.text_input("📧 Email", placeholder="you@example.com")
             password = st.text_input("🔒 Password", type="password", placeholder="••••••••")
-            submit   = st.form_submit_button("Login", use_container_width=True, type="primary")
+            submit   = st.form_submit_button("Login", width='stretch', type="primary")
 
         if submit:
             if not email or not password:
@@ -154,7 +178,7 @@ def logout():
             st.markdown(f"{role_emoji} **{user.email}**")
             st.markdown(f"`{role.upper()}`")
             st.divider()
-        if st.button("🚪 Logout", use_container_width=True):
+        if st.button("🚪 Logout", width='stretch'):
             try:
                 supabase.auth.sign_out()
             except Exception:
