@@ -130,6 +130,9 @@ def login_page():
             [data-testid="stAppViewContainer"] {
                 overflow: hidden !important;
             }
+            .block-container {
+                padding-top: 1rem !important;
+            }
             html, body {
                 overflow: hidden !important;
             }
@@ -137,7 +140,7 @@ def login_page():
     """, unsafe_allow_html=True)
 
     st.markdown("""
-        <div style='text-align: center; padding: 40px 0 20px 0;'>
+        <div style='text-align: center; padding: 8px 0 12px 0;'>
             <h1 style='color: white;'>🚌 Vehicle Maintenance</h1>
             <p style='color: rgba(255,255,255,0.65);'>Login to continue</p>
         </div>
