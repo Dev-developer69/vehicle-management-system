@@ -6,21 +6,21 @@ from src.database.auth import is_admin_or_manager, get_product_access_flags, get
 def home_page():
     st.header("Welcome to Vehicle Records")
     home_layout()
-    image_backgroung()
+    image_backgroung(overlay_color="rgba(36, 27, 78, 0.72)")  # Deep Indigo tint
     st.text('Choose one')
     col1, col2, col3 = st.columns(3, gap='small')
     with col1:
-        if st.button("Vehicle Records", type='secondary', key='btn1', use_container_width=True,
+        if st.button("Vehicle Records", type='secondary', key='btn1', width='stretch',
                      icon=':material/article:', icon_position='right'):
             st.session_state['login_state'] = 'vehicle_record'
             st.rerun()
     with col2:
-        if st.button("Driver Records", type='secondary', key='btn2', use_container_width=True,
+        if st.button("Driver Records", type='secondary', key='btn2', width='stretch',
                      icon=':material/bus_railway:', icon_position='right'):
             st.session_state['login_state'] = 'driver_record'
             st.rerun()
     with col3:
-        if st.button("Expenses", type='secondary', key='btn3', use_container_width=True,
+        if st.button("Expenses", type='secondary', key='btn3', width='stretch',
                      icon=':material/payments:', icon_position='right'):
             st.session_state['login_state'] = 'expenses'
             st.rerun()
@@ -29,7 +29,7 @@ def home_page():
     with col2:
         # ✅ Admin/Manager — hamesha dikhega
         if is_admin_or_manager():
-            if st.button("👥 Access Manager", type='primary', key='btn_access_mgr', use_container_width=True):
+            if st.button("👥 Access Manager", type='primary', key='btn_access_mgr', width='stretch'):
                 st.session_state['login_state'] = 'access_manager'
                 st.rerun()
         # ✅ Admin/Manager — hamesha
@@ -40,12 +40,12 @@ def home_page():
             flags = get_product_access_flags()
             show_products = flags.get("products_access", False)
         if show_products:
-            if st.button("📦 Products Manager", type='primary', key='btn_products', use_container_width=True):
+            if st.button("📦 Products Manager", type='primary', key='btn_products', width='stretch'):
                 st.session_state['login_state'] = 'products'
                 st.rerun()
         # ✅ Maintenance Manager — Products Manager jaisa hi access pattern, alag button
         if get_maintenance_access():
-            if st.button("🔧 Maintenance Manager", type='primary', key='btn_maintenance', use_container_width=True):
+            if st.button("🔧 Maintenance Manager", type='primary', key='btn_maintenance', width='stretch'):
                 st.session_state['login_state'] = 'maintenance'
                 st.rerun()
                 
