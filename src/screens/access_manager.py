@@ -1,7 +1,7 @@
 import streamlit as st
 from src.database.config import supabase, supabase_admin
 from src.database.auth import get_current_role, is_admin_or_manager
-from src.ui.home_base_layout import home_layout
+from src.ui.home_base_layout import home_layout, page_bg
 
 
 # ══════════════════════════════════════════════
@@ -102,6 +102,7 @@ def _set_maintenance_access(user_id: str, value: bool):
 
 def access_manager_page():
     home_layout()
+    page_bg("#5C2018")  # Rust Red
     col1, col2 = st.columns(2)
     with col1:
         if st.button('Home page', type='secondary', width='stretch',
@@ -229,7 +230,7 @@ def access_manager_page():
 
                 st.markdown("<br>", unsafe_allow_html=True)
                 if st.button("💾 Save All", key=f"save_va_{u['user_id']}", 
-                            type="primary", use_container_width=True):
+                            type="primary", width='stretch'):
                     # Vehicle access save
                     for bus in to_grant:
                         if bus not in current_buses:
