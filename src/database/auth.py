@@ -119,6 +119,20 @@ def login_page():
             [data-testid="stForm"] button[kind="primary"]:hover {
                 filter: brightness(1.1);
             }
+            [data-testid="stHeader"],
+            [data-testid="stToolbar"],
+            [data-testid="stDecoration"],
+            #MainMenu {
+                display: none !important;
+                height: 0 !important;
+                visibility: hidden !important;
+            }
+            [data-testid="stAppViewContainer"] {
+                overflow: hidden !important;
+            }
+            html, body {
+                overflow: hidden !important;
+            }
         </style>
     """, unsafe_allow_html=True)
 
