@@ -24,28 +24,37 @@ def save_scheduled_km(bus_number: str, scheduled_km: int) -> None:
 
 
 def get_km_combines(bus_number: str):
-    """Bus ke liye saare combined (merged) date-pairs return karta hai."""
+    """Bus ke liye saare combined (merged) date-groups return karta hai.
+    Har group: {"id": <row id>, "dates": [<date strings>, ...]}"""
     res = supabase.table("vehicle_km_combines") \
-        .select("date1, date2") \
+        .select("id, dates") \
         .eq("bus_number", bus_number) \
         .execute()
-    return [(r["date1"], r["date2"]) for r in (res.data or [])]
+    import json
+    groups = []
+    for r in (res.data or []):
+        try:
+            dates = json.loads(r["dates"])
+        except (TypeError, ValueError):
+            dates = []
+        if dates:
+            groups.append({"id": r["id"], "dates": dates})
+    return groups
 
 
-def save_km_combine(bus_number: str, date1: str, date2: str) -> None:
-    supabase_admin.table("vehicle_km_combines").upsert({
+def save_km_combine(bus_number: str, dates: list) -> None:
+    import json
+    supabase_admin.table("vehicle_km_combines").insert({
         "bus_number": bus_number,
-        "date1":      date1,
-        "date2":      date2,
-    }, on_conflict="bus_number,date1,date2").execute()
+        "dates":      json.dumps(sorted(dates)),
+    }).execute()
 
 
-def delete_km_combine(bus_number: str, date1: str, date2: str) -> None:
+def delete_km_combine(bus_number: str, group_id) -> None:
     supabase_admin.table("vehicle_km_combines") \
         .delete() \
         .eq("bus_number", bus_number) \
-        .eq("date1", date1) \
-        .eq("date2", date2) \
+        .eq("id", group_id) \
         .execute()
 
 
