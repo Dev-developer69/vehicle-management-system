@@ -1,1040 +1,991 @@
 import calendar
 import streamlit as st
 import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
 from datetime import date
-from fpdf import FPDF
+from src.ui.home_base_layout import home_layout
+from src.database.auth import get_accessible_vehicles
+from src.database.config import supabase
+from src.database.db import get_diesel_rate_payment, get_km_combines
+from src.ui.excel_format import shift_period_back, _get_date_range
 
-from src.screens.products_manager import _extract_data_from_image
-from src.database.db import (
-    save_vehicle_records, save_driver_salary, save_vehicle_expenses,
-    get_vehicle_records, get_driver_salary, get_vehicle_expenses,
-    get_salary_check, get_scheduled_km, get_diesel_summary,
-    get_km_combines, save_km_combine, delete_km_combine,
-    update_vehicle_expense, delete_vehicle_expense,
-    update_driver_salary, delete_driver_salary,delete_vehicle_record,
-    get_diesel_rate_payment, save_diesel_rate_payment,
-    get_diesel_row_rates, save_diesel_row_rate,
-    get_suppliers, save_supplier, delete_supplier, get_supplier_products,
-    get_products, save_product, delete_product,
-    get_requirements, save_requirement, fulfill_requirement, delete_requirement,
+VEHICLE_MAP = {
+    "7389": "page_7389",
+    "2350": "page_2350",
+    "0303": "page_0303",
+    "3131": "page_3131",
+    "AT7389": "page_AT7389",
+}
 
+MIN_NORMAL_MILEAGE = 4.0
+DIESEL_PRICE_PER_L = 95.69
+
+COLORS = ["#14A085", "#7B8CFF", "#FFB347", "#FF5252", "#00D4FF", "#FF69B4"]
+
+
+SYSTEM_PROMPT = (
+    "You are a strict fleet operations analyst for an Indian diesel bus transport company. "
+    "STEP 1 DATA VALIDATION always do this first: "
+    "Scan all records for logical inconsistencies and flag them inline, do NOT exclude them from analysis. "
+    "Flag these patterns with a warning note next to the bus name: "
+    "Income > 0 and Diesel = 0 means add note Diesel entry missing verify fuel records. "
+    "Actual KM > 0 and Diesel = 0 means add note diesel bus cannot run without fuel data error. "
+    "Income = 0 but Actual KM > 0 means add note Revenue data may be missing. "
+    "Diesel > 0 but Actual KM = 0 means add note Fuel recorded but vehicle did not operate. "
+    "Net > Income means add note Calculation error verify. "
+    "Show these as a Data Quality section first, then include ALL buses in performance analysis with warning tags. "
+    "STEP 2 PERFORMANCE ANALYSIS include all buses tag inconsistent ones: "
+    "Analyze all records. For buses with data issues, include them but add a warning tag like "
+    "verify diesel data or revenue missing next to their name in brackets. "
+    "ABSOLUTE RULES: "
+    "1. Use ONLY the exact numbers from the data never round estimate or invent. "
+    "2. Copy rupee and KM values exactly as given. "
+    "3. Plain text only no markdown no bold no asterisks. "
+    "4. Follow the exact output format in the prompt. "
+    "5. Max 2 bullets per section each under 20 words. "
+    "6. A diesel bus CANNOT run without diesel always flag Diesel=0 with KM>0 or Income>0 as data error."
 )
 
-# ──────────────────────────────────────────────
-# HELPER: Diesel vs CNG label (AT7389 is CNG)
-# ──────────────────────────────────────────────
-def fuel_label(bus_number: str) -> str:
-    return "CNG" if bus_number == "AT7389" else "Diesel"
 
-
-def _render_km_merged_table(display_df: pd.DataFrame, groups: list):
-    """Renders display_df as an HTML table where Scheduled KM / Actual KM cells
-    for each group of 2+ dates are visually merged (rowspan) into a single
-    combined value, Excel-style — every other column stays per-row/unchanged.
-    Multiple non-overlapping groups (of any size) supported at once.
-    Original row order (jaisa display_df me hai, e.g. descending date) ko
-    zyada se zyada preserve karta hai — group ke members already adjacent
-    hote hain to kuch nahi hilta, warna sirf unhi rows ko ek saath la kar
-    minimum movement karta hai."""
-    rows = display_df.to_dict("records")
-
-    rowspan_at = {}   # idx -> merge info, is row se rowspan shuru hoga
-    skip_at    = set()  # baaki group-member rows ke indices (KM cells yaha skip honge)
-
-    for group in groups:
-        dates = group["dates"] if isinstance(group, dict) else group
-        idxs = [i for i, r in enumerate(rows) if r["Date"] in dates]
-        if len(idxs) != len(dates) or len(idxs) < 2:
-            continue
-        idxs.sort()
-        insert_at = idxs[0]
-
-        # Group ke saare members ko ek contiguous block me la do (unka aapas
-        # ka relative order preserve karte hue), taaki rowspan lag sake.
-        extracted = [rows[i] for i in idxs]
-        for i in sorted(idxs, reverse=True):
-            rows.pop(i)
-        rows[insert_at:insert_at] = extracted
-
-        sch_vals = [pd.to_numeric(r["Scheduled KM"], errors="coerce") for r in extracted]
-        act_vals = [pd.to_numeric(r["Actual KM"], errors="coerce") for r in extracted]
-        date_vals = [r["Date"] for r in extracted]
-
-        rowspan_at[insert_at] = {
-            "sch_sum": sum(sch_vals), "act_sum": sum(act_vals),
-            "dates": date_vals, "sch_vals": sch_vals, "act_vals": act_vals,
-            "span": len(extracted),
-        }
-        for i in range(insert_at + 1, insert_at + len(extracted)):
-            skip_at.add(i)
-
-    cols = list(display_df.columns)
-    html = ["<div style='overflow-x:auto;border-radius:8px;border:1px solid #2D2D5E;'>"
-            "<table style='width:100%;border-collapse:collapse;color:#eee;font-size:0.88rem;'>"]
-    html.append("<thead><tr>")
-    for c in cols:
-        html.append(f"<th style='border:1px solid #2D2D5E;padding:8px;background:#1E1E3A;text-align:left;white-space:nowrap;'>{c}</th>")
-    html.append("</tr></thead><tbody>")
-
-    for i, r in enumerate(rows):
-        row_bg = "#161629" if i % 2 == 0 else "#1E1E3A"
-        html.append("<tr>")
-        for c in cols:
-            if c in ("Scheduled KM", "Actual KM") and i in rowspan_at:
-                info = rowspan_at[i]
-                val = info["sch_sum"] if c == "Scheduled KM" else info["act_sum"]
-                lines = [
-                    f"{d} — Sch {s:.0f} / Actual {a:.0f}"
-                    for d, s, a in zip(info["dates"], info["sch_vals"], info["act_vals"])
-                ]
-                lines.append(f"Total — Sch {info['sch_sum']:.0f} / Actual {info['act_sum']:.0f}")
-                tooltip = "\n".join(lines)
-                html.append(
-                    f"<td rowspan='{info['span']}' title=\"{tooltip}\" style='border:1px solid #2D2D5E;padding:8px;text-align:center;"
-                    f"vertical-align:middle;background:{row_bg};color:#eee;cursor:help;'>{val:,.0f}</td>"
-                )
-            elif c in ("Scheduled KM", "Actual KM") and i in skip_at:
-                continue  # rowspan se cover ho gaya
-            else:
-                cell_val = r.get(c, "")
-                cell_val = "" if pd.isna(cell_val) else cell_val
-                html.append(f"<td style='border:1px solid #2D2D5E;padding:8px;white-space:nowrap;background:{row_bg};color:#eee;'>{cell_val}</td>")
-        html.append("</tr>")
-
-    html.append("</tbody></table></div>")
-    st.markdown("".join(html), unsafe_allow_html=True)
-    groups_text = ", ".join(" + ".join(g["dates"] if isinstance(g, dict) else g) for g in groups)
-    st.caption(f"🔗 Combined: {groups_text}")
-
-
-# ──────────────────────────────────────────────
-# HELPER: Editor widget state → DataFrame
-# ──────────────────────────────────────────────
-def _apply_editor_state(original_df: pd.DataFrame, editor_state: dict) -> pd.DataFrame:
-    if not editor_state:
-        return original_df.copy()
-    df = original_df.copy()
-    for row_idx, changes in editor_state.get("edited_rows", {}).items():
-        for col, val in changes.items():
-            if row_idx < len(df):
-                df.at[row_idx, col] = val
-    added = editor_state.get("added_rows", [])
-    if added:
-        new_rows = pd.DataFrame(added)
-        for col in df.columns:
-            if col not in new_rows.columns:
-                new_rows[col] = None
-        df = pd.concat([df, new_rows[df.columns]], ignore_index=True)
-    deleted = sorted(editor_state.get("deleted_rows", []), reverse=True)
-    for row_idx in deleted:
-        if row_idx < len(df):
-            df = df.drop(index=row_idx).reset_index(drop=True)
-    return df
-
-
-# ──────────────────────────────────────────────
-# HELPER: Total row builder
-# ──────────────────────────────────────────────
-def build_total_row(df: pd.DataFrame, numeric_cols: list, label_col: str = "Driver Name"):
-    total = {}
-    for col in df.columns:
-        if col == label_col:
-            total[col] = "TOTAL"
-        elif col == "Avg":
-            valid = pd.to_numeric(df["Avg"], errors="coerce").dropna()
-            total[col] = round(float(valid.mean()), 2) if not valid.empty else 0.0
-        elif col in numeric_cols:
-            total[col] = round(float(pd.to_numeric(df[col], errors="coerce").sum()), 3)
-        else:
-            total[col] = ""
-    return pd.DataFrame({k: [v] for k, v in total.items()})
-
-
-# ──────────────────────────────────────────────
-# HELPER: Date range filter
-# ──────────────────────────────────────────────
-def _get_date_range(year, month, period):
-    if period == "1-15":
-        return pd.Timestamp(year, month, 1), pd.Timestamp(year, month, 15)
-    elif period == "16-31":
-        last_day = calendar.monthrange(year, month)[1]
-        return pd.Timestamp(year, month, 16), pd.Timestamp(year, month, last_day)
-    else:
-        last_day = calendar.monthrange(year, month)[1]
-        return pd.Timestamp(year, month, 1), pd.Timestamp(year, month, last_day)
-
-
-# ──────────────────────────────────────────────
-# HELPER: Previous period shift (for Next flag)
-# ──────────────────────────────────────────────
-def shift_period_back(year, month, period):
-    if period == "16-31":
-        return pd.Timestamp(year, month, 1), pd.Timestamp(year, month, 15)
-    else:
-        prev_month = month - 1 if month > 1 else 12
-        prev_year  = year if month > 1 else year - 1
-        last_day   = calendar.monthrange(prev_year, prev_month)[1]
-        return pd.Timestamp(prev_year, prev_month, 16), pd.Timestamp(prev_year, prev_month, last_day)
-
-
-# ──────────────────────────────────────────────
-# HELPER: Generate PDF — Vehicle Records
-# ──────────────────────────────────────────────
-def _safe_pdf_text(val) -> str:
-    """FPDF core fonts (Helvetica) sirf Latin-1 support karte hain — unsupported chars replace karo"""
-    text = str(val)
-    return text.encode("latin-1", errors="replace").decode("latin-1")
-
-
-def _generate_pdf(df, total_row, bus_number, month, half):
-    pdf = FPDF(orientation="L", unit="mm", format="A4")
-    pdf.add_page()
-    pdf.set_auto_page_break(auto=True, margin=10)
-    pdf.set_font("Helvetica", "B", 14)
-    month_name = date(2000, month, 1).strftime("%B")
-    pdf.cell(0, 10, _safe_pdf_text(f"Vehicle Records - {bus_number}  |  {month_name} ({half})"), ln=True, align="C")
-    pdf.ln(3)
-    cols   = list(df.columns)
-    page_w = pdf.w - 2 * pdf.l_margin
-    col_w  = page_w / len(cols)
-    pdf.set_fill_color(52, 73, 94); pdf.set_text_color(255, 255, 255)
-    pdf.set_font("Helvetica", "B", 8)
-    for col in cols:
-        pdf.cell(col_w, 8, _safe_pdf_text(col), border=1, align="C", fill=True)
-    pdf.ln()
-    pdf.set_text_color(0, 0, 0); pdf.set_font("Helvetica", "", 8)
-    for i, row in df.iterrows():
-        fill = i % 2 == 0
-        pdf.set_fill_color(245, 245, 245) if fill else pdf.set_fill_color(255, 255, 255)
-        for col in cols:
-            pdf.cell(col_w, 7, _safe_pdf_text(row[col]) if pd.notna(row[col]) else "", border=1, align="C", fill=fill)
-        pdf.ln()
-    pdf.set_fill_color(230, 240, 255); pdf.set_font("Helvetica", "B", 8)
-    for col in cols:
-        pdf.cell(col_w, 8, _safe_pdf_text(total_row.iloc[0][col]), border=1, align="C", fill=True)
-    pdf.ln()
-    return bytes(pdf.output())
-
-
-def _generate_expenses_pdf(df, bus_number, month, period):
-    pdf = FPDF(orientation="L", unit="mm", format="A4")
-    pdf.add_page()
-    pdf.set_auto_page_break(auto=True, margin=10)
-    pdf.set_font("Helvetica", "B", 14)
-    month_name = date(2000, month, 1).strftime("%B")
-    pdf.cell(0, 10, _safe_pdf_text(f"Vehicle Expenses - {bus_number}  |  {month_name} ({period})"), ln=True, align="C")
-    pdf.ln(3)
-    cols   = list(df.columns)
-    page_w = pdf.w - 2 * pdf.l_margin
-    col_w  = page_w / len(cols)
-    pdf.set_fill_color(52, 73, 94); pdf.set_text_color(255, 255, 255)
-    pdf.set_font("Helvetica", "B", 9)
-    for col in cols:
-        pdf.cell(col_w, 8, _safe_pdf_text(col), border=1, align="C", fill=True)
-    pdf.ln()
-    pdf.set_text_color(0, 0, 0); pdf.set_font("Helvetica", "", 9)
-    for i, row in df.iterrows():
-        fill = i % 2 == 0
-        pdf.set_fill_color(245, 245, 245) if fill else pdf.set_fill_color(255, 255, 255)
-        for col in cols:
-            pdf.cell(col_w, 7, _safe_pdf_text(row[col]) if pd.notna(row[col]) else "", border=1, align="C", fill=fill)
-        pdf.ln()
-    total_amount = pd.to_numeric(df["Amount"], errors="coerce").sum()
-    pdf.set_fill_color(230, 240, 255); pdf.set_font("Helvetica", "B", 9)
-    for col in cols:
-        val = "TOTAL" if col == "Category" else (f"{total_amount:,.0f}" if col == "Amount" else "")
-        pdf.cell(col_w, 8, _safe_pdf_text(val), border=1, align="C", fill=True)
-    pdf.ln()
-    return bytes(pdf.output())
-
-
-# ──────────────────────────────────────────────
-# 1. VEHICLE RECORDS
-# ──────────────────────────────────────────────
-def editable_grid(bus_number: str):
-    numeric_cols = ["Scheduled KM", "Actual KM", "Diesel", "Diesel KM", "Avg", "Income", "Gross Income"]
-    key          = f"grid_{bus_number}"
-    ed_key       = f"editor_{bus_number}"
-    fetch_key    = f"fetched_{bus_number}"
-    confirm_key  = f"show_confirm_{bus_number}"
-    pending_key  = f"pending_df_{bus_number}"
-    sched_km_key = f"sched_km_{bus_number}"
-
-    if sched_km_key not in st.session_state:
-        st.session_state[sched_km_key] = get_scheduled_km(bus_number)
-    scheduled_km = st.session_state[sched_km_key]
-
-    st.markdown(f"### Vehicle Records {bus_number} 🚐")
-
-    if key not in st.session_state:
-        st.session_state[key] = pd.DataFrame({
-            "Date":           [date.today()],
-            "Status":         ["Present"],
-            "Driver Name":    ['None'],
-            "Conductor Name": [None],
-            "Scheduled KM":   [scheduled_km],
-            "Actual KM":      [0],
-            "Diesel":         [None],
-            "Diesel KM":      [None],
-            "Income":         [None],
-            "Gross Income":   [None],
-            "Remark":         [""],
-            "Next":           [False],
-        })
-
-
-    # ── Extract Records from Image ──
-    FIELD_DEFS = {
-        "Diesel":         ("diesel",         "'Diesel', 'DSL', 'Fuel' (litres)"),
-        "Income":         ("income",         "'Income', 'INCOME', 'Base Fare' (NOT per-km, NOT load factor)"),
-        "Gross Income":   ("gross_income",   "'Gross', 'GROSS', 'Total Income'"),
-        "Remark":         ("remark",         "'Remark', 'REMARK' column — copy the exact text as-is (e.g. 'ON ROUTE', 'LEAVE APPROVED', 'ABSENT', 'NEXT PERIOD'). If empty set null."),
-        "Driver Name":    ("driver_name",    "'Driver', 'Driver Name', 'DRIVER' column — copy exact name as-is"),
-        "Conductor Name": ("conductor_name", "'Conductor', 'Conductor Name', 'COND' column — copy exact name as-is"),
-        "Scheduled KM":   ("scheduled_km",   "'Scheduled KM', 'SCH KM', 'Sch.KM' column (numeric)"),
-        "Actual KM":      ("actual_km",      "'Actual KM', 'ACT KM', 'Actual' column (numeric)"),
-    }
-
-    with st.expander("📷 Extract Records from Image (optional)"):
-        st.caption("Agar sheet chaudi hai aur do photos mein aayi hai, dono upload karo.")
-
-        st.markdown("**Kya extract karna hai?**")
-        selected_fields = st.pills(
-            "Fields",
-            options=list(FIELD_DEFS.keys()),
-            selection_mode="multi",
-            default=["Diesel", "Income", "Gross Income", "Remark"],
-            key=f"extract_fields_{bus_number}",
-            label_visibility="collapsed",
-        )
-        if not selected_fields:
-            st.caption("⚠️ Kam se kam ek field select karo.")
-
-        ai_choice = st.radio(
-            "🤖 AI Model",
-            ["🤖 Claude (Accurate — 2 images ek saath)", "⚡ Groq (Fast — 1 image at a time)"],
-            index=1,
-            horizontal=True,
-            key=f"ai_choice_{bus_number}"
-        )
-
-        img_file_1 = st.file_uploader("Image 1 (Date wali, ya poori image)",
-                                       type=["jpg","jpeg","png","webp"],
-                                       key=f"inc_img1_{bus_number}")
-        img_file_2 = st.file_uploader("Image 2 (optional — baaki columns wali)",
-                                       type=["jpg","jpeg","png","webp"],
-                                       key=f"inc_img2_{bus_number}")
-
-        if img_file_1 and selected_fields and st.button("🔍 Extract", key=f"inc_extract_{bus_number}"):
-            with st.spinner("Extracting..."):
-                from src.screens.products_manager import (
-                    _extract_data_from_images, _compress_image
-                )
-
-                field_bullets = "\n".join(
-                    f"- {FIELD_DEFS[f][0]}: {FIELD_DEFS[f][1]}" for f in selected_fields
-                )
-                json_keys = ", ".join(["date"] + [FIELD_DEFS[f][0] for f in selected_fields])
-
-                always_ignore = {"IPKM", "LF", "OTH.INC", "load factor", "per-km rates"}
-                km_labels = {"Scheduled KM", "Actual KM"}
-                ignore_extra = km_labels - set(selected_fields)
-                ignore_list = ", ".join(sorted(ignore_extra | always_ignore))
-
-                prompt = (
-                    "This is a vehicle log table with varying column names across different sheets. "
-                    + ("Two images are provided — they show the SAME rows in the SAME order, "
-                       "just different columns of a wide table split across two photos. "
-                       "Merge them row-by-row by position. "
-                       if img_file_2 else "")
-                    + "Extract every row (skip the TOTAL/summary row). "
-                    "For each row extract these fields if matching column exists:\n"
-                    "- date: Convert to YYYY-MM-DD.\n"
-                    f"{field_bullets}\n\n"
-                    f"IGNORE: {ignore_list}. "
-                    "If field not present set null. "
-                    f"Return ONLY JSON array with keys: {json_keys}. "
-                    "No explanation, no markdown."
-                )
-
-                if "Claude" in ai_choice:
-                    import anthropic, base64, json, re
-                    client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
-
-                    img1_bytes = _compress_image(img_file_1.read())
-                    b64_1      = base64.standard_b64encode(img1_bytes).decode("utf-8")
-
-                    content = [
-                        {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64_1}},
-                    ]
-                    if img_file_2:
-                        img2_bytes = _compress_image(img_file_2.read())
-                        b64_2      = base64.standard_b64encode(img2_bytes).decode("utf-8")
-                        content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64_2}})
-
-                    content.append({"type": "text", "text": prompt})
-
-                    try:
-                        msg = client.messages.create(
-                            model="claude-sonnet-4-6",
-                            max_tokens=4000,
-                            messages=[{"role": "user", "content": content}],
-                        )
-                        raw   = re.sub(r"```json|```", "", msg.content[0].text.strip()).strip()
-                        match = re.search(r"\[.*\]", raw, re.DOTALL)
-                        if match:
-                            raw = match.group(0)
-                        result = json.loads(raw)
-                        if not isinstance(result, list):
-                            result = []
-                    except Exception as e:
-                        st.error(f"❌ Claude extract failed: {e}")
-                        result = []
-
-                else:
-                    images = [(img_file_1.read(), img_file_1.type)]
-                    if img_file_2:
-                        images.append((img_file_2.read(), img_file_2.type))
-                    result = _extract_data_from_images(images, prompt)
-
-            if result:
-                rows = []
-                for r in result:
-                    remark_text = str(r.get("remark") or "").strip().upper() if "Remark" in selected_fields else ""
-
-                    is_absent_or_leave = ("ABSENT" in remark_text) or ("LEAVE APPROVED" in remark_text) or ("LEAVE" in remark_text and "APPROV" in remark_text)
-                    status = "On Leave" if is_absent_or_leave else "Present"
-                    is_next = "NEXT" in remark_text and "PERIOD" in remark_text
-
-                    rows.append({
-                        "Date":           pd.to_datetime(r.get("date"), errors="coerce"),
-                        "Status":         status,
-                        "Driver Name":    (r.get("driver_name") or "None") if "Driver Name" in selected_fields else "None",
-                        "Conductor Name": (r.get("conductor_name") or "None") if "Conductor Name" in selected_fields else "None",
-                        "Scheduled KM":   (0 if is_absent_or_leave else (r.get("scheduled_km") if "Scheduled KM" in selected_fields else None)),
-                        "Actual KM":      (0 if is_absent_or_leave else (r.get("actual_km") if "Actual KM" in selected_fields else None)),
-                        "Diesel":         r.get("diesel") if "Diesel" in selected_fields else None,
-                        "Diesel KM":      None,
-                        "Income":         r.get("income") if "Income" in selected_fields else None,
-                        "Gross Income":   (r.get("gross_income") or 0) if "Gross Income" in selected_fields else None,
-                        "Remark":         "",
-                        "Next":           is_next,
-                    })
-                new_df = pd.DataFrame(rows)
-                new_df = new_df.dropna(subset=["Date"])
-                new_df["Date"] = new_df["Date"].dt.date
-                st.session_state[key] = new_df
-                st.success(f"✅ {len(new_df)} rows extracted — baaki fields bhar ke Save karo")
-                st.rerun()
-            else:
-                st.warning("⚠️ Extraction failed, fill manually.")
-    st.data_editor(
-        st.session_state[key],
-        num_rows="dynamic",
-        width='stretch',
-        hide_index=True,
-        key=ed_key,
-        column_config={
-            "Date":           st.column_config.DateColumn("Date", default=date.today()),
-            "Status":         st.column_config.SelectboxColumn("Status", options=["Present", "On Leave"], default="Present"),
-            "Driver Name":    st.column_config.TextColumn("Driver Name"),
-            "Conductor Name": st.column_config.TextColumn("Conductor Name"),
-            "Scheduled KM":   st.column_config.NumberColumn("Scheduled KM", min_value=0, default=scheduled_km),
-            "Actual KM":      st.column_config.NumberColumn("Actual KM", min_value=0, default=0),
-            "Diesel":         st.column_config.NumberColumn(fuel_label(bus_number), min_value=0.0, step=0.01, format="%.2f"),
-            "Diesel KM":      st.column_config.NumberColumn(f"{fuel_label(bus_number)} KM", min_value=0),
-            "Income":         st.column_config.NumberColumn("Income", min_value=0),
-            "Gross Income":   st.column_config.NumberColumn("Gross Income", min_value=0),
-            "Remark":         st.column_config.TextColumn("Remark"),
-            "Next":           st.column_config.CheckboxColumn("Next", default=False),
-        },
+def _call_groq(prompt: str) -> str:
+    from groq import Groq
+    client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+    chat = client.chat.completions.create(
+        model="llama-3.1-8b-instant",
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user",   "content": prompt},
+        ],
+        max_tokens=300,
+        temperature=0.1,  # low temp = less hallucination
     )
-
-    editor_state  = st.session_state.get(ed_key, {})
-    edited_df     = _apply_editor_state(st.session_state[key], editor_state)
-    on_leave_mask = edited_df["Status"] == "On Leave"
-    edited_df.loc[on_leave_mask, ["Scheduled KM", "Actual KM", "Income"]] = 0
-
-    if st.session_state.get(confirm_key):
-        st.warning("⚠️ Duplicate dates exist. Wanna update?")
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("✅ Yes, Update", key=f"yes_{bus_number}"):
-                save_vehicle_records(bus_number, st.session_state.get(pending_key))
-                st.success("✅ Updated!")
-                for k in [key, fetch_key, confirm_key, pending_key]:
-                    st.session_state.pop(k, None)
-                st.rerun()
-        with col2:
-            if st.button("❌ Cancel", key=f"no_{bus_number}"):
-                st.session_state.pop(confirm_key, None)
-                st.session_state.pop(pending_key, None)
-                st.rerun()
-    else:
-        if st.button("💾 Save Changes", key=f"save_{bus_number}", width='stretch'):
-            cleaned_df = edited_df[
-                edited_df["Driver Name"].notna() &
-                (edited_df["Driver Name"].astype(str).str.strip() != "")
-            ].copy()
-            if cleaned_df.empty:
-                st.warning("⚠️ No valid rows to save.")
-                return
-            if fetch_key not in st.session_state:
-                st.session_state[fetch_key] = get_vehicle_records(bus_number)
-            fetched_df     = st.session_state[fetch_key]
-            new_dates      = set(cleaned_df["Date"].astype(str).tolist())
-            existing_dates = set(fetched_df["Date"].astype(str).tolist()) if not fetched_df.empty else set()
-            if new_dates & existing_dates:
-                st.session_state[pending_key] = cleaned_df
-                st.session_state[confirm_key] = True
-                st.rerun()
-            else:
-                save_vehicle_records(bus_number, cleaned_df)
-                st.success("✅ Saved!")
-                st.session_state.pop(key, None)
-                st.session_state.pop(fetch_key, None)
-                st.rerun()
-
-    st.markdown("### Saved Records 📋")
-
-    # ── Delete row by date ──
-    with st.expander("🗑️ Delete a record by date"):
-        del_date = st.date_input("Select date to delete", value=date.today(), key=f"del_date_{bus_number}")
-        if st.button("Delete this record", key=f"del_btn_{bus_number}"):
-            delete_vehicle_record(bus_number, str(del_date))
-            st.success(f"✅ Deleted record for {del_date}")
-            st.session_state.pop(fetch_key, None)
-            st.rerun()
-
-    if fetch_key not in st.session_state:
-        st.session_state[fetch_key] = get_vehicle_records(bus_number)
-    fetched_df = st.session_state[fetch_key]
-
-    col1, col2, col3 = st.columns([2, 2, 1])
-    with col1:
-        month = st.selectbox("Month", options=list(range(1, 13)), index=date.today().month - 1,
-                             format_func=lambda x: date(2000, x, 1).strftime("%B"), key=f"month_{bus_number}")
-    with col2:
-        default_half = "1-15" if date.today().day <= 15 else "16-31"
-        half = st.radio("Period", ["1-15", "16-31"], index=0 if default_half == "1-15" else 1,
-                        horizontal=True, key=f"half_{bus_number}")
-    with col3:
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("🔄 Load", key=f"refresh_{bus_number}", width='stretch'):
-            st.session_state.pop(fetch_key, None)
-            st.rerun()
-
-    if not fetched_df.empty:
-        display_df = fetched_df.copy()
-        display_df["Date"] = pd.to_datetime(display_df["Date"])
-        if "Next" not in display_df.columns:
-            display_df["Next"] = False
-        start, end           = _get_date_range(date.today().year, month, half)
-        normal_mask          = (display_df["Date"] >= start) & (display_df["Date"] <= end) & (display_df["Next"] == False)
-        prev_start, prev_end = shift_period_back(date.today().year, month, half)
-        shifted_mask         = (display_df["Date"] >= prev_start) & (display_df["Date"] <= prev_end) & (display_df["Next"] == True)
-        display_df           = display_df[normal_mask | shifted_mask]
-        display_df["Date"]   = display_df["Date"].dt.strftime("%Y-%m-%d")
-        if "Diesel KM" not in display_df.columns:
-            display_df["Diesel KM"] = 0
-        display_df["Avg"] = (
-            pd.to_numeric(display_df["Diesel KM"], errors="coerce") /
-            pd.to_numeric(display_df["Diesel"], errors="coerce").replace(0, float("nan"))
-        ).round(2)
-        for col, default in [("Income", 0), ("Gross Income", 0), ("Remark", "")]:
-            if col not in display_df.columns:
-                display_df[col] = default
-        display_df = display_df[["Date", "Status", "Driver Name", "Conductor Name",
-                                  "Scheduled KM", "Actual KM", "Diesel", "Diesel KM",
-                                  "Avg", "Income", "Gross Income", "Remark", "Next"]]
-        # ── Kayi din ke KM combine karo (Excel jaisa merge cell) — same period me kayi groups ho sakte hain ──
-        date_options = display_df["Date"].tolist()
-        combine_key = f"km_combines_{bus_number}"
-        if combine_key not in st.session_state:
-            st.session_state[combine_key] = get_km_combines(bus_number)
-        # sirf wahi groups rakho jinki saari dates is loaded period me maujood hain
-        active_groups = [
-            g for g in st.session_state[combine_key]
-            if all(d in date_options for d in g["dates"])
-        ]
-
-        if active_groups:
-            _render_km_merged_table(display_df, active_groups)
-        else:
-            st.dataframe(display_df, width='stretch', hide_index=True)
-
-        used_dates = {d for g in active_groups for d in g["dates"]}
-        available_dates = [d for d in date_options if d not in used_dates]
-
-        if active_groups or len(available_dates) >= 2:
-            with st.expander("🔗 Kayi Din Ka KM Combine Karo"):
-                if len(available_dates) >= 2:
-                    selected_dates = st.multiselect(
-                        "Combine karne ke liye dates chuno (2 ya usse zyada)",
-                        options=available_dates, key=f"combine_multi_{bus_number}",
-                    )
-                    if st.button("Combine Karo", key=f"combine_btn_{bus_number}",
-                                 disabled=len(selected_dates) < 2):
-                        save_km_combine(bus_number, selected_dates)
-                        st.session_state[combine_key] = get_km_combines(bus_number)
-                        st.rerun()
-                    if 0 < len(selected_dates) < 2:
-                        st.caption("⚠️ Kam se kam 2 dates chuno.")
-
-                if active_groups:
-                    st.caption("Combined groups: (hover karo details ke liye)")
-                    for g in active_groups:
-                        dates = g["dates"]
-                        rows_g = [display_df[display_df["Date"] == d] for d in dates]
-                        sch_vals = [pd.to_numeric(r["Scheduled KM"].iloc[0], errors="coerce") if not r.empty else 0 for r in rows_g]
-                        act_vals = [pd.to_numeric(r["Actual KM"].iloc[0], errors="coerce") if not r.empty else 0 for r in rows_g]
-                        sch_sum = sum(sch_vals)
-                        act_sum = sum(act_vals)
-                        lines = [f"{d} — Sch {s:.0f} / Actual {a:.0f}" for d, s, a in zip(dates, sch_vals, act_vals)]
-                        lines.append(f"Total — Sch {sch_sum:.0f} / Actual {act_sum:.0f}")
-                        tooltip = "\n".join(lines)
-                        rc1, rc2 = st.columns([4, 1])
-                        with rc1:
-                            st.markdown(
-                                f"<span title=\"{tooltip}\" style='cursor:help;'>🔗 {' + '.join(dates)}</span>",
-                                unsafe_allow_html=True,
-                            )
-                        with rc2:
-                            if st.button("❌ Hatao", key=f"uncombine_btn_{bus_number}_{g['id']}"):
-                                delete_km_combine(bus_number, g["id"])
-                                st.session_state[combine_key] = get_km_combines(bus_number)
-                                st.rerun()
-
-        total_row = build_total_row(display_df, numeric_cols, label_col="Driver Name")
-        st.dataframe(total_row, width='stretch', hide_index=True)
-
-        pdf_bytes = _generate_pdf(display_df, total_row, bus_number, month, half)
-        st.download_button("📥 Download PDF", data=pdf_bytes,
-                           file_name=f"vehicle_records_{bus_number}_{date(2000,month,1).strftime('%B')}_{half.replace('-','_')}.pdf",
-                           mime="application/pdf", key=f"pdf_{bus_number}")
-    else:
-        st.info("No records found.")
+    return chat.choices[0].message.content.strip()
 
 
-# ──────────────────────────────────────────────
-# 2. DRIVER SALARY
-# ──────────────────────────────────────────────
-def driver_salary(bus_number: str = ""):
-    key       = f"driver_salary_{bus_number}"
-    ed_key    = f"editor_salary_{bus_number}"
-    fetch_key = f"fetched_salary_{bus_number}"
-
-    if key not in st.session_state:
-        st.session_state[key] = pd.DataFrame({
-            "Date":        [date.today()],
-            "Driver Name": [None],
-            "Salary":      [0],
-            "Transaction": [""],
-        })
-
-    st.markdown("### Driver Salary 💰")
-    st.data_editor(
-    st.session_state[key],
-    num_rows="dynamic",
-    width='stretch',
-    hide_index=True,
-    key=ed_key,
-    column_config={
-        "Date":        st.column_config.DateColumn("Date", default=date.today()),
-        "Driver Name": st.column_config.TextColumn("Driver Name"),
-        "Salary":      st.column_config.NumberColumn("Salary", min_value=0, default=0),
-        "Transaction": st.column_config.SelectboxColumn("Transaction", options=["cash", "online"], default="cash"),
-    },
-)
-
-    editor_state = st.session_state.get(ed_key, {})
-    edited_df    = _apply_editor_state(st.session_state[key], editor_state)
-
-    if st.button("💾 Save Changes", key=f"save_salary_{bus_number}"):
-        cleaned_df = edited_df[
-            edited_df["Driver Name"].notna() &
-            (edited_df["Driver Name"].astype(str).str.strip() != "")
-        ].copy()
-        if cleaned_df.empty:
-            st.warning("⚠️ No valid rows to save.")
-            return
-        save_driver_salary(cleaned_df, bus_number=bus_number)
-        st.success("✅ Saved!")
-        st.session_state.pop(key, None)
-        st.session_state.pop(ed_key, None)  
-        st.session_state.pop(fetch_key, None)
-        st.rerun()
-        
-    st.markdown("### Saved Salary Records 📋")
-    col1, col2, col3 = st.columns([2, 2, 1])
-    with col1:
-        sal_month = st.selectbox("Month", options=list(range(1, 13)), index=date.today().month - 1,
-                                 format_func=lambda x: date(2000, x, 1).strftime("%B"),
-                                 key=f"sal_month_{bus_number}")
-    with col2:
-        default_half = "1-15" if date.today().day <= 15 else "16-31"
-        sal_half = st.radio("Period", ["1-15", "16-31"], index=0 if default_half == "1-15" else 1,
-                            horizontal=True, key=f"sal_half_{bus_number}")
-    with col3:
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("🔄 Load", key=f"ref_sal_{bus_number}", width='stretch'):
-            st.session_state.pop(fetch_key, None)
-            st.rerun()
-
-    if fetch_key not in st.session_state:
-        st.session_state[fetch_key] = get_driver_salary(bus_number=bus_number)
-    fetched_df = st.session_state[fetch_key]
-
-    if not fetched_df.empty:
-        disp = fetched_df.copy()
-        disp["Date"] = pd.to_datetime(disp["Date"])
-        start, end   = _get_date_range(date.today().year, sal_month, sal_half)
-        disp         = disp[(disp["Date"] >= start) & (disp["Date"] <= end)].copy()
-        disp["Date"] = disp["Date"].dt.strftime("%Y-%m-%d")
-
-        st.data_editor(
-            disp, width='stretch', hide_index=True, num_rows="dynamic",
-            key=f"edit_sal_{bus_number}",
-            column_config={
-                "id":          None,
-                "Date":        st.column_config.TextColumn("Date"),
-                "Driver Name": st.column_config.TextColumn("Driver Name"),
-                "Salary":      st.column_config.NumberColumn("Salary", min_value=0),
-                "Transaction": st.column_config.TextColumn("Transaction"),
-                "Updated By":  None,
-            }
-        )
-
-        if st.button("💾 Update Salary", key=f"update_sal_{bus_number}"):
-            sal_state = st.session_state.get(f"edit_sal_{bus_number}", {})
-            for row_idx, changes in sal_state.get("edited_rows", {}).items():
-                update_driver_salary(disp.iloc[row_idx]["id"], changes)
-            for row_idx in sorted(sal_state.get("deleted_rows", []), reverse=True):
-                delete_driver_salary(disp.iloc[row_idx]["id"])
-            st.success("✅ Updated!")
-            st.session_state.pop(fetch_key, None)
-            st.rerun()
-
-        total_row = build_total_row(disp, ["Salary"], label_col="Driver Name")
-        st.dataframe(total_row, width='stretch', hide_index=True)
-    else:
-        st.info("No records found.")
-
-
-# ──────────────────────────────────────────────
-# 3. VEHICLE EXPENSES
-# ──────────────────────────────────────────────
-def expenses(bus_number: str = ""):
-    key       = f"expenses_{bus_number}"
-    ed_key    = f"editor_expenses_{bus_number}"
-    fetch_key = f"fetched_expenses_{bus_number}"
-
-    if key not in st.session_state:
-        st.session_state[key] = pd.DataFrame({
-            "Date":        [date.today()],
-            "Category":    [""],
-            "Amount":      [0],
-            "Description": [""],
-        })
-
-    st.markdown("### Vehicle Expenses 🧾")
-    st.data_editor(
-        st.session_state[key],
-        num_rows="dynamic",
-        width='stretch',
-        hide_index=True,
-        key=ed_key,
-        column_config={
-            "Date":        st.column_config.DateColumn("Date", default=date.today()),
-            "Category":    st.column_config.TextColumn("Category"),
-            "Amount":      st.column_config.NumberColumn("Amount", min_value=0, default=0),
-            "Description": st.column_config.TextColumn("Description"),
-        },
+def _call_claude_api(prompt: str) -> str:
+    import anthropic
+    client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
+    msg = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=300,
+        system=SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": prompt}],
     )
+    return msg.content[0].text.strip()
 
-    editor_state = st.session_state.get(ed_key, {})
-    edited_df    = _apply_editor_state(st.session_state[key], editor_state)
 
-    if st.button("💾 Save Changes", key=f"save_expenses_{bus_number}"):
-        cleaned_df = edited_df[
-            edited_df["Category"].notna() &
-            (edited_df["Category"].str.strip() != "")
-        ].copy()
-        if cleaned_df.empty:
-            st.warning("⚠️ No valid rows to save.")
-            return
-        save_vehicle_expenses(bus_number, cleaned_df)
-        st.success("✅ Saved!")
-        st.session_state.pop(key, None)
-        st.session_state.pop(ed_key, None)  
-        st.session_state.pop(fetch_key, None)
-        st.rerun()
+def _supabase_get_insight(cache_key: str) -> str | None:
+    """Fetch insight from Supabase ai_insights table."""
+    try:
+        res = supabase.table("ai_insights").select("insight").eq("cache_key", cache_key).single().execute()
+        return res.data["insight"] if res.data else None
+    except Exception:
+        return None
 
-    st.markdown("### Saved Expenses 📋")
-    if fetch_key not in st.session_state:
-        st.session_state[fetch_key] = get_vehicle_expenses(bus_number)
-    fetched_df = st.session_state[fetch_key]
 
-    col1, col2, col3 = st.columns([2, 2, 1])
-    with col1:
-        exp_month = st.selectbox("Month", options=list(range(1, 13)), index=date.today().month - 1,
-                                 format_func=lambda x: date(2000, x, 1).strftime("%B"),
-                                 key=f"exp_month_{bus_number}")
-    with col2:
-        exp_period = st.radio("Period", ["1-15", "16-31", "01-31"], index=2,
-                              horizontal=True, key=f"exp_period_{bus_number}")
-    with col3:
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("🔄 Refresh", key=f"ref_exp_{bus_number}", width='stretch'):
-            st.session_state.pop(fetch_key, None)
-            st.rerun()
+def _supabase_save_insight(cache_key: str, insight: str, provider: str) -> None:
+    """Upsert insight into Supabase ai_insights table."""
+    try:
+        supabase.table("ai_insights").upsert({
+            "cache_key": cache_key,
+            "insight":   insight,
+            "provider":  provider,
+            "updated_at": "now()",
+        }, on_conflict="cache_key").execute()
+    except Exception:
+        pass  # silently fail — session cache still works
 
-    if not fetched_df.empty:
-        display_exp = fetched_df.copy()
-        display_exp["Date"] = pd.to_datetime(display_exp["Date"])
-        start, end  = _get_date_range(date.today().year, exp_month, exp_period)
-        display_exp = display_exp[(display_exp["Date"] >= start) & (display_exp["Date"] <= end)].copy()
-        display_exp["Date"] = display_exp["Date"].dt.strftime("%Y-%m-%d")
 
-        st.data_editor(
-            display_exp, width='stretch', hide_index=True, num_rows="dynamic",
-            key=f"edit_exp_{bus_number}",
-            column_config={
-                "id":          None,
-                "Date":        st.column_config.TextColumn("Date"),
-                "Category":    st.column_config.TextColumn("Category"),
-                "Amount":      st.column_config.NumberColumn("Amount", min_value=0),
-                "Description": st.column_config.TextColumn("Description"),
-            }
-        )
+def _show_insight(prompt: str, key: str = ""):
+    """Button-based lazy load — result stored in Supabase + session cache."""
+    cache_key = f"insight_{abs(hash(prompt[:100]))}"
+    provider  = st.session_state.get("ai_provider", "Groq")
 
-        if st.button("💾 Update Expenses", key=f"update_exp_{bus_number}"):
-            exp_state = st.session_state.get(f"edit_exp_{bus_number}", {})
-            for row_idx, changes in exp_state.get("edited_rows", {}).items():
-                update_vehicle_expense(display_exp.iloc[row_idx]["id"], changes)
-            for row_idx in sorted(exp_state.get("deleted_rows", []), reverse=True):
-                delete_vehicle_expense(display_exp.iloc[row_idx]["id"])
-            st.success("✅ Updated!")
-            st.session_state.pop(fetch_key, None)
-            st.rerun()
-
-        total_amount = pd.to_numeric(display_exp["Amount"], errors="coerce").sum()
+    def _render(insight: str, regen_key: str):
         st.markdown(f"""
-        <div style='background:#2D2D5E;border-radius:8px;padding:12px 20px;margin-top:8px;'>
-            <span style='color:#aaa;'>Total: </span>
-            <span style='color:#7B8CFF;font-size:1.2rem;font-weight:bold;'>₹{total_amount:,.0f}</span>
-        </div>""", unsafe_allow_html=True)
+        <div style='background:rgba(123,140,255,0.12);border-left:3px solid #7B8CFF;
+                    border-radius:6px;padding:10px 14px;margin-top:6px;
+                    font-size:0.85rem;color:#d0eaff;white-space:pre-line;'>{insight}
+        </div>
+        """, unsafe_allow_html=True)
+        if st.button("🔄 Regenerate", key=regen_key, help="Fetch fresh insight from AI"):
+            st.session_state.pop(cache_key, None)
+            # Delete from Supabase so fresh insight is fetched
+            try:
+                supabase.table("ai_insights").delete().eq("cache_key", cache_key).execute()
+            except Exception:
+                pass
+            st.rerun()
 
-        pdf_data = _generate_expenses_pdf(
-            display_exp[["Date", "Category", "Amount", "Description"]],
-            bus_number, exp_month, exp_period
-        )
-        st.download_button("📥 Download PDF", data=pdf_data,
-                           file_name=f"expenses_{bus_number}_{date(2000,exp_month,1).strftime('%B')}_{exp_period.replace('-','_')}.pdf",
-                           mime="application/pdf", key=f"exp_pdf_{bus_number}")
-    else:
-        st.info("No records found.")
-
-
-# ──────────────────────────────────────────────
-# 4. DIESEL VIEW — har row ka alag rate
-# ──────────────────────────────────────────────
-def diesel_view(bus_number: str = ""):
-    fuel = fuel_label(bus_number)
-    st.markdown(f"### {fuel} View ⛽")
-
-    col1, col2, col3 = st.columns([2, 2, 1])
-    with col1:
-        d_month = st.selectbox("Month", options=list(range(1, 13)),
-                               index=date.today().month - 1,
-                               format_func=lambda x: date(2000, x, 1).strftime("%B"),
-                               key=f"diesel_month_{bus_number}")
-    with col2:
-        d_period = st.radio("Period", ["1-15", "16-31", "01-31"],
-                            index=2, horizontal=True,
-                            key=f"diesel_period_{bus_number}")
-    with col3:
-        st.markdown("<br>", unsafe_allow_html=True)
-        load = st.button("🔄 Load", key=f"diesel_load_{bus_number}", width='stretch')
-
-    # ✅ DB se rate + payment load karo (bus + month + period wise)
-    state_key = f"diesel_state_{bus_number}_{d_month}_{d_period}"
-    if state_key not in st.session_state or load:
-        st.session_state[state_key] = get_diesel_rate_payment(bus_number, d_month, d_period)
-
-    saved = st.session_state[state_key]
-
-    universal_rate = st.number_input(
-        f"⛽ Set rate for whole table ({fuel})",
-        min_value=0.0, step=0.01, format="%.2f",
-        value=saved["rate"],
-        key=f"diesel_rate_input_{bus_number}_{d_month}_{d_period}"
-    )
-
-    fetch_key = f"diesel_df_{bus_number}"
-    if load or fetch_key not in st.session_state:
-        start, end = _get_date_range(date.today().year, d_month, d_period)
-        raw_df = get_diesel_summary(
-            bus_number,
-            from_date=start.strftime("%Y-%m-%d"),
-            to_date=end.strftime("%Y-%m-%d"),
-        )
-        if not raw_df.empty:
-            raw_df["Rate (₹/L)"] = universal_rate
-            # ✅ Per-date saved custom rates apply karo (override universal rate)
-            row_rates = get_diesel_row_rates(bus_number, raw_df["Date"].astype(str).tolist())
-            if row_rates:
-                raw_df["Rate (₹/L)"] = raw_df["Date"].astype(str).map(row_rates).fillna(universal_rate)
-        st.session_state[fetch_key] = raw_df
-
-    df = st.session_state.get(fetch_key, pd.DataFrame())
-
-    if df.empty:
-        st.info("No diesel records found for this period.")
+    # 1. Check session cache first (fastest)
+    if cache_key in st.session_state:
+        _render(st.session_state[cache_key], f"regen_{cache_key}")
         return
 
-    df = df.copy()
-    if "Rate (₹/L)" not in df.columns:
-        df["Rate (₹/L)"] = universal_rate
+    # 2. Check Supabase (persistent across sessions)
+    with st.spinner("Loading saved insight..."):
+        saved = _supabase_get_insight(cache_key)
+    if saved:
+        st.session_state[cache_key] = saved
+        _render(saved, f"regen_{cache_key}")
+        return
 
-    ed_key = f"diesel_editor_{bus_number}"
-    st.data_editor(
-        df[["Date", "Diesel", "Rate (₹/L)"]],
-        width='stretch',
-        hide_index=True,
-        key=ed_key,
-        column_config={
-            "Date":       st.column_config.TextColumn("Date", disabled=True),
-            "Diesel":     st.column_config.NumberColumn(f"{fuel} (L)", disabled=True, format="%.2f"),
-            "Rate (₹/L)": st.column_config.NumberColumn("Rate (₹/L)", min_value=0.0,
-                                                           step=0.01, format="%.2f"),
-        }
+    # 3. Show generate button — no saved insight found
+    icon = "🟢 Groq" if provider == "Groq" else "🔵 Claude"
+    if st.button(f"🤖 Generate AI Insight ({icon})", key=f"gen_{cache_key}", type="secondary"):
+        with st.spinner("Analyzing..."):
+            try:
+                result = _call_groq(prompt) if provider == "Groq" else _call_claude_api(prompt)
+                # Save to session + Supabase
+                st.session_state[cache_key] = result
+                _supabase_save_insight(cache_key, result, provider)
+                st.rerun()
+            except KeyError as e:
+                st.warning(f"⚠️ API key missing: {e}")
+            except Exception as e:
+                st.error(f"❌ {provider} error: {e}")
+
+
+
+def _plotly_dark(fig):
+    fig.update_layout(
+        paper_bgcolor="#0d2626",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="white", size=11),
+        margin=dict(t=30, b=10, l=10, r=10),
+        autosize=True,
+        legend=dict(
+            bgcolor="rgba(0,0,0,0)", font=dict(size=10),
+            orientation="h", yanchor="top", y=-0.25, xanchor="center", x=0.5,
+        ),
+        xaxis=dict(
+            gridcolor="rgba(255,255,255,0.08)", type="category",
+            tickangle=-40, tickfont=dict(size=10), automargin=True,
+        ),
+        yaxis=dict(gridcolor="rgba(255,255,255,0.08)", tickfont=dict(size=10), automargin=True),
+    )
+    return fig
+
+
+def _render_chart(fig, key: str):
+    """Mobile-friendly plotly render — mode-bar chhupao, responsive banao."""
+    st.plotly_chart(
+        fig, width='stretch', key=key,
+        config={"displayModeBar": False, "responsive": True},
     )
 
-    # Per-row override apply + DB me persist karo
-    editor_state = st.session_state.get(ed_key, {})
-    display_df   = df.copy()
-    row_rate_changed = False
-    for row_idx, changes in editor_state.get("edited_rows", {}).items():
-        for col, val in changes.items():
-            if row_idx < len(display_df):
-                display_df.at[row_idx, col] = val
-                if col == "Rate (₹/L)":
-                    row_date = str(display_df.at[row_idx, "Date"])
-                    save_diesel_row_rate(bus_number, row_date, float(val))
-                    row_rate_changed = True
 
-    if row_rate_changed:
-        # session state ko bhi update kar do taki dobara save na ho aur consistent rahe
-        st.session_state[fetch_key] = display_df.copy()
+def vehicle_records():
+    col1, col2 = st.columns(2)
+    with col1:
+        st.header("Select Vehicle", text_alignment='center')
+    with col2:
+        if st.button('Home page', type='primary', width='stretch',
+                     icon=':material/home:', shortcut='control+backspace'):
+            st.session_state['login_state'] = None
+            st.rerun()
 
-    display_df["Rate (₹/L)"] = pd.to_numeric(display_df["Rate (₹/L)"], errors="coerce").fillna(universal_rate)
-    display_df["Amount (₹)"] = (display_df["Diesel"] * display_df["Rate (₹/L)"]).round(2)
+    home_layout()
+    st.markdown("""
+        <style>
+            .stApp { background: #1B3B6F !important; }
+        </style>
+    """, unsafe_allow_html=True)
 
-    # ✅ Full table with Amount column
-    st.dataframe(
-        display_df[["Date", "Diesel", "Rate (₹/L)", "Amount (₹)"]],
-        width='stretch',
-        hide_index=True,
-    )
+    accessible = get_accessible_vehicles()
+    visible_vehicles = [bus for bus in VEHICLE_MAP.keys() if bus in accessible]
 
-    total_diesel = display_df["Diesel"].sum()
-    total_amount = display_df["Amount (₹)"].sum()
+    if not visible_vehicles:
+        st.warning("⚠️ Aapko kisi bhi vehicle ka access nahi diya gaya. Admin se contact karo.")
+    else:
+        n = len(visible_vehicles)
+        i = 0
+        while i < n:
+            if i == n - 1:
+                # akela bacha last vehicle — center me dikhao, purple (Home page jaisa)
+                _, ccenter, _ = st.columns([1, 2, 1])
+                bus = visible_vehicles[i]
+                with ccenter:
+                    if st.button(
+                        bus, type='primary', key=f"btn_v_{bus}",
+                        width='stretch', icon=':material/bus_railway:', icon_position='right'
+                    ):
+                        st.session_state['login_state'] = VEHICLE_MAP[bus]
+                        st.rerun()
+                i += 1
+            else:
+                cols = st.columns(2)
+                for j in range(2):
+                    bus = visible_vehicles[i + j]
+                    with cols[j]:
+                        btn_type = 'secondary' if (i + j) < 2 else 'tertiary'
+                        if st.button(
+                            bus, type=btn_type, key=f"btn_v_{bus}",
+                            width='stretch', icon=':material/bus_railway:', icon_position='right'
+                        ):
+                            st.session_state['login_state'] = VEHICLE_MAP[bus]
+                            st.rerun()
+                i += 2
 
-    # ── Summary ──
+    st.markdown("<br>", unsafe_allow_html=True)
+    quick_overview(visible_vehicles)
+
+    st.markdown("""
+        <div style='position:fixed;bottom:20px;width:100%;text-align:center;
+                    color:white;font-size:0.9rem;'>
+            <p>Created with ❤️ by Dev-developer69</p>
+        </div>
+    """, unsafe_allow_html=True)
+
+
+def quick_overview(bus_list: list):
+    if not bus_list:
+        return
+
+    sel_col1, sel_col2, sel_col3 = st.columns([2, 2, 1])
+    with sel_col1:
+        sel_month = st.selectbox(
+            "Month", options=list(range(1, 13)),
+            index=date.today().month - 1,
+            format_func=lambda x: date(2000, x, 1).strftime("%B"),
+            key="qo_month"
+        )
+    with sel_col2:
+        default_half = "1-15" if date.today().day <= 15 else "16-31"
+        sel_period = st.radio(
+            "Period", ["1-15", "16-31"],
+            index=0 if default_half == "1-15" else 1,
+            horizontal=True, key="qo_period"
+        )
+    with sel_col3:
+        st.markdown("<br>", unsafe_allow_html=True)
+        load_clicked = st.button("🔄 Load", key="qo_load", width='stretch')
+
+    year = date.today().year
+    raw_start, raw_end = _get_date_range(year, sel_month, sel_period)
+    start, end = raw_start.date(), raw_end.date()
+    period_label = f"{date(2000, sel_month, 1).strftime('%B')} ({sel_period})"
+
     st.markdown(f"""
-    <div style='background:#1e1e3a;border-radius:10px;padding:16px 24px;margin:12px 0;
-                display:flex;gap:40px;flex-wrap:wrap;'>
-        <div>
-            <div style='color:#aaa;font-size:0.85rem;'>Total {fuel}</div>
-            <div style='color:#7B8CFF;font-size:1.3rem;font-weight:bold;'>{total_diesel:.2f} L</div>
-        </div>
-        <div>
-            <div style='color:#aaa;font-size:0.85rem;'>Total Amount</div>
-            <div style='color:#FFB347;font-size:1.3rem;font-weight:bold;'>₹{total_amount:,.2f}</div>
-        </div>
+    <div style='display:flex;align-items:center;gap:10px;margin-bottom:0.5rem;'>
+        <span style='font-size:1.5rem;'>📊</span>
+        <span style='font-size:1.2rem;font-weight:600;'>Quick Overview</span>
+        <span style='font-size:0.85rem;color:#aaa;margin-left:8px;'>{period_label}</span>
     </div>
     """, unsafe_allow_html=True)
 
-    # ── Payment Status (editable + saved per bus+month+period) ──
-    st.markdown("#### Payment Status")
+    cache_key = f"overview_{start}_{end}"
 
-    edit_mode_key = f"diesel_pay_edit_{bus_number}_{d_month}_{d_period}"
-    if edit_mode_key not in st.session_state:
-        st.session_state[edit_mode_key] = False
+    if cache_key not in st.session_state or load_clicked:
+        cols_sel = "bus_number, date, driver_name, conductor_name, actual_km, scheduled_km, income, gross_income, diesel, diesel_km, status, next_period"
+        prev_start, prev_end = shift_period_back(year, sel_month, sel_period)
 
-    is_locked = saved["payment_done"] and not st.session_state[edit_mode_key]
+        normal_res = supabase.table("vehicle_records") \
+            .select(cols_sel) \
+            .in_("bus_number", bus_list) \
+            .gte("date", str(start)) \
+            .lte("date", str(end)) \
+            .execute()
+        normal_rows = [r for r in (normal_res.data or []) if not r.get("next_period")]
 
-    pay_col1, pay_col2 = st.columns(2)
-    with pay_col1:
-        paid_amount = st.number_input(
-            "Amount Paid (₹)", min_value=0.0, step=0.01, format="%.2f",
-            value=saved["paid_amount"],
-            disabled=is_locked,
-            key=f"diesel_paid_input_{bus_number}_{d_month}_{d_period}"
-        )
-    with pay_col2:
-        payment_done = st.checkbox(
-            "✅ Payment Done",
-            value=saved["payment_done"],
-            disabled=is_locked,
-            key=f"diesel_pay_chk_{bus_number}_{d_month}_{d_period}"
-        )
+        shifted_res = supabase.table("vehicle_records") \
+            .select(cols_sel) \
+            .in_("bus_number", bus_list) \
+            .gte("date", str(prev_start)) \
+            .lte("date", str(prev_end)) \
+            .eq("next_period", True) \
+            .execute()
+        shifted_rows = shifted_res.data or []
+        st.session_state[cache_key] = normal_rows + shifted_rows
 
-    btn_col1, btn_col2 = st.columns([1, 1])
-    with btn_col1:
-        if st.button("💾 Save Rate & Payment", key=f"diesel_save_{bus_number}_{d_month}_{d_period}",
-                     width='stretch'):
-            save_diesel_rate_payment(bus_number, d_month, d_period,
-                                      universal_rate, paid_amount, payment_done)
-            st.session_state[state_key] = {
-                "rate": universal_rate, "paid_amount": paid_amount, "payment_done": payment_done
-            }
-            st.session_state[edit_mode_key] = False
-            st.success("✅ Saved!")
+    rows = st.session_state[cache_key]
+
+    if not rows:
+        st.info("Is period mein koi record nahi mila.")
+        if st.button("🔄 Refresh", key="refresh_overview"):
+            st.session_state.pop(cache_key, None)
             st.rerun()
-    with btn_col2:
-        if saved["payment_done"] and not st.session_state[edit_mode_key]:
-            if st.button("✏️ Edit Payment", key=f"diesel_edit_{bus_number}_{d_month}_{d_period}",
-                         width='stretch'):
-                st.session_state[edit_mode_key] = True
-                st.rerun()
+        return
 
-    remaining = total_amount - paid_amount
-    if payment_done or remaining <= 0:
-        st.markdown("""
-        <div style='background:#1B5E20;border-radius:10px;padding:14px 24px;margin-top:10px;'>
-            <span style='color:#69F0AE;font-size:1.1rem;font-weight:bold;'>✅ Fully Paid</span>
-        </div>""", unsafe_allow_html=True)
-    else:
-        st.markdown(f"""
-        <div style='background:#4a1010;border-radius:10px;padding:14px 24px;margin-top:10px;
-                    display:flex;justify-content:space-between;align-items:center;'>
-            <span style='color:#FF5252;font-size:1.1rem;font-weight:bold;'>⚠️ Payment Pending</span>
-            <span style='color:#FFB347;font-size:1.2rem;font-weight:bold;'>Remaining: ₹{remaining:,.2f}</span>
-        </div>""", unsafe_allow_html=True)
+    df = pd.DataFrame(rows)
+    df = df[df["status"] != "On Leave"].copy()
+    df["actual_km"]      = pd.to_numeric(df["actual_km"],    errors="coerce").fillna(0)
+    df["scheduled_km"]   = pd.to_numeric(df["scheduled_km"], errors="coerce").fillna(0)
+    df["income"]         = pd.to_numeric(df["income"],       errors="coerce").fillna(0)
+    df["diesel"]         = pd.to_numeric(df["diesel"],       errors="coerce").fillna(0)
+    df["diesel_km"]      = pd.to_numeric(df["diesel_km"] if "diesel_km" in df.columns else 0, errors="coerce").fillna(0)
+    df["conductor_name"] = df["conductor_name"].fillna("") if "conductor_name" in df.columns else ""
+    df["date"]           = pd.to_datetime(df["date"])
+    df["bus_number"]     = df["bus_number"].astype(str)
+
+    # ── Combined (merged) date-groups apply karo — Saved Records table jaisa hi ──
+    df["date_key"] = df["date"].dt.strftime("%Y-%m-%d")
+    drop_indices = set()
+    for bus in df["bus_number"].unique():
+        groups = get_km_combines(bus)
+        bus_mask = df["bus_number"] == bus
+        for group in groups:
+            dates = group["dates"]
+            member_idxs = []
+            for d in dates:
+                idx = df[bus_mask & (df["date_key"] == d)].index
+                if len(idx) == 1:
+                    member_idxs.append(idx[0])
+            if len(member_idxs) != len(dates) or len(member_idxs) < 2:
+                continue
+            keep = member_idxs[-1]   # sabse aakhri (chronologically last) row me combined value rakho
+            df.loc[keep, "actual_km"]    = df.loc[member_idxs, "actual_km"].sum()
+            df.loc[keep, "scheduled_km"] = df.loc[member_idxs, "scheduled_km"].sum()
+            for i in member_idxs:
+                if i != keep:
+                    drop_indices.add(i)
+    if drop_indices:
+        df = df.drop(index=list(drop_indices)).reset_index(drop=True)
+    df = df.drop(columns=["date_key"])
+
+    df["date_str"]       = df["date"].dt.strftime("%d %b")
+
+    df["efficiency_pct"] = (df["actual_km"] / df["scheduled_km"].replace(0, float("nan")) * 100).round(1)
+    df["achieved"]       = df["actual_km"] >= df["scheduled_km"]
+    df["income_per_km"]  = (df["income"] / df["actual_km"].replace(0, float("nan"))).round(2)
+    df["diesel_per_km"]  = (df["diesel"] / df["actual_km"].replace(0, float("nan"))).round(3)
+    df["km_per_litre"]   = (df["diesel_km"] / df["diesel"].replace(0, float("nan"))).round(2)
+
+    def _alert_status(row):
+        if row["diesel"] > 0 and row["actual_km"] == 0:
+            return "🚨 Red flag"
+        if pd.notna(row["km_per_litre"]) and row["km_per_litre"] < MIN_NORMAL_MILEAGE:
+            return "⚠️ Check"
+        if row["diesel"] > 0:
+            return "✅ Normal"
+        return "—"
+    df["alert_status"] = df.apply(_alert_status, axis=1)
+
+    summary = df.groupby("bus_number").agg(
+        Actual_KM     =("actual_km",      "sum"),
+        Scheduled_KM  =("scheduled_km",   "sum"),
+        Income        =("income",         "sum"),
+        Diesel        =("diesel",         "sum"),
+        Diesel_KM     =("diesel_km",      "sum"),
+        Days          =("date",           "count"),
+        Achieved_Days =("achieved",       "sum"),
+        Avg_Efficiency=("efficiency_pct", "mean"),
+        Best_KM_Day   =("actual_km",      "max"),
+        Worst_KM_Day  =("actual_km",      "min"),
+    ).reset_index().rename(columns={"bus_number": "Bus"})
+    summary["Bus"]            = summary["Bus"].astype(str)
+    summary["Consistency_%"]  = (summary["Achieved_Days"] / summary["Days"] * 100).round(1)
+    summary["Avg_Efficiency"] = summary["Avg_Efficiency"].round(1)
+
+    bus_rates = {}
+    for bus in summary["Bus"].tolist():
+        rate_data = get_diesel_rate_payment(bus, sel_month, sel_period)
+        bus_rates[bus] = rate_data["rate"]
+    summary["Diesel_Rate"]     = summary["Bus"].map(bus_rates)
+    summary["Est_Diesel_Cost"] = (summary["Diesel"] * summary["Diesel_Rate"]).round(0)
+    summary["Net"]             = summary["Income"] - summary["Est_Diesel_Cost"]
+
+    # ── Summary Cards ──
+    card_cols = st.columns(len(summary))
+    for i, (_, row) in enumerate(summary.iterrows()):
+        with card_cols[i]:
+            st.markdown(f"""
+            <div style='background:#14A085;border-radius:12px;padding:16px;
+                        text-align:center;border:1px solid rgba(255,255,255,0.2);'>
+                <div style='font-size:1.1rem;font-weight:600;color:white;margin-bottom:8px;'>
+                    🚌 {row["Bus"]}</div>
+                <div style='color:#d0f5ee;font-size:0.78rem;'>Actual KM</div>
+                <div style='color:white;font-size:1.3rem;font-weight:700;'>{int(row["Actual_KM"]):,}</div>
+                <div style='color:#d0f5ee;font-size:0.78rem;margin-top:4px;'>Efficiency</div>
+                <div style='color:#FFD700;font-size:1rem;font-weight:600;'>{row["Avg_Efficiency"]}%</div>
+                <div style='color:#d0f5ee;font-size:0.75rem;margin-top:4px;'>
+                    Consistency: {row["Consistency_%"]}% · {int(row["Days"])} days</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    bus_color_map = {bus: COLORS[i % len(COLORS)] for i, bus in enumerate(bus_list)}
+
+    # ── Global AI provider toggle ──
+    ai_col1, ai_col2 = st.columns([3, 1])
+    with ai_col2:
+        provider = st.radio(
+            "🤖 AI Insights",
+            ["Groq", "Claude"],
+            index=0 if st.session_state.get("ai_provider", "Groq") == "Groq" else 1,
+            horizontal=True,
+            key="ai_provider_radio",
+            help="Groq: free & fast | Claude: better quality (needs ANTHROPIC_API_KEY)"
+        )
+        st.session_state["ai_provider"] = provider
 
 
-# ──────────────────────────────────────────────
-# 5. SALARY CHECK
-# ──────────────────────────────────────────────
-def salary_check_view():
-    st.markdown("### Salary Check 📊")
-    col1, col2, col3 = st.columns([2, 2, 1])
-    with col1:
-        from_date = st.date_input("From", value=None, key="sc_from", format="YYYY-MM-DD")
-    with col2:
-        to_date = st.date_input("To", value=None, key="sc_to", format="YYYY-MM-DD")
-    with col3:
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("🔄 Load", key="sc_load"):
-            st.session_state["salary_check_df"] = get_salary_check(
-                from_date=str(from_date) if from_date else None,
-                to_date=str(to_date) if to_date else None,
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
+        "📈 Daily KM Trend", "📊 Scheduled vs Actual", "🎯 KM Efficiency",
+        "🥧 Driver Distribution", "👤 Driver Performance", "⛽ Diesel & Income",
+        "🚨 Mileage Alert", "💰 Income per KM", "📋 Monthly Summary",
+    ])
+
+    with tab1:
+        pivot = df.pivot_table(
+            index="date", columns="bus_number",
+            values="actual_km", aggfunc="sum"
+        ).sort_index()
+    
+        fig = go.Figure()
+    
+        for i, col in enumerate(pivot.columns):
+            color = bus_color_map.get(str(col), COLORS[i % len(COLORS)])
+            series = pivot[col].dropna()
+            if series.empty:
+                continue
+    
+            # convert hex to rgba for soft fill
+            h = color.lstrip("#")
+            r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+            fill_color = f"rgba({r},{g},{b},0.12)"
+    
+            # Glowing gradient area under the line
+            fig.add_trace(go.Scatter(
+                x=series.index, y=series.values,
+                mode="lines", name=col, legendgroup=col,
+                line=dict(color=color, width=3, shape="spline", smoothing=0.4),
+                fill="tozeroy", fillcolor=fill_color,
+                hovertemplate="<b>%{fullData.name}</b><br>%{x|%d %b}<br>%{y:.0f} km<extra></extra>",
+            ))
+    
+            # Markers on top (separate trace so fill doesn't clip them)
+            fig.add_trace(go.Scatter(
+                x=series.index, y=series.values,
+                mode="markers", name=col, legendgroup=col, showlegend=False,
+                marker=dict(size=7, color=color, line=dict(width=1.5, color="#0d2626")),
+                hoverinfo="skip",
+            ))
+    
+            # Highlight ring on the latest point
+            fig.add_trace(go.Scatter(
+                x=[series.index[-1]], y=[series.values[-1]],
+                mode="markers", legendgroup=col, showlegend=False,
+                marker=dict(size=16, color="rgba(0,0,0,0)",
+                            line=dict(width=2, color=color)),
+                hoverinfo="skip",
+            ))
+    
+            # Callout on the best day
+            best_idx = series.idxmax()
+            fig.add_annotation(
+                x=best_idx, y=series[best_idx],
+                text=f"🏆 {int(series[best_idx])} km",
+                showarrow=True, arrowhead=0, arrowcolor=color,
+                ax=0, ay=-30,
+                font=dict(size=11, color=color),
+                bgcolor="rgba(13,38,38,0.85)", bordercolor=color, borderwidth=1, borderpad=4,
             )
-    if "salary_check_df" in st.session_state:
-        df = st.session_state["salary_check_df"]
-        if not df.empty:
-            st.dataframe(df, width='stretch', hide_index=True)
+    
+        fig = _plotly_dark(fig)
+        fig.update_layout(
+            xaxis=dict(type="date", tickformat="%d %b", gridcolor="rgba(255,255,255,0.06)",
+                       showspikes=True, spikemode="across", spikecolor="rgba(255,255,255,0.2)", spikethickness=1,
+                       tickangle=-40, tickfont=dict(size=10), automargin=True),
+            yaxis=dict(rangemode="tozero", gridcolor="rgba(255,255,255,0.06)", tickfont=dict(size=10)),
+            xaxis_title="Date", yaxis_title="Actual KM",
+            hovermode="x unified",
+            height=420,
+            margin=dict(t=20, b=10, l=10, r=10),
+            legend=dict(orientation="h", yanchor="top", y=-0.3, xanchor="center", x=0.5, font=dict(size=10)),
+            plot_bgcolor="rgba(0,0,0,0)",
+        )
+        _render_chart(fig, key="qo_chart_daily_trend")
+        
+        _show_insight(f"""
+Period: {period_label}
+Daily Actual KM per bus: {pivot.to_dict()}
+
+Analyze this daily KM trend and respond in this exact format:
+🟢 Strengths
+• [which bus is most consistent and why]
+
+🟠 Opportunities
+• [buses with irregular or declining trend]
+
+🔴 Critical Issues
+• [buses with 0 KM days or sudden drops — name them]
+
+💡 Recommendations
+• [specific actions: route redistribution, maintenance check, etc.]
+
+📈 Overall Status: Excellent / Good / Average / Poor
+Keep each bullet to 1 line. Max 2 bullets per section.
+""")
+
+    with tab2:
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            name="Scheduled KM", x=summary["Bus"].tolist(), y=summary["Scheduled_KM"],
+            marker_color="#7B8CFF",
+            text=summary["Scheduled_KM"].astype(int), textposition="outside",
+        ))
+        fig.add_trace(go.Bar(
+            name="Actual KM", x=summary["Bus"].tolist(), y=summary["Actual_KM"],
+            marker_color="#14A085",
+            text=summary["Actual_KM"].astype(int), textposition="outside",
+        ))
+        max_val = max(summary["Scheduled_KM"].max(), summary["Actual_KM"].max())
+        fig.update_layout(
+            barmode="group", xaxis_title="Bus", yaxis_title="KM",
+            yaxis=dict(range=[0, max_val * 1.2], gridcolor="rgba(255,255,255,0.08)"),
+            xaxis=dict(type="category", gridcolor="rgba(255,255,255,0.08)"),
+            bargap=0.25, bargroupgap=0.05,
+        )
+        _render_chart(_plotly_dark(fig), key="qo_chart_sched_vs_actual")
+        _show_insight(f"""
+Scheduled KM: {summary.set_index('Bus')['Scheduled_KM'].to_dict()}
+Actual KM: {summary.set_index('Bus')['Actual_KM'].to_dict()}
+
+Analyze schedule adherence and respond in this exact format:
+🟢 Strengths
+• [bus meeting or exceeding schedule — name it]
+
+🟠 Opportunities
+• [bus consistently below schedule — name it and gap %]
+
+🔴 Critical Issues
+• [bus with largest gap or missed schedule — name it]
+
+💡 Recommendations
+• [specific fix: route change, driver reassignment, etc.]
+
+📈 Overall Status: Excellent / Good / Average / Poor
+Max 2 bullets per section. Be specific with numbers.
+""")
+
+    with tab3:
+        eff_pivot = df.pivot_table(
+            index="date", columns="bus_number",
+            values="efficiency_pct", aggfunc="mean"
+        ).sort_index()
+    
+        fig = go.Figure()
+    
+        for i, col in enumerate(eff_pivot.columns):
+            color = bus_color_map.get(str(col), COLORS[i % len(COLORS)])
+            series = eff_pivot[col].dropna()
+            if series.empty:
+                continue
+    
+            h = color.lstrip("#")
+            r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+            fill_color = f"rgba({r},{g},{b},0.12)"
+    
+            # Glowing gradient area under the line
+            fig.add_trace(go.Scatter(
+                x=series.index, y=series.values,
+                mode="lines", name=col, legendgroup=col,
+                line=dict(color=color, width=3, shape="spline", smoothing=0.4),
+                fill="tozeroy", fillcolor=fill_color,
+                hovertemplate="<b>%{fullData.name}</b><br>%{x|%d %b}<br>%{y:.1f}%<extra></extra>",
+            ))
+    
+            # Markers on top
+            fig.add_trace(go.Scatter(
+                x=series.index, y=series.values,
+                mode="markers", name=col, legendgroup=col, showlegend=False,
+                marker=dict(size=7, color=color, line=dict(width=1.5, color="#0d2626")),
+                hoverinfo="skip",
+            ))
+    
+            # Highlight ring on the latest point
+            fig.add_trace(go.Scatter(
+                x=[series.index[-1]], y=[series.values[-1]],
+                mode="markers", legendgroup=col, showlegend=False,
+                marker=dict(size=16, color="rgba(0,0,0,0)",
+                            line=dict(width=2, color=color)),
+                hoverinfo="skip",
+            ))
+    
+            # Callout on the best (highest efficiency) day
+            best_idx = series.idxmax()
+            fig.add_annotation(
+                x=best_idx, y=series[best_idx],
+                text=f"🏆 {series[best_idx]:.1f}%",
+                showarrow=True, arrowhead=0, arrowcolor=color,
+                ax=0, ay=-30,
+                font=dict(size=11, color=color),
+                bgcolor="rgba(13,38,38,0.85)", bordercolor=color, borderwidth=1, borderpad=4,
+            )
+    
+        fig.add_hline(y=100, line_dash="dash", line_color="gray", annotation_text="100% target")
+    
+        fig = _plotly_dark(fig)
+        fig.update_layout(
+            xaxis=dict(type="date", tickformat="%d %b", gridcolor="rgba(255,255,255,0.06)",
+                       showspikes=True, spikemode="across", spikecolor="rgba(255,255,255,0.2)", spikethickness=1),
+            yaxis=dict(rangemode="tozero", gridcolor="rgba(255,255,255,0.06)"),
+            xaxis_title="Date", yaxis_title="Efficiency %",
+            hovermode="x unified",
+            height=480,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            plot_bgcolor="rgba(0,0,0,0)",
+        )
+        _render_chart(fig, key="qo_chart_efficiency")
+    
+        st.markdown("**Best & Worst Day per Bus:**")
+        bw_cols = st.columns(len(summary))
+        for i, (_, row) in enumerate(summary.iterrows()):
+            with bw_cols[i]:
+                st.markdown(f"""
+                <div style='background:#1e1e3a;border-radius:8px;padding:10px;text-align:center;'>
+                    <b>🚌 {row["Bus"]}</b><br>
+                    <span style='color:#69F0AE;'>Best: {int(row["Best_KM_Day"])} km</span><br>
+                    <span style='color:#FF5252;'>Worst: {int(row["Worst_KM_Day"])} km</span>
+                </div>
+                """, unsafe_allow_html=True)
+        _show_insight(f"""
+    Avg KM Efficiency per bus: {eff_pivot.mean().to_dict()}
+    Best/Worst day per bus: {summary[['Bus','Best_KM_Day','Worst_KM_Day']].to_dict('records')}
+    
+    Analyze efficiency and respond in this exact format:
+    🟢 Strengths
+    - [highest efficiency bus — name and % avg]
+    
+    🟠 Opportunities
+    - [bus with large best/worst gap — name it]
+    
+    🔴 Critical Issues
+    - [bus below 80% efficiency — name it, possible cause]
+    
+    💡 Recommendations
+    - [maintenance check, load balancing, or route review]
+    
+    📈 Overall Status: Excellent / Good / Average / Poor
+    Max 2 bullets per section. Plain text only.
+    """)
+
+    with tab4:
+        donut_cols = st.columns(len(bus_list))
+        for i, bus in enumerate(bus_list):
+            bus_df = df[df["bus_number"] == bus]
+            driver_days = (
+                bus_df.assign(driver_name=bus_df["driver_name"].str.lower().str.strip())
+                .groupby("driver_name")["date"].count().reset_index())
+            driver_days.columns = ["Driver", "Days"]
+            with donut_cols[i]:
+                st.markdown(f"**🚌 {bus}**")
+                fig = px.pie(driver_days, names="Driver", values="Days", hole=0.4,
+                             color_discrete_sequence=["#14A085","#7B8CFF","#FFB347","#FF5252","#00D4FF","#FF69B4"])
+                fig.update_traces(textposition="inside", textinfo="percent+label")
+                fig.update_layout(showlegend=False, margin=dict(t=10, b=10, l=10, r=10))
+                _render_chart(_plotly_dark(fig), key=f"qo_chart_donut_{bus}")
+        st.caption("Har bus mein driver duty distribution")
+
+    with tab5:
+        driver_perf = (df.assign(driver_name=df["driver_name"].str.strip().str.lower())
+            .groupby("driver_name")
+            .agg(
+                Total_KM=("actual_km", "sum"),
+                Avg_KM_Day=("actual_km", "mean"),
+                Days=("date", "count"),
+                Avg_Efficiency=("efficiency_pct", "mean"),
+                Income=("income", "sum"),
+            )
+            .reset_index()
+            .rename(columns={"driver_name": "Driver"})
+        )
+        driver_perf["Avg_KM_Day"]     = driver_perf["Avg_KM_Day"].round(1)
+        driver_perf["Avg_Efficiency"] = driver_perf["Avg_Efficiency"].round(1)
+        driver_perf = driver_perf.sort_values("Total_KM", ascending=False)
+        driver_perf.insert(0, "Rank", range(1, len(driver_perf) + 1))
+        st.dataframe(driver_perf, width='stretch', hide_index=True)
+
+        bar_colors = [COLORS[i % len(COLORS)] for i in range(len(driver_perf))]
+        fig = go.Figure(go.Bar(
+            x=driver_perf["Driver"], y=driver_perf["Total_KM"],
+            marker_color=bar_colors,
+            text=driver_perf["Total_KM"].astype(int), textposition="outside",
+        ))
+        max_val = driver_perf["Total_KM"].max()
+        fig.update_layout(
+            xaxis_title="Driver", yaxis_title="Total KM",
+            xaxis=dict(type="category"),
+            yaxis=dict(range=[0, max_val * 1.2], gridcolor="rgba(255,255,255,0.08)"),
+        )
+        _render_chart(_plotly_dark(fig), key="qo_chart_driver_perf")
+        _show_insight(f"""
+Driver performance data: {driver_perf[['Driver','Total_KM','Days','Avg_Efficiency']].to_dict('records')}
+
+Analyze driver performance and respond in this exact format:
+🟢 Strengths
+• [top driver name, total KM, efficiency %]
+
+🟠 Opportunities
+• [driver with low utilization or inconsistency — name them]
+
+🔴 Critical Issues
+• [driver with 0 KM or very low efficiency — name them]
+
+💡 Recommendations
+• [training, route reassignment, or recognition suggestion]
+
+📈 Overall Status: Excellent / Good / Average / Poor
+Max 2 bullets per section. Mention driver names specifically.
+""")
+
+    with tab6:
+        has_diesel = df["diesel"].sum() > 0
+        has_income = df["income"].sum() > 0
+
+        if not has_diesel and not has_income:
+            st.info("Diesel aur Income data abhi fill nahi hai.")
         else:
-            st.info("No data found.")
+            if has_diesel:
+                st.markdown("**⛽ Diesel — Bus wise**")
+                fig = go.Figure(go.Bar(
+                    x=summary["Bus"].tolist(), y=summary["Diesel"],
+                    marker_color=[bus_color_map.get(b, "#FFB347") for b in summary["Bus"]],
+                    text=summary["Diesel"].round(1), textposition="outside",
+                    texttemplate="%{text:.1f} L",
+                ))
+                max_d = summary["Diesel"].max()
+                fig.update_layout(
+                    showlegend=False, yaxis_title="Diesel (L)",
+                    xaxis=dict(type="category"),
+                    yaxis=dict(range=[0, max_d * 1.2], gridcolor="rgba(255,255,255,0.08)"),
+                )
+                _render_chart(_plotly_dark(fig), key="qo_chart_diesel_bus")
+
+                mileage = df[df["diesel"] > 0].groupby("bus_number").apply(
+                    lambda x: (x["diesel_km"].sum() / x["diesel"].sum()).round(2)
+                    if x["diesel"].sum() > 0 else 0
+                ).reset_index()
+                mileage.columns = ["Bus", "KM per Litre"]
+                st.markdown("**Mileage (KM/L) per Bus:**")
+                st.dataframe(mileage, width='stretch', hide_index=True)
+
+            if has_income:
+                st.markdown("**💰 Income — Bus wise**")
+                fig = go.Figure(go.Bar(
+                    x=summary["Bus"].tolist(), y=summary["Income"],
+                    marker_color=[bus_color_map.get(b, "#14A085") for b in summary["Bus"]],
+                    text=summary["Income"].astype(int), textposition="outside",
+                    texttemplate="₹%{text:,}",
+                ))
+                max_i = summary["Income"].max()
+                fig.update_layout(
+                    showlegend=False, yaxis_title="Income (₹)",
+                    xaxis=dict(type="category"),
+                    yaxis=dict(range=[0, max_i * 1.2], gridcolor="rgba(255,255,255,0.08)"),
+                )
+                _render_chart(_plotly_dark(fig), key="qo_chart_income_bus")
+
+            if has_diesel and has_income:
+                st.markdown("**💰 Income vs ⛽ Est. Diesel Cost:**")
+                fig = go.Figure()
+                fig.add_trace(go.Bar(
+                    name="Income", x=summary["Bus"].tolist(), y=summary["Income"],
+                    marker_color="#14A085",
+                    text=summary["Income"].astype(int), textposition="outside",
+                ))
+                fig.add_trace(go.Bar(
+                    name="Est Diesel Cost", x=summary["Bus"].tolist(), y=summary["Est_Diesel_Cost"],
+                    marker_color="#FF5252",
+                    text=summary["Est_Diesel_Cost"].astype(int), textposition="outside",
+                ))
+                max_v = max(summary["Income"].max(), summary["Est_Diesel_Cost"].max())
+                fig.update_layout(
+                    barmode="group", yaxis_title="₹",
+                    xaxis=dict(type="category"),
+                    yaxis=dict(range=[0, max_v * 1.2], gridcolor="rgba(255,255,255,0.08)"),
+                    bargap=0.25, bargroupgap=0.05,
+                )
+                _render_chart(_plotly_dark(fig), key="qo_chart_income_vs_diesel")
+                _show_insight(f"""
+Bus financial data: {summary[['Bus','Income','Est_Diesel_Cost','Net']].to_dict('records')}
+
+Analyze profitability and respond in this exact format:
+🟢 Strengths
+• [most profitable bus — name, income, net profit]
+
+🟠 Opportunities
+• [bus with high diesel cost eating into profit — name it]
+
+🔴 Critical Issues
+• [bus with negative or zero net profit — name it]
+
+💡 Recommendations
+• [diesel reduction strategy or route optimization]
+
+📈 Overall Status: Excellent / Good / Average / Poor
+Max 2 bullets per section. Use rupee amounts.
+""")
+
+    with tab7:
+        alert_df = df[df["diesel"] > 0][
+            ["date_str", "bus_number", "driver_name", "actual_km", "diesel_km", "diesel", "km_per_litre", "alert_status"]
+        ].rename(columns={
+            "date_str":    "Date",      "bus_number":  "Bus",
+            "driver_name": "Driver",    "actual_km":   "Actual KM",
+            "diesel_km":   "Diesel KM", "diesel":      "Diesel (L)",
+            "km_per_litre":"Mileage (KM/L)", "alert_status": "Status",
+        }).sort_values("Date")
+
+        red_flags = alert_df[alert_df["Status"] == "🚨 Red flag"]
+        checks    = alert_df[alert_df["Status"] == "⚠️ Check"]
+
+        m1, m2, m3 = st.columns(3)
+        m1.metric("🚨 Red flags",        len(red_flags))
+        m2.metric("⚠️ Low mileage days", len(checks))
+        m3.metric("✅ Normal days",       len(alert_df[alert_df["Status"] == "✅ Normal"]))
+
+        if len(red_flags) > 0:
+            st.error(f"{len(red_flags)} din aisa hain jaha diesel liya gaya lekin gaadi chali nahi!")
+        st.dataframe(alert_df, width='stretch', hide_index=True)
+        _show_insight(f"""
+Mileage threshold: {MIN_NORMAL_MILEAGE} km/L
+Red flags (diesel taken, 0 KM): {len(red_flags)}
+Low mileage days: {len(checks)}
+Alert details: {alert_df[['Bus','Driver','Diesel KM','Diesel (L)','Mileage (KM/L)','Status']].head(5).to_dict('records')}
+
+Analyze fuel alerts and respond in this exact format:
+🟢 Strengths
+• [days with normal mileage — count and avg]
+
+🟠 Opportunities
+• [buses with recurring low mileage — name them]
+
+🔴 Critical Issues
+• [red flag buses — diesel taken but 0 KM — name driver and bus]
+
+💡 Recommendations
+• [maintenance priority, driver investigation, or fuel audit]
+
+📈 Overall Status: Excellent / Good / Average / Poor
+Max 2 bullets per section. Name specific buses and drivers.
+""")
+
+    with tab8:
+        ipk_conductor = (df.assign(conductor_name=df["conductor_name"].str.strip().str.lower())
+            .groupby("conductor_name")
+            .agg(Income=("income", "sum"), Actual_KM=("actual_km", "sum"))
+            .reset_index()
+            .rename(columns={"conductor_name": "Conductor"})
+        )
+        ipk_conductor = ipk_conductor[
+            (ipk_conductor["Actual_KM"] > 0) &
+            (ipk_conductor["Conductor"].str.strip() != "") &
+            (~ipk_conductor["Conductor"].isin(["none", "nan", ""]))
+        ]
+        ipk_conductor["Income_per_KM"] = (ipk_conductor["Income"] / ipk_conductor["Actual_KM"]).round(2)
+        ipk_conductor = ipk_conductor.sort_values("Income_per_KM", ascending=False)
+
+        if ipk_conductor.empty:
+            st.info("Conductor data available nahi hai — vehicle records mein conductor fill karo.")
+        else:
+            bar_colors = [COLORS[i % len(COLORS)] for i in range(len(ipk_conductor))]
+            fig = go.Figure(go.Bar(
+                x=ipk_conductor["Conductor"], y=ipk_conductor["Income_per_KM"],
+                marker_color=bar_colors,
+                text=ipk_conductor["Income_per_KM"], textposition="outside",
+                texttemplate="₹%{text}",
+            ))
+            max_v = ipk_conductor["Income_per_KM"].max()
+            fig.update_layout(
+                xaxis_title="Conductor", yaxis_title="Income per KM (₹)",
+                xaxis=dict(type="category"),
+                yaxis=dict(range=[0, max_v * 1.2], gridcolor="rgba(255,255,255,0.08)"),
+            )
+            _render_chart(_plotly_dark(fig), key="qo_chart_income_per_km")
+            _show_insight(f"""
+Conductor revenue data: {ipk_conductor[['Conductor','Income_per_KM','Actual_KM']].to_dict('records')}
+
+Analyze conductor revenue efficiency and respond in this exact format:
+🟢 Strengths
+• [top conductor name, income/km, total KM]
+
+🟠 Opportunities
+• [conductor with high KM but low income/km — possible fare leakage]
+
+🔴 Critical Issues
+• [conductor with lowest income/km — name them, possible cause]
+
+💡 Recommendations
+• [revenue audit, route change, or recognition]
+
+📈 Overall Status: Excellent / Good / Average / Poor
+Max 2 bullets per section. Name conductors specifically.
+""")
+            st.dataframe(ipk_conductor, width='stretch', hide_index=True)
+
+    with tab9:
+        total_income   = df["income"].sum()
+        total_est_cost = summary["Est_Diesel_Cost"].sum()
+        net_profit     = total_income - total_est_cost
+        total_alerts   = (df["alert_status"] == "🚨 Red flag").sum()
+
+        best_conductor_row = (
+            ipk_conductor.iloc[0]
+            if 'ipk_conductor' in locals() and not ipk_conductor.empty
+            else None
+        )
+
+        s1, s2, s3, s4 = st.columns(4)
+        s1.metric("💰 Income",             f"₹{total_income:,.0f}")
+        s2.metric("⛽ Est. Diesel Cost",   f"₹{total_est_cost:,.0f}")
+        s3.metric("📈 Net (est.)",         f"₹{net_profit:,.0f}")
+        s4.metric("🚨 Alerts this period", int(total_alerts))
+
+        if best_conductor_row is not None:
+            st.markdown(f"""
+            <div style='background:#14A085;border-radius:12px;padding:16px;margin-top:12px;
+                        border:1px solid rgba(255,255,255,0.2);'>
+                <span style='color:#d0f5ee;font-size:0.85rem;'>🏆 Best conductor (income/km)</span><br>
+                <span style='color:white;font-size:1.2rem;font-weight:700;'>{best_conductor_row["Conductor"].title()}</span>
+                <span style='color:#FFD700;font-size:1rem;'> — ₹{best_conductor_row["Income_per_KM"]}/km</span>
+            </div>
+            """, unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown("**Bus wise net profit (actual diesel rate):**")
+        display_summary = summary[["Bus", "Income", "Diesel", "Diesel_Rate", "Est_Diesel_Cost", "Net"]].copy()
+        display_summary.columns = ["Bus", "Income", "Diesel (L)", "Rate (₹/L)", "Est. Diesel Cost", "Net"]
+        st.dataframe(display_summary, width='stretch', hide_index=True)
+
+        _show_insight(f"""
+Period: {period_label}
+Bus details (use these exact numbers only):
+{display_summary.to_dict('records')}
+Total Income: Rs{total_income:,.0f}
+Total Diesel Cost: Rs{total_est_cost:,.0f}
+Net Profit: Rs{net_profit:,.0f}
+Mileage Alerts: {int(total_alerts)}
+
+FIRST check each bus for data issues and tag them inline — include ALL buses in analysis:
+- Diesel = 0 but Income > 0 → tag as [diesel entry missing]
+- Diesel = 0 but KM > 0 → tag as [data error: bus cannot run without fuel]
+- Income = 0 but Diesel > 0 → tag as [revenue missing]
+- Net > Income → tag as [calculation error]
+
+Respond in this exact format:
+⚠️ Data Quality Issues
+• [bus name + exact issue, e.g. Bus 7389 [diesel entry missing] Income=Rs3,08,141 Diesel=0]
+
+🟢 Strengths (all buses, tag flagged ones)
+• [highest net profit bus — exact name and net amount]
+
+🟠 Opportunities (all buses, tag flagged ones)
+• [bus with high diesel cost — exact name and amounts]
+
+🔴 Critical Issues (all buses, tag flagged ones)
+• [bus with negative net — exact name and amount]
+
+💡 Recommendations
+• [one specific action — data fix or operational improvement]
+
+📈 Overall Status: Excellent / Good / Average / Poor
+Use only exact rupee values from data above. Max 2 bullets per section.
+""")
+
+    if st.button("🔄 Refresh Overview", key="refresh_overview"):
+        st.session_state.pop(cache_key, None)
+        st.rerun()
