@@ -319,20 +319,27 @@ def quick_overview(bus_list: list):
     df["date"]           = pd.to_datetime(df["date"])
     df["bus_number"]     = df["bus_number"].astype(str)
 
-    # ── Combined (merged) date-pairs apply karo — Saved Records table jaisa hi ──
+    # ── Combined (merged) date-groups apply karo — Saved Records table jaisa hi ──
     df["date_key"] = df["date"].dt.strftime("%Y-%m-%d")
     drop_indices = set()
     for bus in df["bus_number"].unique():
-        pairs = get_km_combines(bus)
+        groups = get_km_combines(bus)
         bus_mask = df["bus_number"] == bus
-        for d1, d2 in pairs:
-            idx1 = df[bus_mask & (df["date_key"] == d1)].index
-            idx2 = df[bus_mask & (df["date_key"] == d2)].index
-            if len(idx1) == 1 and len(idx2) == 1:
-                i1, i2 = idx1[0], idx2[0]
-                df.loc[i2, "actual_km"]    = df.loc[i1, "actual_km"] + df.loc[i2, "actual_km"]
-                df.loc[i2, "scheduled_km"] = df.loc[i1, "scheduled_km"] + df.loc[i2, "scheduled_km"]
-                drop_indices.add(i1)
+        for group in groups:
+            dates = group["dates"]
+            member_idxs = []
+            for d in dates:
+                idx = df[bus_mask & (df["date_key"] == d)].index
+                if len(idx) == 1:
+                    member_idxs.append(idx[0])
+            if len(member_idxs) != len(dates) or len(member_idxs) < 2:
+                continue
+            keep = member_idxs[-1]   # sabse aakhri (chronologically last) row me combined value rakho
+            df.loc[keep, "actual_km"]    = df.loc[member_idxs, "actual_km"].sum()
+            df.loc[keep, "scheduled_km"] = df.loc[member_idxs, "scheduled_km"].sum()
+            for i in member_idxs:
+                if i != keep:
+                    drop_indices.add(i)
     if drop_indices:
         df = df.drop(index=list(drop_indices)).reset_index(drop=True)
     df = df.drop(columns=["date_key"])
