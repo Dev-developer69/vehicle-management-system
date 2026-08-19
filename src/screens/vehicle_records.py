@@ -320,7 +320,9 @@ def quick_overview(bus_list: list):
     df["bus_number"]     = df["bus_number"].astype(str)
 
     # ── Combined (merged) date-groups apply karo — Saved Records table jaisa hi ──
-    df["date_key"] = df["date"].dt.strftime("%Y-%m-%d")
+    df["date_key"]   = df["date"].dt.strftime("%Y-%m-%d")
+    df["days_count"] = 1
+    df["days_label"] = df["date"].dt.strftime("%d %b")
     drop_indices = set()
     for bus in df["bus_number"].unique():
         groups = get_km_combines(bus)
@@ -337,6 +339,13 @@ def quick_overview(bus_list: list):
             keep = member_idxs[-1]   # sabse aakhri (chronologically last) row me combined value rakho
             df.loc[keep, "actual_km"]    = df.loc[member_idxs, "actual_km"].sum()
             df.loc[keep, "scheduled_km"] = df.loc[member_idxs, "scheduled_km"].sum()
+            df.loc[keep, "days_count"]   = len(member_idxs)
+            first_date = df.loc[member_idxs, "date"].min()
+            last_date  = df.loc[member_idxs, "date"].max()
+            if first_date.month == last_date.month:
+                df.loc[keep, "days_label"] = f"{first_date.day}-{last_date.day} {last_date.strftime('%b')}"
+            else:
+                df.loc[keep, "days_label"] = f"{first_date.strftime('%d %b')} - {last_date.strftime('%d %b')}"
             for i in member_idxs:
                 if i != keep:
                     drop_indices.add(i)
@@ -433,27 +442,44 @@ def quick_overview(bus_list: list):
             index="date", columns="bus_number",
             values="actual_km", aggfunc="sum"
         ).sort_index()
-    
+        pivot_sched = df.pivot_table(
+            index="date", columns="bus_number",
+            values="scheduled_km", aggfunc="sum"
+        ).sort_index()
+        pivot_days = df.pivot_table(
+            index="date", columns="bus_number",
+            values="days_count", aggfunc="sum"
+        ).sort_index()
+
         fig = go.Figure()
-    
+
         for i, col in enumerate(pivot.columns):
             color = bus_color_map.get(str(col), COLORS[i % len(COLORS)])
             series = pivot[col].dropna()
             if series.empty:
                 continue
-    
+            sched_series = pivot_sched[col].reindex(series.index).fillna(0)
+            days_series  = pivot_days[col].reindex(series.index).fillna(1)
+            customdata   = list(zip(sched_series.values, days_series.values))
+
             # convert hex to rgba for soft fill
             h = color.lstrip("#")
             r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
             fill_color = f"rgba({r},{g},{b},0.12)"
-    
+
             # Glowing gradient area under the line
             fig.add_trace(go.Scatter(
                 x=series.index, y=series.values,
                 mode="lines", name=col, legendgroup=col,
                 line=dict(color=color, width=3, shape="spline", smoothing=0.4),
                 fill="tozeroy", fillcolor=fill_color,
-                hovertemplate="<b>%{fullData.name}</b><br>%{x|%d %b}<br>%{y:.0f} km<extra></extra>",
+                customdata=customdata,
+                hovertemplate=(
+                    "<b>%{fullData.name}</b><br>%{x|%d %b}<br>"
+                    "Actual: %{y:.0f} km<br>"
+                    "Scheduled: %{customdata[0]:.0f} km<br>"
+                    "Days: %{customdata[1]:.0f}<extra></extra>"
+                ),
             ))
     
             # Markers on top (separate trace so fill doesn't clip them)
