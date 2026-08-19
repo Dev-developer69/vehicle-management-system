@@ -27,46 +27,46 @@ def fuel_label(bus_number: str) -> str:
     return "CNG" if bus_number == "AT7389" else "Diesel"
 
 
-def _render_km_merged_table(display_df: pd.DataFrame, pairs: list):
+def _render_km_merged_table(display_df: pd.DataFrame, groups: list):
     """Renders display_df as an HTML table where Scheduled KM / Actual KM cells
-    for each (d1, d2) pair are visually merged (rowspan) into a single combined
-    value, Excel-style — every other column stays per-row/unchanged.
-    Multiple non-overlapping pairs are supported at once.
+    for each group of 2+ dates are visually merged (rowspan) into a single
+    combined value, Excel-style — every other column stays per-row/unchanged.
+    Multiple non-overlapping groups (of any size) supported at once.
     Original row order (jaisa display_df me hai, e.g. descending date) ko
-    zyada se zyada preserve karta hai — sirf jab dono dates already adjacent
-    nahi hoti, tabhi minimum movement karta hai."""
+    zyada se zyada preserve karta hai — group ke members already adjacent
+    hote hain to kuch nahi hilta, warna sirf unhi rows ko ek saath la kar
+    minimum movement karta hai."""
     rows = display_df.to_dict("records")
 
     rowspan_at = {}   # idx -> merge info, is row se rowspan shuru hoga
-    skip_at    = set()  # doosri row ke indices (KM cells yaha skip honge)
+    skip_at    = set()  # baaki group-member rows ke indices (KM cells yaha skip honge)
 
-    for d1, d2 in pairs:
-        idx1 = next((i for i, r in enumerate(rows) if r["Date"] == d1), None)
-        idx2 = next((i for i, r in enumerate(rows) if r["Date"] == d2), None)
-        if idx1 is None or idx2 is None:
+    for group in groups:
+        dates = group["dates"] if isinstance(group, dict) else group
+        idxs = [i for i, r in enumerate(rows) if r["Date"] in dates]
+        if len(idxs) != len(dates) or len(idxs) < 2:
             continue
+        idxs.sort()
+        insert_at = idxs[0]
 
-        low, high = (idx1, idx2) if idx1 < idx2 else (idx2, idx1)
-        if high != low + 1:
-            # Sirf jitni zaroorat hai utna hi move karo — 'high' wali row ko
-            # 'low' ke turant baad le aao, baaki poori list ka order waisa hi rahega
-            r_high = rows.pop(high)
-            rows.insert(low + 1, r_high)
-            high = low + 1
+        # Group ke saare members ko ek contiguous block me la do (unka aapas
+        # ka relative order preserve karte hue), taaki rowspan lag sake.
+        extracted = [rows[i] for i in idxs]
+        for i in sorted(idxs, reverse=True):
+            rows.pop(i)
+        rows[insert_at:insert_at] = extracted
 
-        date_top    = rows[low]["Date"]
-        date_bottom = rows[high]["Date"]
-        sch_top     = pd.to_numeric(rows[low]["Scheduled KM"], errors="coerce")
-        act_top     = pd.to_numeric(rows[low]["Actual KM"], errors="coerce")
-        sch_bottom  = pd.to_numeric(rows[high]["Scheduled KM"], errors="coerce")
-        act_bottom  = pd.to_numeric(rows[high]["Actual KM"], errors="coerce")
+        sch_vals = [pd.to_numeric(r["Scheduled KM"], errors="coerce") for r in extracted]
+        act_vals = [pd.to_numeric(r["Actual KM"], errors="coerce") for r in extracted]
+        date_vals = [r["Date"] for r in extracted]
 
-        rowspan_at[low] = {
-            "sch_sum": sch_top + sch_bottom, "act_sum": act_top + act_bottom,
-            "d1": date_top, "d2": date_bottom,
-            "sch1": sch_top, "act1": act_top, "sch2": sch_bottom, "act2": act_bottom,
+        rowspan_at[insert_at] = {
+            "sch_sum": sum(sch_vals), "act_sum": sum(act_vals),
+            "dates": date_vals, "sch_vals": sch_vals, "act_vals": act_vals,
+            "span": len(extracted),
         }
-        skip_at.add(high)
+        for i in range(insert_at + 1, insert_at + len(extracted)):
+            skip_at.add(i)
 
     cols = list(display_df.columns)
     html = ["<div style='overflow-x:auto;border-radius:8px;border:1px solid #2D2D5E;'>"
@@ -83,13 +83,14 @@ def _render_km_merged_table(display_df: pd.DataFrame, pairs: list):
             if c in ("Scheduled KM", "Actual KM") and i in rowspan_at:
                 info = rowspan_at[i]
                 val = info["sch_sum"] if c == "Scheduled KM" else info["act_sum"]
-                tooltip = (
-                    f"{info['d1']} — Sch {info['sch1']:.0f} / Actual {info['act1']:.0f}\n"
-                    f"{info['d2']} — Sch {info['sch2']:.0f} / Actual {info['act2']:.0f}\n"
-                    f"Total — Sch {info['sch_sum']:.0f} / Actual {info['act_sum']:.0f}"
-                )
+                lines = [
+                    f"{d} — Sch {s:.0f} / Actual {a:.0f}"
+                    for d, s, a in zip(info["dates"], info["sch_vals"], info["act_vals"])
+                ]
+                lines.append(f"Total — Sch {info['sch_sum']:.0f} / Actual {info['act_sum']:.0f}")
+                tooltip = "\n".join(lines)
                 html.append(
-                    f"<td rowspan='2' title=\"{tooltip}\" style='border:1px solid #2D2D5E;padding:8px;text-align:center;"
+                    f"<td rowspan='{info['span']}' title=\"{tooltip}\" style='border:1px solid #2D2D5E;padding:8px;text-align:center;"
                     f"vertical-align:middle;background:{row_bg};color:#eee;cursor:help;'>{val:,.0f}</td>"
                 )
             elif c in ("Scheduled KM", "Actual KM") and i in skip_at:
@@ -102,8 +103,8 @@ def _render_km_merged_table(display_df: pd.DataFrame, pairs: list):
 
     html.append("</tbody></table></div>")
     st.markdown("".join(html), unsafe_allow_html=True)
-    pairs_text = ", ".join(f"{d1} + {d2}" for d1, d2 in pairs)
-    st.caption(f"🔗 Combined: {pairs_text}")
+    groups_text = ", ".join(" + ".join(g["dates"] if isinstance(g, dict) else g) for g in groups)
+    st.caption(f"🔗 Combined: {groups_text}")
 
 
 # ──────────────────────────────────────────────
@@ -546,67 +547,61 @@ def editable_grid(bus_number: str):
         display_df = display_df[["Date", "Status", "Driver Name", "Conductor Name",
                                   "Scheduled KM", "Actual KM", "Diesel", "Diesel KM",
                                   "Avg", "Income", "Gross Income", "Remark", "Next"]]
-        # ── Do din ke KM combine karo (Excel jaisa merge cell) — same period me kayi pairs ho sakte hain ──
+        # ── Kayi din ke KM combine karo (Excel jaisa merge cell) — same period me kayi groups ho sakte hain ──
         date_options = display_df["Date"].tolist()
         combine_key = f"km_combines_{bus_number}"
         if combine_key not in st.session_state:
             st.session_state[combine_key] = get_km_combines(bus_number)
-        # sirf wahi pairs rakho jinki dono dates is loaded period me maujood hain
-        active_pairs = [
-            (d1, d2) for d1, d2 in st.session_state[combine_key]
-            if d1 in date_options and d2 in date_options
+        # sirf wahi groups rakho jinki saari dates is loaded period me maujood hain
+        active_groups = [
+            g for g in st.session_state[combine_key]
+            if all(d in date_options for d in g["dates"])
         ]
 
-        if active_pairs:
-            _render_km_merged_table(display_df, active_pairs)
+        if active_groups:
+            _render_km_merged_table(display_df, active_groups)
         else:
             st.dataframe(display_df, width='stretch', hide_index=True)
 
-        used_dates = {d for pair in active_pairs for d in pair}
+        used_dates = {d for g in active_groups for d in g["dates"]}
         available_dates = [d for d in date_options if d not in used_dates]
 
-        if active_pairs or len(available_dates) >= 2:
-            with st.expander("🔗 2 Din Ka KM Combine Karo"):
+        if active_groups or len(available_dates) >= 2:
+            with st.expander("🔗 Kayi Din Ka KM Combine Karo"):
                 if len(available_dates) >= 2:
-                    cc1, cc2 = st.columns(2)
-                    with cc1:
-                        day1 = st.selectbox("Pehla din", options=available_dates, key=f"combine_d1_{bus_number}")
-                    with cc2:
-                        day2 = st.selectbox(
-                            "Doosra din", options=[d for d in available_dates if d != day1],
-                            key=f"combine_d2_{bus_number}"
-                        )
-                    if st.button("Combine Karo", key=f"combine_btn_{bus_number}"):
-                        pair = tuple(sorted([day1, day2]))
-                        save_km_combine(bus_number, pair[0], pair[1])
+                    selected_dates = st.multiselect(
+                        "Combine karne ke liye dates chuno (2 ya usse zyada)",
+                        options=available_dates, key=f"combine_multi_{bus_number}",
+                    )
+                    if st.button("Combine Karo", key=f"combine_btn_{bus_number}",
+                                 disabled=len(selected_dates) < 2):
+                        save_km_combine(bus_number, selected_dates)
                         st.session_state[combine_key] = get_km_combines(bus_number)
                         st.rerun()
+                    if 0 < len(selected_dates) < 2:
+                        st.caption("⚠️ Kam se kam 2 dates chuno.")
 
-                if active_pairs:
-                    st.caption("Combined pairs: (hover karo details ke liye)")
-                    for d1, d2 in active_pairs:
-                        row1 = display_df[display_df["Date"] == d1]
-                        row2 = display_df[display_df["Date"] == d2]
-                        sch1 = row1["Scheduled KM"].iloc[0] if not row1.empty else 0
-                        act1 = row1["Actual KM"].iloc[0] if not row1.empty else 0
-                        sch2 = row2["Scheduled KM"].iloc[0] if not row2.empty else 0
-                        act2 = row2["Actual KM"].iloc[0] if not row2.empty else 0
-                        sch_sum = pd.to_numeric(sch1, errors="coerce") + pd.to_numeric(sch2, errors="coerce")
-                        act_sum = pd.to_numeric(act1, errors="coerce") + pd.to_numeric(act2, errors="coerce")
-                        tooltip = (
-                            f"{d1} — Sch {sch1} / Actual {act1}\n"
-                            f"{d2} — Sch {sch2} / Actual {act2}\n"
-                            f"Total — Sch {sch_sum:.0f} / Actual {act_sum:.0f}"
-                        )
+                if active_groups:
+                    st.caption("Combined groups: (hover karo details ke liye)")
+                    for g in active_groups:
+                        dates = g["dates"]
+                        rows_g = [display_df[display_df["Date"] == d] for d in dates]
+                        sch_vals = [pd.to_numeric(r["Scheduled KM"].iloc[0], errors="coerce") if not r.empty else 0 for r in rows_g]
+                        act_vals = [pd.to_numeric(r["Actual KM"].iloc[0], errors="coerce") if not r.empty else 0 for r in rows_g]
+                        sch_sum = sum(sch_vals)
+                        act_sum = sum(act_vals)
+                        lines = [f"{d} — Sch {s:.0f} / Actual {a:.0f}" for d, s, a in zip(dates, sch_vals, act_vals)]
+                        lines.append(f"Total — Sch {sch_sum:.0f} / Actual {act_sum:.0f}")
+                        tooltip = "\n".join(lines)
                         rc1, rc2 = st.columns([4, 1])
                         with rc1:
                             st.markdown(
-                                f"<span title=\"{tooltip}\" style='cursor:help;'>🔗 {d1} + {d2}</span>",
+                                f"<span title=\"{tooltip}\" style='cursor:help;'>🔗 {' + '.join(dates)}</span>",
                                 unsafe_allow_html=True,
                             )
                         with rc2:
-                            if st.button("❌ Hatao", key=f"uncombine_btn_{bus_number}_{d1}_{d2}"):
-                                delete_km_combine(bus_number, d1, d2)
+                            if st.button("❌ Hatao", key=f"uncombine_btn_{bus_number}_{g['id']}"):
+                                delete_km_combine(bus_number, g["id"])
                                 st.session_state[combine_key] = get_km_combines(bus_number)
                                 st.rerun()
 
