@@ -125,7 +125,7 @@ def page_bg(hex_color: str):
     """home_layout() ke baad call karo — is page ka background alag color me override kar deta hai."""
     st.markdown(f"""
         <style>
-            .stApp {{ background: {hex_color} !important; }}
+            .stApp {{ background: {hex_color} !important; color: #F0F0F0 !important; }}
         </style>
     """, unsafe_allow_html=True)
 
