@@ -189,7 +189,7 @@ def vehicle_records():
     home_layout()
     st.markdown("""
         <style>
-            .stApp { background: #1B3B6F !important; }
+            .stApp { background: #1B3B6F !important; color: #F0F0F0 !important; }
         </style>
     """, unsafe_allow_html=True)
 
@@ -450,6 +450,10 @@ def quick_overview(bus_list: list):
             index="date", columns="bus_number",
             values="days_count", aggfunc="sum"
         ).sort_index()
+        pivot_labels = df.pivot_table(
+            index="date", columns="bus_number",
+            values="days_label", aggfunc="last"
+        ).sort_index()
 
         fig = go.Figure()
 
@@ -460,7 +464,8 @@ def quick_overview(bus_list: list):
                 continue
             sched_series = pivot_sched[col].reindex(series.index).fillna(0)
             days_series  = pivot_days[col].reindex(series.index).fillna(1)
-            customdata   = list(zip(sched_series.values, days_series.values))
+            label_series = pivot_labels[col].reindex(series.index).fillna("")
+            customdata   = list(zip(sched_series.values, days_series.values, label_series.values))
 
             # convert hex to rgba for soft fill
             h = color.lstrip("#")
@@ -478,7 +483,7 @@ def quick_overview(bus_list: list):
                     "<b>%{fullData.name}</b><br>%{x|%d %b}<br>"
                     "Actual: %{y:.0f} km<br>"
                     "Scheduled: %{customdata[0]:.0f} km<br>"
-                    "Days: %{customdata[1]:.0f}<extra></extra>"
+                    "Days: %{customdata[1]:.0f} (%{customdata[2]})<extra></extra>"
                 ),
             ))
     
