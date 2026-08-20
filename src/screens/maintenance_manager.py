@@ -57,7 +57,7 @@ def _maintenance_home():
     st.markdown("""
         <style>
             .block-container { padding-top: 1rem !important; }
-            .stApp { background: #2C3E50 !important; }
+            .stApp { background: #2C3E50 !important; color: #F0F0F0 !important; }
         </style>
     """, unsafe_allow_html=True)
     st.markdown("### 🔧 Maintenance Manager")
@@ -174,7 +174,7 @@ def _maintenance_vehicle_page():
     background()
     st.markdown("""
         <style>
-            .stApp { background: #2C3E50 !important; }
+            .stApp { background: #2C3E50 !important; color: #F0F0F0 !important; }
         </style>
     """, unsafe_allow_html=True)
     bus_number = st.session_state.get("maintenance_selected_vehicle")
