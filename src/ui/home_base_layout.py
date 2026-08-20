@@ -43,6 +43,11 @@ def home_layout():
                 background: #0D7377 !important;
             }
 
+            .stApp, .stApp p, .stApp span, .stApp label, .stApp li,
+            .stApp h1, .stApp h2, .stApp h5, .stApp h6 {
+                color: #F0F0F0 !important;
+            }
+
             #MainMenu, header {
                 visibility: hidden;
     }
@@ -137,6 +142,11 @@ def background():
             .stApp {
                 background: #12122A !important;
                 overflow-y: auto !important;
+            }
+
+            .stApp, .stApp p, .stApp span, .stApp label, .stApp li,
+            .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6 {
+                color: #F0F0F0 !important;
             }
 
             #MainMenu, header {
