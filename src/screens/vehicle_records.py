@@ -7,7 +7,11 @@ from datetime import date
 from src.ui.home_base_layout import home_layout
 from src.database.auth import get_accessible_vehicles
 from src.database.config import supabase
-from src.database.db import get_diesel_rate_payment, get_km_combines
+from src.database.db import get_diesel_rate_payment, get_km_combines, get_diesel_records_raw
+from src.ml.mileage_anomaly import (
+    compute_mileage_baseline, mileage_zscore, mileage_alert_status, baseline_summary_rows,
+    FALLBACK_MIN_MILEAGE, MIN_HISTORY_FOR_ML,
+)
 from src.ui.excel_format import shift_period_back, _get_date_range
 
 VEHICLE_MAP = {
@@ -18,7 +22,7 @@ VEHICLE_MAP = {
     "AT7389": "page_AT7389",
 }
 
-MIN_NORMAL_MILEAGE = 4.0
+# FALLBACK_MIN_MILEAGE aur MIN_HISTORY_FOR_ML ab src/ml/mileage_anomaly.py se import hote hain
 DIESEL_PRICE_PER_L = 95.69
 
 COLORS = ["#14A085", "#7B8CFF", "#FFB347", "#FF5252", "#00D4FF", "#FF69B4"]
@@ -361,15 +365,19 @@ def quick_overview(bus_list: list):
     df["diesel_per_km"]  = (df["diesel"] / df["actual_km"].replace(0, float("nan"))).round(3)
     df["km_per_litre"]   = (df["diesel_km"] / df["diesel"].replace(0, float("nan"))).round(2)
 
-    def _alert_status(row):
-        if row["diesel"] > 0 and row["actual_km"] == 0:
-            return "🚨 Red flag"
-        if pd.notna(row["km_per_litre"]) and row["km_per_litre"] < MIN_NORMAL_MILEAGE:
-            return "⚠️ Check"
-        if row["diesel"] > 0:
-            return "✅ Normal"
-        return "—"
-    df["alert_status"] = df.apply(_alert_status, axis=1)
+    # ── Mileage anomaly detection — src/ml/mileage_anomaly.py karta hai, yahan sirf call ──
+    mileage_baseline = compute_mileage_baseline(
+        get_diesel_records_raw(list(df["bus_number"].unique()))
+    )
+
+    df["mileage_zscore"] = df.apply(
+        lambda r: mileage_zscore(r["bus_number"], r["km_per_litre"], mileage_baseline), axis=1
+    )
+    df["alert_status"] = df.apply(
+        lambda r: mileage_alert_status(
+            r["bus_number"], r["actual_km"], r["diesel"], r["km_per_litre"], mileage_baseline
+        ), axis=1
+    )
 
     summary = df.groupby("bus_number").agg(
         Actual_KM     =("actual_km",      "sum"),
@@ -853,12 +861,12 @@ Max 2 bullets per section. Use rupee amounts.
 
     with tab7:
         alert_df = df[df["diesel"] > 0][
-            ["date_str", "bus_number", "driver_name", "actual_km", "diesel_km", "diesel", "km_per_litre", "alert_status"]
+            ["date_str", "bus_number", "driver_name", "actual_km", "diesel_km", "diesel", "km_per_litre", "mileage_zscore", "alert_status"]
         ].rename(columns={
             "date_str":    "Date",      "bus_number":  "Bus",
             "driver_name": "Driver",    "actual_km":   "Actual KM",
             "diesel_km":   "Diesel KM", "diesel":      "Diesel (L)",
-            "km_per_litre":"Mileage (KM/L)", "alert_status": "Status",
+            "km_per_litre":"Mileage (KM/L)", "mileage_zscore": "Z-score", "alert_status": "Status",
         }).sort_values("Date")
 
         red_flags = alert_df[alert_df["Status"] == "🚨 Red flag"]
@@ -871,9 +879,16 @@ Max 2 bullets per section. Use rupee amounts.
 
         if len(red_flags) > 0:
             st.error(f"{len(red_flags)} din aisa hain jaha diesel liya gaya lekin gaadi chali nahi!")
+
+        with st.expander("📊 Har bus ka seekha hua mileage baseline"):
+            if mileage_baseline:
+                st.dataframe(pd.DataFrame(baseline_summary_rows(mileage_baseline)), width='stretch', hide_index=True)
+            else:
+                st.caption("Abhi tak kisi bus ka diesel data nahi mila.")
+
         st.dataframe(alert_df, width='stretch', hide_index=True)
         _show_insight(f"""
-Mileage threshold: {MIN_NORMAL_MILEAGE} km/L
+Anomaly detection: per-bus ML baseline (mean ± std deviation), z-score <= -1.5 flags Check, <= -2.5 flags Red flag. Naye bus fallback reference: {FALLBACK_MIN_MILEAGE} km/L tak {MIN_HISTORY_FOR_ML} records na ho jaayein.
 Red flags (diesel taken, 0 KM): {len(red_flags)}
 Low mileage days: {len(checks)}
 Alert details: {alert_df[['Bus','Driver','Diesel KM','Diesel (L)','Mileage (KM/L)','Status']].head(5).to_dict('records')}
