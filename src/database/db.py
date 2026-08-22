@@ -784,3 +784,18 @@ def get_km_between(bus_number: str, start_date, end_date) -> int:
         query = query.lte("date", str(end_date))
     records = query.execute()
     return sum(r["actual_km"] or 0 for r in records.data)
+
+
+def get_diesel_records_raw(bus_numbers: list) -> list:
+    """Diesel-wale (diesel > 0) records ka raw data fetch karta hai un buses ke
+    liye — poora available history (sirf loaded period nahi). Stats/ML
+    computation is data pe src/ml/mileage_anomaly.py karta hai, taaki
+    database layer aur ML logic alag-alag rahein."""
+    if not bus_numbers:
+        return []
+    res = supabase.table("vehicle_records") \
+        .select("bus_number, diesel, diesel_km") \
+        .in_("bus_number", bus_numbers) \
+        .gt("diesel", 0) \
+        .execute()
+    return res.data or []
