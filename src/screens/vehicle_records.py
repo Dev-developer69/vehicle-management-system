@@ -7,11 +7,21 @@ from datetime import date
 from src.ui.home_base_layout import home_layout
 from src.database.auth import get_accessible_vehicles
 from src.database.config import supabase
-from src.database.db import get_diesel_rate_payment, get_km_combines, get_diesel_records_raw
+from src.database.db import (
+    get_diesel_rate_payment, get_km_combines, get_diesel_records_raw,
+    get_income_records_raw, get_dated_diesel_records_raw, get_maintenance_records,
+)
 from src.ml.mileage_anomaly import (
     compute_mileage_baseline, mileage_zscore, mileage_alert_status, baseline_summary_rows,
     FALLBACK_MIN_MILEAGE, MIN_HISTORY_FOR_ML,
 )
+from src.ml.driver_clustering import cluster_drivers
+from src.ml.income_anomaly import (
+    compute_income_baseline, income_zscore, income_alert_status, income_baseline_summary_rows,
+)
+from src.ml.diesel_forecast import forecast_diesel, forecast_summary_rows
+from src.ml.multivariate_anomaly import detect_multivariate_anomalies
+from src.ml.health_score import compute_fleet_health
 from src.ui.excel_format import shift_period_back, _get_date_range
 
 VEHICLE_MAP = {
@@ -178,6 +188,31 @@ def _render_chart(fig, key: str):
         fig, width='stretch', key=key,
         config={"displayModeBar": False, "responsive": True},
     )
+
+
+def _maintenance_overdue_days(bus_number: str) -> int:
+    """Health Score ke liye — bus ka koi bhi service kitne din se overdue hai
+    (sirf Next Due Date based check, lightweight — poora KM-based check
+    src/ml/maintenance_predictor.py + Maintenance Manager page me hota hai)."""
+    try:
+        records_df = get_maintenance_records(bus_number)
+    except Exception:
+        return 0
+    if records_df.empty:
+        return 0
+    latest_per_type = records_df.groupby("Service Type")["Date"].max().to_dict()
+    max_overdue = 0
+    for _, r in records_df.iterrows():
+        if r["Date"] != latest_per_type[r["Service Type"]]:
+            continue
+        if r["Next Due Date"]:
+            try:
+                nd = pd.to_datetime(r["Next Due Date"]).date()
+                overdue = (date.today() - nd).days
+                max_overdue = max(max_overdue, overdue)
+            except (ValueError, TypeError):
+                pass
+    return max_overdue
 
 
 def vehicle_records():
@@ -377,6 +412,14 @@ def quick_overview(bus_list: list):
         lambda r: mileage_alert_status(
             r["bus_number"], r["actual_km"], r["diesel"], r["km_per_litre"], mileage_baseline
         ), axis=1
+    )
+
+    # ── Income anomaly detection — src/ml/income_anomaly.py karta hai ──
+    income_baseline = compute_income_baseline(
+        get_income_records_raw(list(df["bus_number"].unique()))
+    )
+    df["income_zscore"] = df.apply(
+        lambda r: income_zscore(r["bus_number"], r["income_per_km"], income_baseline), axis=1
     )
 
     summary = df.groupby("bus_number").agg(
@@ -736,6 +779,7 @@ Max 2 bullets per section. Be specific with numbers.
         driver_perf["Avg_Efficiency"] = driver_perf["Avg_Efficiency"].round(1)
         driver_perf = driver_perf.sort_values("Total_KM", ascending=False)
         driver_perf.insert(0, "Rank", range(1, len(driver_perf) + 1))
+        driver_perf = cluster_drivers(driver_perf)
         st.dataframe(driver_perf, width='stretch', hide_index=True)
 
         bar_colors = [COLORS[i % len(COLORS)] for i in range(len(driver_perf))]
@@ -801,6 +845,21 @@ Max 2 bullets per section. Mention driver names specifically.
                 mileage.columns = ["Bus", "KM per Litre"]
                 st.markdown("**Mileage (KM/L) per Bus:**")
                 st.dataframe(mileage, width='stretch', hide_index=True)
+
+                # ── Diesel consumption forecast — agle 15 din ka expected diesel ──
+                diesel_forecast = forecast_diesel(
+                    get_dated_diesel_records_raw(list(df["bus_number"].unique())),
+                    forecast_days=15,
+                )
+                if diesel_forecast:
+                    st.markdown("**🔮 Agle 15 Din Ka Diesel Forecast:**")
+                    DIESEL_RATE_PER_LITRE = 95.69
+                    st.dataframe(
+                        pd.DataFrame(forecast_summary_rows(diesel_forecast, rate_per_litre=DIESEL_RATE_PER_LITRE)),
+                        width='stretch', hide_index=True,
+                    )
+                    total_forecast_litres = sum(f["forecast_litres"] for f in diesel_forecast.values())
+                    st.caption(f"Total fleet forecast: ~{total_forecast_litres:.0f} L (~₹{total_forecast_litres * DIESEL_RATE_PER_LITRE:,.0f}) agle 15 din ke liye")
 
             if has_income:
                 st.markdown("**💰 Income — Bus wise**")
@@ -886,6 +945,81 @@ Max 2 bullets per section. Use rupee amounts.
             else:
                 st.caption("Abhi tak kisi bus ka diesel data nahi mila.")
 
+        # ── Mileage trend + baseline band overlay — line kab band se bahar gayi, visually dikhta hai ──
+        buses_with_baseline = [b for b in alert_df["Bus"].unique() if b in mileage_baseline and mileage_baseline[b]["count"] >= MIN_HISTORY_FOR_ML]
+        if buses_with_baseline:
+            st.markdown("**📉 Mileage Trend vs Learned Baseline**")
+            band_fig = go.Figure()
+            for i, bus in enumerate(buses_with_baseline):
+                bus_data = alert_df[alert_df["Bus"] == bus].sort_values("Date")
+                base = mileage_baseline[bus]
+                mean, std = base["mean"], base["std"]
+                color = bus_color_map.get(str(bus), COLORS[i % len(COLORS)])
+
+                # Shaded band: mean ± 1 std deviation
+                band_fig.add_trace(go.Scatter(
+                    x=list(bus_data["Date"]) + list(bus_data["Date"])[::-1],
+                    y=[mean + std] * len(bus_data) + [mean - std] * len(bus_data),
+                    fill="toself", fillcolor="rgba(255,255,255,0.06)",
+                    line=dict(color="rgba(0,0,0,0)"), showlegend=False,
+                    hoverinfo="skip", name=f"{bus} band",
+                ))
+                # Actual mileage line
+                band_fig.add_trace(go.Scatter(
+                    x=bus_data["Date"], y=bus_data["Mileage (KM/L)"],
+                    mode="lines+markers", name=bus,
+                    line=dict(color=color, width=2),
+                    marker=dict(
+                        size=7,
+                        color=["#FF5252" if s == "🚨 Red flag" else "#FFB347" if s == "⚠️ Check" else color
+                               for s in bus_data["Status"]],
+                    ),
+                    hovertemplate="<b>%{fullData.name}</b><br>%{x}<br>%{y:.2f} km/L<extra></extra>",
+                ))
+            band_fig.update_layout(
+                xaxis_title="Date", yaxis_title="Mileage (KM/L)",
+                margin=dict(t=20, b=10, l=10, r=10),
+            )
+            _render_chart(_plotly_dark(band_fig), key="qo_chart_mileage_band")
+            st.caption("Halki shaded band = bus ka normal range (mean ± 1 std dev). Red/orange dots = flagged din.")
+
+        # ── Vehicle Health Score — mileage + income + maintenance ek saath combine ──
+        st.markdown("**🏥 Fleet Health Score**")
+        mileage_z_by_bus = df.groupby("bus_number")["mileage_zscore"].mean().to_dict()
+        income_z_by_bus  = df.groupby("bus_number")["income_zscore"].mean().to_dict()
+        maintenance_overdue_by_bus = {
+            bus: _maintenance_overdue_days(bus) for bus in df["bus_number"].unique()
+        }
+        fleet_health = compute_fleet_health(
+            list(df["bus_number"].unique()), mileage_z_by_bus, income_z_by_bus, maintenance_overdue_by_bus
+        )
+        health_cols = st.columns(len(fleet_health)) if fleet_health else []
+        for i, (bus, h) in enumerate(fleet_health.items()):
+            with health_cols[i]:
+                st.metric(bus, f"{h['score']}/100", h["label"])
+                for reason in h["reasons"][:2]:
+                    st.caption(f"• {reason}")
+
+        # ── Multivariate Anomaly Detection — mileage + income + KM ek saath dekh kar pattern pakadta hai ──
+        st.markdown("**🧬 Combined (Multivariate) Anomaly Detection**")
+        st.caption("Mileage + Income + KM ek saath dekh kar pattern anomaly pakadta hai (Isolation Forest)")
+        mv_input = df[df["actual_km"] > 0][
+            ["bus_number", "date_str", "driver_name", "km_per_litre", "income_per_km", "actual_km"]
+        ].copy()
+        mv_result = detect_multivariate_anomalies(mv_input)
+        mv_flags = mv_result[mv_result["is_anomaly"] == True].sort_values("anomaly_score")
+        if not mv_flags.empty:
+            st.dataframe(
+                mv_flags.rename(columns={
+                    "bus_number": "Bus", "date_str": "Date", "driver_name": "Driver",
+                    "km_per_litre": "Mileage (KM/L)", "income_per_km": "Income/KM",
+                    "actual_km": "Actual KM", "anomaly_score": "Anomaly Score",
+                })[["Date", "Bus", "Driver", "Mileage (KM/L)", "Income/KM", "Actual KM", "Anomaly Score"]],
+                width='stretch', hide_index=True,
+            )
+        else:
+            st.caption("Koi combined anomaly nahi mila (ya kaafi records nahi hain kisi bus ke paas abhi ML ke liye).")
+
         st.dataframe(alert_df, width='stretch', hide_index=True)
         _show_insight(f"""
 Anomaly detection: per-bus ML baseline (mean ± std deviation), z-score <= -1.5 flags Check, <= -2.5 flags Red flag. Naye bus fallback reference: {FALLBACK_MIN_MILEAGE} km/L tak {MIN_HISTORY_FOR_ML} records na ho jaayein.
@@ -962,6 +1096,38 @@ Analyze conductor revenue efficiency and respond in this exact format:
 Max 2 bullets per section. Name conductors specifically.
 """)
             st.dataframe(ipk_conductor, width='stretch', hide_index=True)
+
+        # ── Income anomaly detection (baseline pehle se compute ho chuka hai upar) ──
+        day_income = df[df["actual_km"] > 0][
+            ["date_str", "bus_number", "driver_name", "actual_km", "income", "income_per_km"]
+        ].copy()
+        day_income["Alert"] = day_income.apply(
+            lambda r: income_alert_status(r["bus_number"], r["actual_km"], r["income_per_km"], income_baseline),
+            axis=1,
+        )
+        income_flags = day_income[day_income["Alert"].isin(["🚨 Red flag", "⚠️ Check"])]
+
+        st.markdown("#### 🔍 Income Anomaly Detection")
+        ic1, ic2 = st.columns(2)
+        ic1.metric("🚨 Red flags (revenue leakage suspect)", len(day_income[day_income["Alert"] == "🚨 Red flag"]))
+        ic2.metric("⚠️ Low-income days",                     len(day_income[day_income["Alert"] == "⚠️ Check"]))
+
+        with st.expander("📊 Har bus ka seekha hua income baseline"):
+            if income_baseline:
+                st.dataframe(pd.DataFrame(income_baseline_summary_rows(income_baseline)), width='stretch', hide_index=True)
+            else:
+                st.caption("Abhi tak kaafi income data nahi mila.")
+
+        if not income_flags.empty:
+            st.dataframe(
+                income_flags.rename(columns={
+                    "date_str": "Date", "bus_number": "Bus", "driver_name": "Driver",
+                    "actual_km": "Actual KM", "income": "Income", "income_per_km": "Income/KM",
+                }),
+                width='stretch', hide_index=True,
+            )
+        else:
+            st.caption("Koi income anomaly nahi mila is period me.")
 
     with tab9:
         total_income   = df["income"].sum()
