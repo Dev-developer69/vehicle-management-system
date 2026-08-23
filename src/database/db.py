@@ -1,4 +1,5 @@
 import pandas as pd
+import streamlit as st
 from src.database.config import supabase, supabase_admin
 
 
@@ -786,6 +787,25 @@ def get_km_between(bus_number: str, start_date, end_date) -> int:
     return sum(r["actual_km"] or 0 for r in records.data)
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_avg_daily_km(bus_number: str, days: int = 30) -> float:
+    """Bus ka average daily KM (last N din se) — predictive maintenance ke
+    liye chahiye (src/ml/maintenance_predictor.py)."""
+    from datetime import date, timedelta
+    start = date.today() - timedelta(days=days)
+    res = supabase.table("vehicle_records") \
+        .select("actual_km") \
+        .eq("bus_number", bus_number) \
+        .gte("date", str(start)) \
+        .execute()
+    rows = res.data or []
+    if not rows:
+        return 0.0
+    total = sum(r["actual_km"] or 0 for r in rows)
+    return round(total / len(rows), 1) if rows else 0.0
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_diesel_records_raw(bus_numbers: list) -> list:
     """Diesel-wale (diesel > 0) records ka raw data fetch karta hai un buses ke
     liye — poora available history (sirf loaded period nahi). Stats/ML
@@ -797,5 +817,35 @@ def get_diesel_records_raw(bus_numbers: list) -> list:
         .select("bus_number, diesel, diesel_km") \
         .in_("bus_number", bus_numbers) \
         .gt("diesel", 0) \
+        .execute()
+    return res.data or []
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_income_records_raw(bus_numbers: list) -> list:
+    """Income-wale records ka raw data fetch karta hai un buses ke liye —
+    poora available history. Stats/ML computation src/ml/income_anomaly.py
+    karta hai."""
+    if not bus_numbers:
+        return []
+    res = supabase.table("vehicle_records") \
+        .select("bus_number, income, actual_km") \
+        .in_("bus_number", bus_numbers) \
+        .gt("actual_km", 0) \
+        .execute()
+    return res.data or []
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_dated_diesel_records_raw(bus_numbers: list) -> list:
+    """Date ke saath diesel records — forecasting ke liye chahiye
+    (src/ml/diesel_forecast.py trend nikalta hai)."""
+    if not bus_numbers:
+        return []
+    res = supabase.table("vehicle_records") \
+        .select("bus_number, date, diesel") \
+        .in_("bus_number", bus_numbers) \
+        .gt("diesel", 0) \
+        .order("date") \
         .execute()
     return res.data or []
