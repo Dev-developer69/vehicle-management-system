@@ -6,8 +6,9 @@ from src.ui.home_base_layout import home_layout, background
 
 from src.database.db import (
     get_maintenance_records, save_maintenance_record, delete_maintenance_record,
-    get_previous_service_date, get_km_between,
+    get_previous_service_date, get_km_between, get_avg_daily_km,
 )
+from src.ml.maintenance_predictor import predict_service_due
 from src.database.auth import get_accessible_vehicles, is_admin_or_manager
 
 BUS_NUMBERS = ["0303", "2350", "7389", "3131", "AT7389"]
@@ -282,6 +283,33 @@ def _maintenance_vehicle_page():
     display_df = pd.DataFrame(display_rows)
     styled = display_df.style.apply(_highlight_due, axis=1)
     st.dataframe(styled, width='stretch', hide_index=True)
+
+    # ── Predictive Maintenance — asli usage-rate se predict karta hai kab due hoga ──
+    st.markdown("### 🔮 Predicted Service Due (ML)")
+    avg_daily_km = get_avg_daily_km(bus_number, days=30)
+    st.caption(f"Bus ka average usage: {avg_daily_km:.0f} km/din (last 30 din)")
+
+    pred_rows = []
+    for _, r in records_df.iterrows():
+        is_latest = (r["Date"] == latest_per_type[r["Service Type"]])
+        if not is_latest:
+            continue  # sirf "ongoing" service type ke liye predict karo
+        _, km_since = _compute_row_km(bus_number, r["Service Type"], r["Date"], is_latest)
+        pred = predict_service_due(r["Next Due KM"], r["Next Due Date"], km_since, avg_daily_km)
+        if pred:
+            pred_rows.append({
+                "Service Type":       r["Service Type"],
+                "Predicted Due Date": pred["predicted_due_date"],
+                "Days Remaining":     pred["days_remaining"],
+                "KM Remaining":       pred["km_remaining"] if pred["km_remaining"] is not None else "—",
+                "Basis":              pred["basis"],
+                "Urgency":            pred["urgency"],
+            })
+
+    if pred_rows:
+        st.dataframe(pd.DataFrame(pred_rows), width='stretch', hide_index=True)
+    else:
+        st.caption("Prediction ke liye 'Next Due KM' ya 'Next Due Date' set karo kisi record me.")
 
     # ── Delete record ──
     with st.expander("🗑️ Delete a record"):
