@@ -35,14 +35,20 @@ def _render_km_merged_table(display_df: pd.DataFrame, groups: list):
     Original row order (jaisa display_df me hai, e.g. descending date) ko
     zyada se zyada preserve karta hai — group ke members already adjacent
     hote hain to kuch nahi hilta, warna sirf unhi rows ko ek saath la kar
-    minimum movement karta hai."""
+    minimum movement karta hai.
+    Agar kisi purani/duplicate group ki wajah se dates OVERLAP karte hain
+    (ek hi date do groups me ho), to baad wali overlapping group ko skip
+    kar deta hai — taaki table half-broken na dikhe."""
     rows = display_df.to_dict("records")
 
     rowspan_at = {}   # idx -> merge info, is row se rowspan shuru hoga
     skip_at    = set()  # baaki group-member rows ke indices (KM cells yaha skip honge)
+    claimed_dates = set()  # ab tak jitni dates kisi group me use ho chuki hain
 
     for group in groups:
         dates = group["dates"] if isinstance(group, dict) else group
+        if any(d in claimed_dates for d in dates):
+            continue  # overlapping/duplicate group — skip karo, warna table broken dikhegi
         idxs = [i for i, r in enumerate(rows) if r["Date"] in dates]
         if len(idxs) != len(dates) or len(idxs) < 2:
             continue
@@ -55,6 +61,7 @@ def _render_km_merged_table(display_df: pd.DataFrame, groups: list):
         for i in sorted(idxs, reverse=True):
             rows.pop(i)
         rows[insert_at:insert_at] = extracted
+        claimed_dates.update(dates)
 
         sch_vals = [pd.to_numeric(r["Scheduled KM"], errors="coerce") for r in extracted]
         act_vals = [pd.to_numeric(r["Actual KM"], errors="coerce") for r in extracted]
@@ -558,10 +565,26 @@ def editable_grid(bus_number: str):
             if all(d in date_options for d in g["dates"])
         ]
 
+        # Overlapping/duplicate groups detect karo (jaise purani testing se stale entries)
+        # — inhi ki wajah se table half-broken dikhti thi, ab UI me clearly flag karte hain.
+        _claimed = set()
+        overlapping_group_ids = set()
+        for g in active_groups:
+            if any(d in _claimed for d in g["dates"]):
+                overlapping_group_ids.add(g["id"])
+            else:
+                _claimed.update(g["dates"])
+
         if active_groups:
             _render_km_merged_table(display_df, active_groups)
         else:
             st.dataframe(display_df, width='stretch', hide_index=True)
+
+        if overlapping_group_ids:
+            st.warning(
+                "⚠️ Kuch combined groups ki dates overlap kar rahi hain (purani/duplicate "
+                "entries ho sakti hain) — neeche ⚠️ mark ki hui groups ko 'Hatao' se hata do."
+            )
 
         used_dates = {d for g in active_groups for d in g["dates"]}
         available_dates = [d for d in date_options if d not in used_dates]
@@ -593,10 +616,12 @@ def editable_grid(bus_number: str):
                         lines = [f"{d} — Sch {s:.0f} / Actual {a:.0f}" for d, s, a in zip(dates, sch_vals, act_vals)]
                         lines.append(f"Total — Sch {sch_sum:.0f} / Actual {act_sum:.0f}")
                         tooltip = "\n".join(lines)
+                        is_overlap = g["id"] in overlapping_group_ids
+                        label = f"{'⚠️ ' if is_overlap else '🔗 '}{' + '.join(dates)}"
                         rc1, rc2 = st.columns([4, 1])
                         with rc1:
                             st.markdown(
-                                f"<span title=\"{tooltip}\" style='cursor:help;'>🔗 {' + '.join(dates)}</span>",
+                                f"<span title=\"{tooltip}\" style='cursor:help;{'color:#FFB347;' if is_overlap else ''}'>{label}</span>",
                                 unsafe_allow_html=True,
                             )
                         with rc2:
