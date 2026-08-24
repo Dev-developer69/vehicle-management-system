@@ -359,6 +359,9 @@ def quick_overview(bus_list: list):
     df["bus_number"]     = df["bus_number"].astype(str)
 
     # ── Combined (merged) date-groups apply karo — Saved Records table jaisa hi ──
+    # (overlapping/duplicate groups guard bhi hai, warna purani stale combine
+    # entries ki wajah se rows galat tarike se dobara-dobara merge ho jaate
+    # hain aur kuch drivers ke records chhup jaate hain)
     df["date_key"]   = df["date"].dt.strftime("%Y-%m-%d")
     df["days_count"] = 1
     df["days_label"] = df["date"].dt.strftime("%d %b")
@@ -366,8 +369,11 @@ def quick_overview(bus_list: list):
     for bus in df["bus_number"].unique():
         groups = get_km_combines(bus)
         bus_mask = df["bus_number"] == bus
+        claimed_dates = set()
         for group in groups:
             dates = group["dates"]
+            if any(d in claimed_dates for d in dates):
+                continue  # overlapping/duplicate group — skip karo
             member_idxs = []
             for d in dates:
                 idx = df[bus_mask & (df["date_key"] == d)].index
@@ -375,6 +381,7 @@ def quick_overview(bus_list: list):
                     member_idxs.append(idx[0])
             if len(member_idxs) != len(dates) or len(member_idxs) < 2:
                 continue
+            claimed_dates.update(dates)
             keep = member_idxs[-1]   # sabse aakhri (chronologically last) row me combined value rakho
             df.loc[keep, "actual_km"]    = df.loc[member_idxs, "actual_km"].sum()
             df.loc[keep, "scheduled_km"] = df.loc[member_idxs, "scheduled_km"].sum()
