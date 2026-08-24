@@ -362,6 +362,13 @@ def quick_overview(bus_list: list):
     # (overlapping/duplicate groups guard bhi hai, warna purani stale combine
     # entries ki wajah se rows galat tarike se dobara-dobara merge ho jaate
     # hain aur kuch drivers ke records chhup jaate hain)
+
+    # Driver-based charts (Driver Distribution, Driver Performance) ke liye
+    # UNMERGED copy rakhte hain — combine sirf KM-trend ke liye hai, driver
+    # attribution per-din hi rehna chahiye warna combine hone par ek driver
+    # ka din doosre driver ki row me "absorb" ho ke chart se gayab ho jaata hai.
+    df_by_day = df.copy()
+
     df["date_key"]   = df["date"].dt.strftime("%Y-%m-%d")
     df["days_count"] = 1
     df["days_label"] = df["date"].dt.strftime("%d %b")
@@ -399,6 +406,8 @@ def quick_overview(bus_list: list):
         df = df.drop(index=list(drop_indices)).reset_index(drop=True)
     df = df.drop(columns=["date_key"])
 
+    df_by_day["date_str"] = df_by_day["date"].dt.strftime("%d %b")
+    df_by_day["efficiency_pct"] = (df_by_day["actual_km"] / df_by_day["scheduled_km"].replace(0, float("nan")) * 100).round(1)
     df["date_str"]       = df["date"].dt.strftime("%d %b")
 
     df["efficiency_pct"] = (df["actual_km"] / df["scheduled_km"].replace(0, float("nan")) * 100).round(1)
@@ -755,7 +764,7 @@ Max 2 bullets per section. Be specific with numbers.
     with tab4:
         donut_cols = st.columns(len(bus_list))
         for i, bus in enumerate(bus_list):
-            bus_df = df[df["bus_number"] == bus]
+            bus_df = df_by_day[df_by_day["bus_number"] == bus]
             driver_days = (
                 bus_df.assign(driver_name=bus_df["driver_name"].str.lower().str.strip())
                 .groupby("driver_name")["date"].count().reset_index())
@@ -770,7 +779,7 @@ Max 2 bullets per section. Be specific with numbers.
         st.caption("Har bus mein driver duty distribution")
 
     with tab5:
-        driver_perf = (df.assign(driver_name=df["driver_name"].str.strip().str.lower())
+        driver_perf = (df_by_day.assign(driver_name=df_by_day["driver_name"].str.strip().str.lower())
             .groupby("driver_name")
             .agg(
                 Total_KM=("actual_km", "sum"),
