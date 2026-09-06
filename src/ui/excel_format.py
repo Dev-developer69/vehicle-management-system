@@ -17,7 +17,7 @@ from src.database.db import (
     get_suppliers, save_supplier, delete_supplier, get_supplier_products,
     get_products, save_product, delete_product,
     get_requirements, save_requirement, fulfill_requirement, delete_requirement,
-
+    save_fuel_fill, get_fuel_fills, update_fuel_fill, delete_fuel_fill,
 )
 
 # ──────────────────────────────────────────────
@@ -862,7 +862,7 @@ def expenses(bus_number: str = ""):
 
 
 # ──────────────────────────────────────────────
-# 4. DIESEL VIEW — har row ka alag rate
+# 4. DIESEL / CNG VIEW — multiple fills per date allowed
 # ──────────────────────────────────────────────
 def diesel_view(bus_number: str = ""):
     fuel = fuel_label(bus_number)
@@ -890,83 +890,82 @@ def diesel_view(bus_number: str = ""):
     saved = st.session_state[state_key]
 
     universal_rate = st.number_input(
-        f"⛽ Set rate for whole table ({fuel})",
+        f"⛽ Default rate ({fuel})",
         min_value=0.0, step=0.01, format="%.2f",
         value=saved["rate"],
         key=f"diesel_rate_input_{bus_number}_{d_month}_{d_period}"
     )
 
-    fetch_key = f"diesel_df_{bus_number}"
-    if load or fetch_key not in st.session_state:
-        start, end = _get_date_range(date.today().year, d_month, d_period)
-        raw_df = get_diesel_summary(
-            bus_number,
-            from_date=start.strftime("%Y-%m-%d"),
-            to_date=end.strftime("%Y-%m-%d"),
-        )
-        if not raw_df.empty:
-            raw_df["Rate (₹/L)"] = universal_rate
-            # ✅ Per-date saved custom rates apply karo (override universal rate)
-            row_rates = get_diesel_row_rates(bus_number, raw_df["Date"].astype(str).tolist())
-            if row_rates:
-                raw_df["Rate (₹/L)"] = raw_df["Date"].astype(str).map(row_rates).fillna(universal_rate)
-        st.session_state[fetch_key] = raw_df
+    start, end = _get_date_range(date.today().year, d_month, d_period)
 
+    # ── ✅ Naya fill add karo — ek din mein jitni baar chaho fill kar sakte ho ──
+    st.markdown(f"#### ➕ Add {fuel} Fill")
+    fc1, fc2, fc3, fc4 = st.columns([2, 2, 2, 1])
+    with fc1:
+        fill_date = st.date_input("Date", value=date.today(), key=f"fill_date_{bus_number}")
+    with fc2:
+        fill_qty = st.number_input(f"{fuel} (L)", min_value=0.0, step=0.01, format="%.2f",
+                                    key=f"fill_qty_{bus_number}")
+    with fc3:
+        fill_rate = st.number_input("Rate (₹/L)", min_value=0.0, step=0.01, format="%.2f",
+                                     value=universal_rate, key=f"fill_rate_{bus_number}")
+    with fc4:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("Add", key=f"fill_add_{bus_number}", width='stretch'):
+            if fill_qty > 0:
+                save_fuel_fill(bus_number, str(fill_date), fill_qty, fill_rate)
+                st.session_state.pop(f"fills_df_{bus_number}", None)
+                st.success("✅ Entry added!")
+                st.rerun()
+            else:
+                st.warning(f"⚠️ {fuel} quantity 0 se zyada honi chahiye.")
+
+    fetch_key = f"fills_df_{bus_number}"
+    if load or fetch_key not in st.session_state:
+        st.session_state[fetch_key] = get_fuel_fills(
+            bus_number, str(start.date()), str(end.date())
+        )
     df = st.session_state.get(fetch_key, pd.DataFrame())
 
     if df.empty:
-        st.info("No diesel records found for this period.")
+        st.info(f"No {fuel.lower()} records found for this period.")
         return
 
-    df = df.copy()
-    if "Rate (₹/L)" not in df.columns:
-        df["Rate (₹/L)"] = universal_rate
-
+    st.markdown(f"#### 📋 All {fuel} Entries (individual fills)")
     ed_key = f"diesel_editor_{bus_number}"
     st.data_editor(
-        df[["Date", "Diesel", "Rate (₹/L)"]],
-        width='stretch',
-        hide_index=True,
-        key=ed_key,
+        df, width='stretch', hide_index=True, key=ed_key,
         column_config={
-            "Date":       st.column_config.TextColumn("Date", disabled=True),
-            "Diesel":     st.column_config.NumberColumn(f"{fuel} (L)", disabled=True, format="%.2f"),
-            "Rate (₹/L)": st.column_config.NumberColumn("Rate (₹/L)", min_value=0.0,
-                                                           step=0.01, format="%.2f"),
+            "id":       None,
+            "Date":     st.column_config.TextColumn("Date", disabled=True),
+            "Quantity": st.column_config.NumberColumn(f"{fuel} (L)", min_value=0.0, format="%.2f"),
+            "Rate":     st.column_config.NumberColumn("Rate (₹/L)", min_value=0.0, format="%.2f"),
+            "Amount":   st.column_config.NumberColumn("Amount (₹)", disabled=True, format="%.2f"),
         }
     )
-
-    # Per-row override apply + DB me persist karo
     editor_state = st.session_state.get(ed_key, {})
-    display_df   = df.copy()
-    row_rate_changed = False
-    for row_idx, changes in editor_state.get("edited_rows", {}).items():
-        for col, val in changes.items():
-            if row_idx < len(display_df):
-                display_df.at[row_idx, col] = val
-                if col == "Rate (₹/L)":
-                    row_date = str(display_df.at[row_idx, "Date"])
-                    save_diesel_row_rate(bus_number, row_date, float(val))
-                    row_rate_changed = True
+    if editor_state.get("edited_rows"):
+        for row_idx, changes in editor_state["edited_rows"].items():
+            update_fuel_fill(df.iloc[row_idx]["id"], changes)
+        st.session_state.pop(fetch_key, None)
+        st.rerun()
+    for row_idx in sorted(editor_state.get("deleted_rows", []), reverse=True):
+        delete_fuel_fill(df.iloc[row_idx]["id"])
+        st.session_state.pop(fetch_key, None)
+        st.rerun()
 
-    if row_rate_changed:
-        # session state ko bhi update kar do taki dobara save na ho aur consistent rahe
-        st.session_state[fetch_key] = display_df.copy()
+    # ── ✅ Date-wise summary — same date ke multiple fills yahan add hoke dikhenge ──
+    st.markdown(f"#### 📊 Date-wise {fuel} Summary")
+    summary_df = df.groupby("Date").agg(
+        Fills=("id", "count"), Total_Qty=("Quantity", "sum"), Total_Amount=("Amount", "sum")
+    ).reset_index()
+    summary_df.columns = ["Date", "Fills", f"Total {fuel} (L)", "Total Amount (₹)"]
+    st.dataframe(summary_df, width='stretch', hide_index=True)
 
-    display_df["Rate (₹/L)"] = pd.to_numeric(display_df["Rate (₹/L)"], errors="coerce").fillna(universal_rate)
-    display_df["Amount (₹)"] = (display_df["Diesel"] * display_df["Rate (₹/L)"]).round(2)
+    total_diesel = df["Quantity"].sum()
+    total_amount = df["Amount"].sum()
 
-    # ✅ Full table with Amount column
-    st.dataframe(
-        display_df[["Date", "Diesel", "Rate (₹/L)", "Amount (₹)"]],
-        width='stretch',
-        hide_index=True,
-    )
-
-    total_diesel = display_df["Diesel"].sum()
-    total_amount = display_df["Amount (₹)"].sum()
-
-    # ── Summary ──
+    # ── Summary cards ──
     st.markdown(f"""
     <div style='background:#1e1e3a;border-radius:10px;padding:16px 24px;margin:12px 0;
                 display:flex;gap:40px;flex-wrap:wrap;'>
