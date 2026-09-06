@@ -263,6 +263,49 @@ def save_diesel_row_rate(bus_number: str, row_date: str, rate: float) -> None:
 
 
 # ══════════════════════════════════════════════
+# FUEL FILLS (CNG/Diesel — multiple entries per date allowed)
+# ══════════════════════════════════════════════
+
+def save_fuel_fill(bus_number: str, fill_date: str, quantity: float, rate: float) -> None:
+    """Naya fill insert karta hai — same date pe dobara call karne se
+    naya alag row banta hai, purana overwrite nahi hota (isliye ek din
+    mein 2+ baar CNG/Diesel fill possible hai)."""
+    supabase.table("fuel_fills").insert({
+        "bus_number": bus_number,
+        "date":       fill_date,
+        "quantity":   float(quantity),
+        "rate":       float(rate),
+    }).execute()
+
+
+def get_fuel_fills(bus_number: str, from_date: str, to_date: str) -> pd.DataFrame:
+    res = supabase.table("fuel_fills") \
+        .select("*") \
+        .eq("bus_number", bus_number) \
+        .gte("date", from_date) \
+        .lte("date", to_date) \
+        .order("date", desc=False) \
+        .order("created_at", desc=False) \
+        .execute()
+    if not res.data:
+        return pd.DataFrame(columns=["id", "Date", "Quantity", "Rate", "Amount"])
+    df = pd.DataFrame(res.data)
+    df = df.rename(columns={"date": "Date", "quantity": "Quantity", "rate": "Rate", "amount": "Amount"})
+    return df[["id", "Date", "Quantity", "Rate", "Amount"]]
+
+
+def update_fuel_fill(fill_id, updates: dict) -> None:
+    rename = {"Date": "date", "Quantity": "quantity", "Rate": "rate"}
+    db_updates = {rename.get(k, k): v for k, v in updates.items() if k in rename}
+    if db_updates:
+        supabase.table("fuel_fills").update(db_updates).eq("id", fill_id).execute()
+
+
+def delete_fuel_fill(fill_id) -> None:
+    supabase.table("fuel_fills").delete().eq("id", fill_id).execute()
+
+
+# ══════════════════════════════════════════════
 # DRIVER SALARY
 # ══════════════════════════════════════════════
 
