@@ -18,6 +18,7 @@ from src.database.db import (
     get_products, save_product, delete_product,
     get_requirements, save_requirement, fulfill_requirement, delete_requirement,
     save_fuel_fill, get_fuel_fills, update_fuel_fill, delete_fuel_fill,
+    migrate_diesel_to_fuel_fills,
 )
 
 # ──────────────────────────────────────────────
@@ -929,12 +930,27 @@ def diesel_view(bus_number: str = ""):
 
     if df.empty:
         st.info(f"No {fuel.lower()} records found for this period.")
+        st.caption(
+            "⚠️ Agar purana data Vehicle Records tab me pehle se bhara hua tha, "
+            "wo yahan automatically nahi aayega — neeche wale button se ek baar "
+            "migrate kar lo (sirf ek hi baar chalana, dobara chalane se duplicate ho jayega)."
+        )
+        if st.button(f"📦 Purana {fuel} data ek baar migrate karo", key=f"migrate_{bus_number}"):
+            count = migrate_diesel_to_fuel_fills(bus_number)
+            st.session_state.pop(fetch_key, None)
+            if count:
+                st.success(f"✅ {count} purani entries migrate ho gayi!")
+            else:
+                st.info("Migrate karne ke liye koi purana diesel data nahi mila.")
+            st.rerun()
         return
 
     st.markdown(f"#### 📋 All {fuel} Entries (individual fills)")
+    st.caption("✏️ Rate/Qty edit karne ke liye cell pe click karo · 🗑️ Delete karne ke liye row select karke keyboard 'Delete' dabao (ya row ke left checkbox se select karke Delete key)")
     ed_key = f"diesel_editor_{bus_number}"
     st.data_editor(
         df, width='stretch', hide_index=True, key=ed_key,
+        num_rows="dynamic",  # ✅ isse delete (aur row-select) enable hota hai
         column_config={
             "id":       None,
             "Date":     st.column_config.TextColumn("Date", disabled=True),
@@ -944,14 +960,22 @@ def diesel_view(bus_number: str = ""):
         }
     )
     editor_state = st.session_state.get(ed_key, {})
+    original_len = len(df)
+    changed = False
     if editor_state.get("edited_rows"):
         for row_idx, changes in editor_state["edited_rows"].items():
-            update_fuel_fill(df.iloc[row_idx]["id"], changes)
-        st.session_state.pop(fetch_key, None)
-        st.rerun()
+            # ✅ sirf existing rows update karo — table ke "+" se add hui nayi
+            # (blank) row ko yahan ignore karo, uske liye upar wala "Add" button hai
+            if row_idx < original_len:
+                update_fuel_fill(bus_number, df.iloc[row_idx]["id"], changes)
+                changed = True
     for row_idx in sorted(editor_state.get("deleted_rows", []), reverse=True):
-        delete_fuel_fill(df.iloc[row_idx]["id"])
+        if row_idx < original_len:
+            delete_fuel_fill(bus_number, df.iloc[row_idx]["id"])
+            changed = True
+    if changed:
         st.session_state.pop(fetch_key, None)
+        st.session_state.pop(ed_key, None)
         st.rerun()
 
     # ── ✅ Date-wise summary — same date ke multiple fills yahan add hoke dikhenge ──
