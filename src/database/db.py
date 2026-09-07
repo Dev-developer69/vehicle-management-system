@@ -266,16 +266,45 @@ def save_diesel_row_rate(bus_number: str, row_date: str, rate: float) -> None:
 # FUEL FILLS (CNG/Diesel — multiple entries per date allowed)
 # ══════════════════════════════════════════════
 
+def _sync_vehicle_record_diesel(bus_number: str, date_str: str) -> None:
+    """Us din ke saare fuel_fills ka total nikal ke vehicle_records.diesel
+    (usi din ke trip-record row) me update kar deta hai — taaki Vehicle
+    Records tab ka Avg/Mileage calculation bhi sahi rahe, bina manually
+    dobara Diesel value bharay. Agar us date ka koi trip-record row hi
+    nahi hai (driver/KM entry nahi hui), to kuch nahi karta — trip record
+    ban ne par khud-ba-khud sync ho jayega jab agli baar fill add/edit ho."""
+    fills = supabase.table("fuel_fills") \
+        .select("quantity") \
+        .eq("bus_number", bus_number) \
+        .eq("date", date_str) \
+        .execute()
+    total_qty = sum(float(r["quantity"] or 0) for r in (fills.data or []))
+
+    existing = supabase.table("vehicle_records") \
+        .select("id") \
+        .eq("bus_number", bus_number) \
+        .eq("date", date_str) \
+        .execute()
+    if existing.data:
+        supabase.table("vehicle_records") \
+            .update({"diesel": total_qty}) \
+            .eq("bus_number", bus_number) \
+            .eq("date", date_str) \
+            .execute()
+
+
 def save_fuel_fill(bus_number: str, fill_date: str, quantity: float, rate: float) -> None:
     """Naya fill insert karta hai — same date pe dobara call karne se
     naya alag row banta hai, purana overwrite nahi hota (isliye ek din
-    mein 2+ baar CNG/Diesel fill possible hai)."""
+    mein 2+ baar CNG/Diesel fill possible hai). Fill ke baad us din ka
+    vehicle_records.diesel total bhi auto-sync ho jaata hai."""
     supabase.table("fuel_fills").insert({
         "bus_number": bus_number,
         "date":       fill_date,
         "quantity":   float(quantity),
         "rate":       float(rate),
     }).execute()
+    _sync_vehicle_record_diesel(bus_number, fill_date)
 
 
 def get_fuel_fills(bus_number: str, from_date: str, to_date: str) -> pd.DataFrame:
@@ -294,15 +323,66 @@ def get_fuel_fills(bus_number: str, from_date: str, to_date: str) -> pd.DataFram
     return df[["id", "Date", "Quantity", "Rate", "Amount"]]
 
 
-def update_fuel_fill(fill_id, updates: dict) -> None:
+def update_fuel_fill(bus_number: str, fill_id, updates: dict) -> None:
+    """updates me 'Date' change ho sakti hai, isliye purani aur nayi dono
+    dates ka vehicle_records.diesel total re-sync karte hain."""
+    existing = supabase.table("fuel_fills").select("date").eq("id", fill_id).execute()
+    old_date = existing.data[0]["date"] if existing.data else None
+
     rename = {"Date": "date", "Quantity": "quantity", "Rate": "rate"}
     db_updates = {rename.get(k, k): v for k, v in updates.items() if k in rename}
     if db_updates:
         supabase.table("fuel_fills").update(db_updates).eq("id", fill_id).execute()
 
+    if old_date:
+        _sync_vehicle_record_diesel(bus_number, old_date)
+    new_date = db_updates.get("date")
+    if new_date and new_date != old_date:
+        _sync_vehicle_record_diesel(bus_number, new_date)
 
-def delete_fuel_fill(fill_id) -> None:
+
+def delete_fuel_fill(bus_number: str, fill_id) -> None:
+    existing = supabase.table("fuel_fills").select("date").eq("id", fill_id).execute()
+    fill_date = existing.data[0]["date"] if existing.data else None
     supabase.table("fuel_fills").delete().eq("id", fill_id).execute()
+    if fill_date:
+        _sync_vehicle_record_diesel(bus_number, fill_date)
+
+
+def migrate_diesel_to_fuel_fills(bus_number: str) -> int:
+    """✅ ONE-TIME MIGRATION — purana vehicle_records.diesel data (jo
+    diesel > 0 hai) fuel_fills table me copy karta hai, taaki naya
+    Diesel/CNG View purani history bhi dikhaye. Har bus ke liye ek
+    baar chalao (Streamlit me ek chhota admin button laga ke, ya
+    Python console se). Dobara chalane se duplicate ho sakta hai —
+    isliye har bus ke liye SIRF EK BAAR chalana."""
+    records = supabase.table("vehicle_records") \
+        .select("date, diesel") \
+        .eq("bus_number", bus_number) \
+        .gt("diesel", 0) \
+        .execute()
+    rows = records.data or []
+    if not rows:
+        return 0
+
+    # Har date ke liye best-known rate nikालो: pehle per-row override,
+    # warna diesel_details ka month/period rate, warna 95.69 fallback.
+    inserted = 0
+    for r in rows:
+        date_str = r["date"]
+        qty = float(r["diesel"] or 0)
+        if qty <= 0:
+            continue
+        row_rate = get_diesel_row_rates(bus_number, [date_str]).get(date_str)
+        rate = row_rate if row_rate else 95.69
+        supabase.table("fuel_fills").insert({
+            "bus_number": bus_number,
+            "date":       date_str,
+            "quantity":   qty,
+            "rate":       rate,
+        }).execute()
+        inserted += 1
+    return inserted
 
 
 # ══════════════════════════════════════════════
