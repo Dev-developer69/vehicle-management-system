@@ -349,21 +349,37 @@ def delete_fuel_fill(bus_number: str, fill_id) -> None:
         _sync_vehicle_record_diesel(bus_number, fill_date)
 
 
+def is_fuel_migrated(bus_number: str) -> bool:
+    """Check karta hai ki is bus ka purana diesel data pehle hi migrate ho
+    chuka hai — taaki UI me migrate button dobara na dikhe."""
+    res = supabase.table("fuel_migration_log") \
+        .select("bus_number") \
+        .eq("bus_number", bus_number) \
+        .execute()
+    return bool(res.data)
+
+
+def mark_fuel_migrated(bus_number: str) -> None:
+    supabase.table("fuel_migration_log").upsert({
+        "bus_number": bus_number,
+    }, on_conflict="bus_number").execute()
+
+
 def migrate_diesel_to_fuel_fills(bus_number: str) -> int:
     """✅ ONE-TIME MIGRATION — purana vehicle_records.diesel data (jo
     diesel > 0 hai) fuel_fills table me copy karta hai, taaki naya
-    Diesel/CNG View purani history bhi dikhaye. Har bus ke liye ek
-    baar chalao (Streamlit me ek chhota admin button laga ke, ya
-    Python console se). Dobara chalane se duplicate ho sakta hai —
-    isliye har bus ke liye SIRF EK BAAR chalana."""
+    Diesel/CNG View purani history bhi dikhaye. Migration ke baad
+    fuel_migration_log me mark ho jaata hai taaki UI me button dobara
+    na dikhe aur galti se dobara duplicate na ho."""
+    if is_fuel_migrated(bus_number):
+        return -1  # already migrated — caller ko batao ki skip ho gaya
+
     records = supabase.table("vehicle_records") \
         .select("date, diesel") \
         .eq("bus_number", bus_number) \
         .gt("diesel", 0) \
         .execute()
     rows = records.data or []
-    if not rows:
-        return 0
 
     # Har date ke liye best-known rate nikालो: pehle per-row override,
     # warna diesel_details ka month/period rate, warna 95.69 fallback.
@@ -382,6 +398,7 @@ def migrate_diesel_to_fuel_fills(bus_number: str) -> int:
             "rate":       rate,
         }).execute()
         inserted += 1
+    mark_fuel_migrated(bus_number)  # ✅ done — button ab dobara nahi dikhega
     return inserted
 
 
