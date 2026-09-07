@@ -18,7 +18,7 @@ from src.database.db import (
     get_products, save_product, delete_product,
     get_requirements, save_requirement, fulfill_requirement, delete_requirement,
     save_fuel_fill, get_fuel_fills, update_fuel_fill, delete_fuel_fill,
-    migrate_diesel_to_fuel_fills,
+    migrate_diesel_to_fuel_fills, is_fuel_migrated,
 )
 
 # ──────────────────────────────────────────────
@@ -930,19 +930,26 @@ def diesel_view(bus_number: str = ""):
 
     if df.empty:
         st.info(f"No {fuel.lower()} records found for this period.")
-        st.caption(
-            "⚠️ Agar purana data Vehicle Records tab me pehle se bhara hua tha, "
-            "wo yahan automatically nahi aayega — neeche wale button se ek baar "
-            "migrate kar lo (sirf ek hi baar chalana, dobara chalane se duplicate ho jayega)."
-        )
-        if st.button(f"📦 Purana {fuel} data ek baar migrate karo", key=f"migrate_{bus_number}"):
-            count = migrate_diesel_to_fuel_fills(bus_number)
-            st.session_state.pop(fetch_key, None)
-            if count:
-                st.success(f"✅ {count} purani entries migrate ho gayi!")
-            else:
-                st.info("Migrate karne ke liye koi purana diesel data nahi mila.")
-            st.rerun()
+        migrate_key = f"migrated_{bus_number}"
+        if migrate_key not in st.session_state:
+            st.session_state[migrate_key] = is_fuel_migrated(bus_number)
+        if not st.session_state[migrate_key]:
+            st.caption(
+                "⚠️ Agar purana data Vehicle Records tab me pehle se bhara hua tha, "
+                "wo yahan automatically nahi aayega — neeche wale button se ek baar "
+                "migrate kar lo."
+            )
+            if st.button(f"📦 Purana {fuel} data ek baar migrate karo", key=f"migrate_{bus_number}"):
+                count = migrate_diesel_to_fuel_fills(bus_number)
+                st.session_state[migrate_key] = True  # ✅ ab button dobara nahi dikhega
+                st.session_state.pop(fetch_key, None)
+                if count == -1:
+                    st.info("Yeh bus pehle hi migrate ho chuki hai.")
+                elif count:
+                    st.success(f"✅ {count} purani entries migrate ho gayi!")
+                else:
+                    st.info("Migrate karne ke liye koi purana diesel data nahi mila.")
+                st.rerun()
         return
 
     st.markdown(f"#### 📋 All {fuel} Entries (individual fills)")
