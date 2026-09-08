@@ -358,53 +358,14 @@ def quick_overview(bus_list: list):
     df["date"]           = pd.to_datetime(df["date"])
     df["bus_number"]     = df["bus_number"].astype(str)
 
-    # ── Combined (merged) date-groups apply karo — Saved Records table jaisa hi ──
-    # (overlapping/duplicate groups guard bhi hai, warna purani stale combine
-    # entries ki wajah se rows galat tarike se dobara-dobara merge ho jaate
-    # hain aur kuch drivers ke records chhup jaate hain)
-
-    # Driver-based charts (Driver Distribution, Driver Performance) ke liye
-    # UNMERGED copy rakhte hain — combine sirf KM-trend ke liye hai, driver
-    # attribution per-din hi rehna chahiye warna combine hone par ek driver
-    # ka din doosre driver ki row me "absorb" ho ke chart se gayab ho jaata hai.
+    # ── Combine-merge logic Quick Overview me DISABLED — har date apni raw
+    # actual/scheduled KM ke saath alag row rehti hai, taaki "Days" count
+    # asal calendar dates dikhaye aur Efficiency bhi per-din KM se nikle
+    # (Saved Records table ka "Kayi Din Ka KM Combine Karo" feature isse
+    # unaffected hai — wahan waisa hi combine-merge dikhega). ──
     df_by_day = df.copy()
-
-    df["date_key"]   = df["date"].dt.strftime("%Y-%m-%d")
     df["days_count"] = 1
     df["days_label"] = df["date"].dt.strftime("%d %b")
-    drop_indices = set()
-    for bus in df["bus_number"].unique():
-        groups = get_km_combines(bus)
-        bus_mask = df["bus_number"] == bus
-        claimed_dates = set()
-        for group in groups:
-            dates = group["dates"]
-            if any(d in claimed_dates for d in dates):
-                continue  # overlapping/duplicate group — skip karo
-            member_idxs = []
-            for d in dates:
-                idx = df[bus_mask & (df["date_key"] == d)].index
-                if len(idx) == 1:
-                    member_idxs.append(idx[0])
-            if len(member_idxs) != len(dates) or len(member_idxs) < 2:
-                continue
-            claimed_dates.update(dates)
-            keep = member_idxs[-1]   # sabse aakhri (chronologically last) row me combined value rakho
-            df.loc[keep, "actual_km"]    = df.loc[member_idxs, "actual_km"].sum()
-            df.loc[keep, "scheduled_km"] = df.loc[member_idxs, "scheduled_km"].sum()
-            df.loc[keep, "days_count"]   = len(member_idxs)
-            first_date = df.loc[member_idxs, "date"].min()
-            last_date  = df.loc[member_idxs, "date"].max()
-            if first_date.month == last_date.month:
-                df.loc[keep, "days_label"] = f"{first_date.day}-{last_date.day} {last_date.strftime('%b')}"
-            else:
-                df.loc[keep, "days_label"] = f"{first_date.strftime('%d %b')} - {last_date.strftime('%d %b')}"
-            for i in member_idxs:
-                if i != keep:
-                    drop_indices.add(i)
-    if drop_indices:
-        df = df.drop(index=list(drop_indices)).reset_index(drop=True)
-    df = df.drop(columns=["date_key"])
 
     df_by_day["date_str"] = df_by_day["date"].dt.strftime("%d %b")
     df_by_day["efficiency_pct"] = (df_by_day["actual_km"] / df_by_day["scheduled_km"].replace(0, float("nan")) * 100).round(1)
