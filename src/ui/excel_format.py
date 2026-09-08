@@ -463,20 +463,53 @@ def editable_grid(bus_number: str):
     on_leave_mask = edited_df["Status"] == "On Leave"
     edited_df.loc[on_leave_mask, ["Scheduled KM", "Actual KM", "Income"]] = 0
 
+    # ── Naye vs purane data ka column-wise compare karo — sirf REAL conflict
+    #    (jaha already koi non-empty value ek alag value se overwrite ho rahi
+    #    ho) pe hi confirmation mango. Agar sirf khaali field bhari ja rahi
+    #    hai (jaise Diesel pehle blank tha), to seedha save ho jaye. ──
+    _COMPARE_COLS = ["Status", "Driver Name", "Conductor Name", "Scheduled KM",
+                     "Actual KM", "Diesel", "Diesel KM", "Income", "Gross Income", "Remark"]
+
+    def _is_empty_val(v) -> bool:
+        if v is None:
+            return True
+        if isinstance(v, float) and pd.isna(v):
+            return True
+        s = str(v).strip().lower()
+        return s in ("", "none", "nan")
+
     if st.session_state.get(confirm_key):
-        st.warning("⚠️ Duplicate dates exist. Wanna update?")
+        conflict_df = st.session_state.get(pending_key)
+        old_lookup  = st.session_state.get(f"{pending_key}_old", {})
+
+        st.warning("⚠️ Neeche di gayi dates ki kuch values already bhari hui hain aur alag value se badal rahi hain — pehle compare kar lo:")
+        for _, new_row in conflict_df.iterrows():
+            date_str = str(new_row["Date"])
+            old_row  = old_lookup.get(date_str, {})
+            diff_rows = []
+            for col in _COMPARE_COLS:
+                old_val = old_row.get(col, "")
+                new_val = new_row.get(col, "")
+                if not _is_empty_val(old_val) and not _is_empty_val(new_val) and str(old_val) != str(new_val):
+                    diff_rows.append({"Field": col, "Old Value": old_val, "New Value": new_val})
+            st.markdown(f"**📅 {date_str}**")
+            if diff_rows:
+                st.dataframe(pd.DataFrame(diff_rows), width='stretch', hide_index=True)
+            else:
+                st.caption("(koi conflicting field nahi mila)")
+
         col1, col2 = st.columns(2)
         with col1:
             if st.button("✅ Yes, Update", key=f"yes_{bus_number}"):
-                save_vehicle_records(bus_number, st.session_state.get(pending_key))
+                save_vehicle_records(bus_number, conflict_df)
                 st.success("✅ Updated!")
-                for k in [key, fetch_key, confirm_key, pending_key]:
+                for k in [key, fetch_key, confirm_key, pending_key, f"{pending_key}_old"]:
                     st.session_state.pop(k, None)
                 st.rerun()
         with col2:
             if st.button("❌ Cancel", key=f"no_{bus_number}"):
-                st.session_state.pop(confirm_key, None)
-                st.session_state.pop(pending_key, None)
+                for k in [confirm_key, pending_key, f"{pending_key}_old"]:
+                    st.session_state.pop(k, None)
                 st.rerun()
     else:
         if st.button("💾 Save Changes", key=f"save_{bus_number}", width='stretch'):
@@ -489,15 +522,45 @@ def editable_grid(bus_number: str):
                 return
             if fetch_key not in st.session_state:
                 st.session_state[fetch_key] = get_vehicle_records(bus_number)
-            fetched_df     = st.session_state[fetch_key]
-            new_dates      = set(cleaned_df["Date"].astype(str).tolist())
-            existing_dates = set(fetched_df["Date"].astype(str).tolist()) if not fetched_df.empty else set()
-            if new_dates & existing_dates:
-                st.session_state[pending_key] = cleaned_df
-                st.session_state[confirm_key] = True
+            fetched_df = st.session_state[fetch_key]
+
+            existing_by_date = {}
+            if not fetched_df.empty:
+                for _, r in fetched_df.iterrows():
+                    existing_by_date[str(r["Date"])] = r.to_dict()
+
+            safe_rows, conflict_rows, conflict_old = [], [], {}
+            for _, new_row in cleaned_df.iterrows():
+                date_str = str(new_row["Date"])
+                old_row  = existing_by_date.get(date_str)
+                if old_row is None:
+                    safe_rows.append(new_row)
+                    continue
+                has_conflict = False
+                for col in _COMPARE_COLS:
+                    old_val = old_row.get(col, "")
+                    new_val = new_row.get(col, "")
+                    if not _is_empty_val(old_val) and not _is_empty_val(new_val) and str(old_val) != str(new_val):
+                        has_conflict = True
+                        break
+                if has_conflict:
+                    conflict_rows.append(new_row)
+                    conflict_old[date_str] = old_row
+                else:
+                    safe_rows.append(new_row)  # ✅ sirf khaali fields bhar rahe ho — direct save
+
+            if safe_rows:
+                save_vehicle_records(bus_number, pd.DataFrame(safe_rows))
+
+            if conflict_rows:
+                st.session_state[pending_key]              = pd.DataFrame(conflict_rows)
+                st.session_state[f"{pending_key}_old"]      = conflict_old
+                st.session_state[confirm_key]               = True
+                if safe_rows:
+                    st.success(f"✅ {len(safe_rows)} row(s) direct save ho gayi (naya data / khaali fields).")
+                st.session_state.pop(fetch_key, None)
                 st.rerun()
             else:
-                save_vehicle_records(bus_number, cleaned_df)
                 st.success("✅ Saved!")
                 st.session_state.pop(key, None)
                 st.session_state.pop(fetch_key, None)
