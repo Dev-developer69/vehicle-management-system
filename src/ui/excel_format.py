@@ -29,10 +29,11 @@ def fuel_label(bus_number: str) -> str:
 
 
 def _render_km_merged_table(display_df: pd.DataFrame, groups: list):
-    """Renders display_df as an HTML table where Scheduled KM / Actual KM cells
-    for each group of 2+ dates are visually merged (rowspan) into a single
-    combined value, Excel-style — every other column stays per-row/unchanged.
-    Multiple non-overlapping groups (of any size) supported at once.
+    """Renders display_df as an HTML table where Scheduled KM / Actual KM /
+    Income / Gross Income cells for each group of 2+ dates are visually
+    merged (rowspan) into a single SUMMED value, Excel-style — every other
+    column stays per-row/unchanged. Multiple non-overlapping groups (of any
+    size) supported at once.
     Original row order (jaisa display_df me hai, e.g. descending date) ko
     zyada se zyada preserve karta hai — group ke members already adjacent
     hote hain to kuch nahi hilta, warna sirf unhi rows ko ek saath la kar
@@ -40,10 +41,11 @@ def _render_km_merged_table(display_df: pd.DataFrame, groups: list):
     Agar kisi purani/duplicate group ki wajah se dates OVERLAP karte hain
     (ek hi date do groups me ho), to baad wali overlapping group ko skip
     kar deta hai — taaki table half-broken na dikhe."""
+    MERGE_COLS = ["Scheduled KM", "Actual KM", "Income", "Gross Income"]
     rows = display_df.to_dict("records")
 
     rowspan_at = {}   # idx -> merge info, is row se rowspan shuru hoga
-    skip_at    = set()  # baaki group-member rows ke indices (KM cells yaha skip honge)
+    skip_at    = set()  # baaki group-member rows ke indices (merge cells yaha skip honge)
     claimed_dates = set()  # ab tak jitni dates kisi group me use ho chuki hain
 
     for group in groups:
@@ -64,15 +66,24 @@ def _render_km_merged_table(display_df: pd.DataFrame, groups: list):
         rows[insert_at:insert_at] = extracted
         claimed_dates.update(dates)
 
-        sch_vals = [pd.to_numeric(r["Scheduled KM"], errors="coerce") for r in extracted]
-        act_vals = [pd.to_numeric(r["Actual KM"], errors="coerce") for r in extracted]
         date_vals = [r["Date"] for r in extracted]
+        col_vals  = {c: [pd.to_numeric(r.get(c), errors="coerce") for r in extracted] for c in MERGE_COLS}
+        col_sums  = {c: sum(v for v in col_vals[c] if pd.notna(v)) for c in MERGE_COLS}
 
-        rowspan_at[insert_at] = {
-            "sch_sum": sum(sch_vals), "act_sum": sum(act_vals),
-            "dates": date_vals, "sch_vals": sch_vals, "act_vals": act_vals,
-            "span": len(extracted),
-        }
+        lines = [
+            f"{d} — Sch {sch:.0f} / Actual {act:.0f} / Income {inc:,.0f} / Gross {gr:,.0f}"
+            for d, sch, act, inc, gr in zip(
+                date_vals, col_vals["Scheduled KM"], col_vals["Actual KM"],
+                col_vals["Income"], col_vals["Gross Income"]
+            )
+        ]
+        lines.append(
+            f"Total — Sch {col_sums['Scheduled KM']:.0f} / Actual {col_sums['Actual KM']:.0f} "
+            f"/ Income {col_sums['Income']:,.0f} / Gross {col_sums['Gross Income']:,.0f}"
+        )
+        tooltip = "\n".join(lines)
+
+        rowspan_at[insert_at] = {"sums": col_sums, "span": len(extracted), "tooltip": tooltip}
         for i in range(insert_at + 1, insert_at + len(extracted)):
             skip_at.add(i)
 
@@ -88,20 +99,14 @@ def _render_km_merged_table(display_df: pd.DataFrame, groups: list):
         row_bg = "#161629" if i % 2 == 0 else "#1E1E3A"
         html.append("<tr>")
         for c in cols:
-            if c in ("Scheduled KM", "Actual KM") and i in rowspan_at:
+            if c in MERGE_COLS and i in rowspan_at:
                 info = rowspan_at[i]
-                val = info["sch_sum"] if c == "Scheduled KM" else info["act_sum"]
-                lines = [
-                    f"{d} — Sch {s:.0f} / Actual {a:.0f}"
-                    for d, s, a in zip(info["dates"], info["sch_vals"], info["act_vals"])
-                ]
-                lines.append(f"Total — Sch {info['sch_sum']:.0f} / Actual {info['act_sum']:.0f}")
-                tooltip = "\n".join(lines)
+                val = info["sums"][c]
                 html.append(
-                    f"<td rowspan='{info['span']}' title=\"{tooltip}\" style='border:1px solid #2D2D5E;padding:8px;text-align:center;"
+                    f"<td rowspan='{info['span']}' title=\"{info['tooltip']}\" style='border:1px solid #2D2D5E;padding:8px;text-align:center;"
                     f"vertical-align:middle;background:{row_bg};color:#eee;cursor:help;'>{val:,.0f}</td>"
                 )
-            elif c in ("Scheduled KM", "Actual KM") and i in skip_at:
+            elif c in MERGE_COLS and i in skip_at:
                 continue  # rowspan se cover ho gaya
             else:
                 cell_val = r.get(c, "")
@@ -675,10 +680,17 @@ def editable_grid(bus_number: str):
                         rows_g = [display_df[display_df["Date"] == d] for d in dates]
                         sch_vals = [pd.to_numeric(r["Scheduled KM"].iloc[0], errors="coerce") if not r.empty else 0 for r in rows_g]
                         act_vals = [pd.to_numeric(r["Actual KM"].iloc[0], errors="coerce") if not r.empty else 0 for r in rows_g]
-                        sch_sum = sum(sch_vals)
-                        act_sum = sum(act_vals)
-                        lines = [f"{d} — Sch {s:.0f} / Actual {a:.0f}" for d, s, a in zip(dates, sch_vals, act_vals)]
-                        lines.append(f"Total — Sch {sch_sum:.0f} / Actual {act_sum:.0f}")
+                        inc_vals = [pd.to_numeric(r["Income"].iloc[0], errors="coerce") if not r.empty else 0 for r in rows_g]
+                        gr_vals  = [pd.to_numeric(r["Gross Income"].iloc[0], errors="coerce") if not r.empty else 0 for r in rows_g]
+                        sch_sum = sum(v for v in sch_vals if pd.notna(v))
+                        act_sum = sum(v for v in act_vals if pd.notna(v))
+                        inc_sum = sum(v for v in inc_vals if pd.notna(v))
+                        gr_sum  = sum(v for v in gr_vals if pd.notna(v))
+                        lines = [
+                            f"{d} — Sch {s:.0f} / Actual {a:.0f} / Income {inc:,.0f} / Gross {gr:,.0f}"
+                            for d, s, a, inc, gr in zip(dates, sch_vals, act_vals, inc_vals, gr_vals)
+                        ]
+                        lines.append(f"Total — Sch {sch_sum:.0f} / Actual {act_sum:.0f} / Income {inc_sum:,.0f} / Gross {gr_sum:,.0f}")
                         tooltip = "\n".join(lines)
                         is_overlap = g["id"] in overlapping_group_ids
                         label = f"{'⚠️ ' if is_overlap else '🔗 '}{' + '.join(dates)}"
