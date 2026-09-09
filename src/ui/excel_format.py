@@ -18,6 +18,7 @@ from src.database.db import (
     get_products, save_product, delete_product,
     get_requirements, save_requirement, fulfill_requirement, delete_requirement,
     save_fuel_fill, get_fuel_fills, update_fuel_fill, delete_fuel_fill,
+    clear_fuel_fills_for_date,
     migrate_diesel_to_fuel_fills, get_unmigrated_diesel_dates,
 )
 
@@ -441,12 +442,7 @@ def editable_grid(bus_number: str):
                 st.rerun()
             else:
                 st.warning("⚠️ Extraction failed, fill manually.")
-    st.caption(
-        f"ℹ️ **{fuel_label(bus_number)}** yahan bharoge to woh ek **naya alag fill** ban "
-        f"kar add hoga (purana overwrite nahi hoga) — same date pe pehle se koi fill ho "
-        f"to yeh uski 2nd/3rd entry ban jayegi. Rate '{fuel_label(bus_number)} View' tab ke "
-        f"current default rate se li jayegi (baad me wahan jaake rate change kar sakte ho)."
-    )
+    
     st.data_editor(
         st.session_state[key],
         num_rows="dynamic",
@@ -535,17 +531,29 @@ def editable_grid(bus_number: str):
             # ── ✅ Diesel/CNG yahan bharoge to woh seedha vehicle_records.diesel
             # overwrite NAHI karta — ek naya fuel_fills entry ban jaata hai
             # (same date pe pehle se fill ho to yeh uski 2nd/3rd entry banegi).
-            # save_fuel_fill() internally us date ka vehicle_records.diesel
-            # total bhi khud sync kar deta hai. ──
-            new_fill_count = 0
+            # Agar explicitly '0' bharoge (khaali nahi, literally 0), to us
+            # date ki SAARI existing fuel_fills entries clear/reset ho jaayengi
+            # — galti se hui galat fills ek click me theek karne ke liye.
+            # save_fuel_fill()/clear_fuel_fills_for_date() internally us date
+            # ka vehicle_records.diesel total bhi khud sync kar dete hain. ──
+            new_fill_count    = 0
+            cleared_date_count = 0
             for idx, row in cleaned_df.iterrows():
                 diesel_val = row.get("Diesel")
-                if diesel_val is not None and pd.notna(diesel_val) and float(diesel_val) > 0:
-                    row_date = pd.Timestamp(row["Date"])
-                    row_period = "1-15" if row_date.day <= 15 else "16-31"
-                    rate_data = get_diesel_rate_payment(bus_number, row_date.month, row_period)
-                    save_fuel_fill(bus_number, str(row["Date"]), float(diesel_val), rate_data["rate"])
-                    new_fill_count += 1
+                if diesel_val is not None and pd.notna(diesel_val):
+                    qty = float(diesel_val)
+                    row_date_str = str(row["Date"])
+                    if qty > 0:
+                        row_date = pd.Timestamp(row["Date"])
+                        row_period = "1-15" if row_date.day <= 15 else "16-31"
+                        rate_data = get_diesel_rate_payment(bus_number, row_date.month, row_period)
+                        save_fuel_fill(bus_number, row_date_str, qty, rate_data["rate"])
+                        new_fill_count += 1
+                    else:
+                        # ✅ explicitly 0 — is date ki saari fills clear/reset karo
+                        cleared = clear_fuel_fills_for_date(bus_number, row_date_str)
+                        if cleared:
+                            cleared_date_count += 1
                 cleaned_df.at[idx, "Diesel"] = None  # ✅ vehicle_records save-path isko touch na kare
 
             if fetch_key not in st.session_state:
@@ -589,6 +597,8 @@ def editable_grid(bus_number: str):
                     msg_parts.append(f"{len(safe_rows)} row(s) direct save ho gayi")
                 if new_fill_count:
                     msg_parts.append(f"{new_fill_count} naya {fuel_label(bus_number)} fill add hua")
+                if cleared_date_count:
+                    msg_parts.append(f"{cleared_date_count} date ki {fuel_label(bus_number)} entries clear hui")
                 if msg_parts:
                     st.success("✅ " + ", ".join(msg_parts) + ".")
                 st.session_state.pop(fetch_key, None)
@@ -597,6 +607,8 @@ def editable_grid(bus_number: str):
                 msg_parts = ["✅ Saved!"]
                 if new_fill_count:
                     msg_parts.append(f"({new_fill_count} naya {fuel_label(bus_number)} fill bhi add hua)")
+                if cleared_date_count:
+                    msg_parts.append(f"({cleared_date_count} date ki {fuel_label(bus_number)} entries clear hui)")
                 st.success(" ".join(msg_parts))
                 st.session_state.pop(key, None)
                 st.session_state.pop(fetch_key, None)
