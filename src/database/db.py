@@ -349,43 +349,61 @@ def delete_fuel_fill(bus_number: str, fill_id) -> None:
         _sync_vehicle_record_diesel(bus_number, fill_date)
 
 
-def is_fuel_migrated(bus_number: str) -> bool:
-    """Check karta hai ki is bus ka purana diesel data pehle hi migrate ho
-    chuka hai — taaki UI me migrate button dobara na dikhe."""
-    res = supabase.table("fuel_migration_log") \
-        .select("bus_number") \
-        .eq("bus_number", bus_number) \
-        .execute()
-    return bool(res.data)
-
-
-def mark_fuel_migrated(bus_number: str) -> None:
-    supabase.table("fuel_migration_log").upsert({
-        "bus_number": bus_number,
-    }, on_conflict="bus_number").execute()
-
-
-def migrate_diesel_to_fuel_fills(bus_number: str) -> int:
-    """✅ ONE-TIME MIGRATION — purana vehicle_records.diesel data (jo
-    diesel > 0 hai) fuel_fills table me copy karta hai, taaki naya
-    Diesel/CNG View purani history bhi dikhaye. Migration ke baad
-    fuel_migration_log me mark ho jaata hai taaki UI me button dobara
-    na dikhe aur galti se dobara duplicate na ho."""
-    if is_fuel_migrated(bus_number):
-        return -1  # already migrated — caller ko batao ki skip ho gaya
-
+def get_unmigrated_diesel_dates(bus_number: str) -> list:
+    """Un dates ki list deta hai jinka vehicle_records.diesel bhara hai
+    (diesel > 0) lekin fuel_fills me abhi tak koi entry nahi hai us
+    date ke liye — matlab yeh 'legacy' data hai jo migrate karna baaki
+    hai. Empty list = kuch bhi migrate karne ko nahi bacha (UI me button
+    khud-ba-khud chhup jaata hai)."""
     records = supabase.table("vehicle_records") \
         .select("date, diesel") \
         .eq("bus_number", bus_number) \
         .gt("diesel", 0) \
         .execute()
     rows = records.data or []
+    if not rows:
+        return []
+
+    dates = [r["date"] for r in rows]
+    existing = supabase.table("fuel_fills") \
+        .select("date") \
+        .eq("bus_number", bus_number) \
+        .in_("date", dates) \
+        .execute()
+    already_migrated_dates = {r["date"] for r in (existing.data or [])}
+    return [r["date"] for r in rows if r["date"] not in already_migrated_dates]
+
+
+def migrate_diesel_to_fuel_fills(bus_number: str) -> int:
+    """Un dates ka vehicle_records.diesel data fuel_fills me copy karta hai
+    jinke liye fuel_fills me abhi tak koi entry nahi hai (per-date check,
+    naye legacy data ke liye bhi baar-baar chalaya ja sakta hai bina
+    duplicate kiye — jo dates already migrate ho chuki hain unhe skip
+    kar deta hai)."""
+    records = supabase.table("vehicle_records") \
+        .select("date, diesel") \
+        .eq("bus_number", bus_number) \
+        .gt("diesel", 0) \
+        .execute()
+    rows = records.data or []
+    if not rows:
+        return 0
+
+    dates = [r["date"] for r in rows]
+    existing = supabase.table("fuel_fills") \
+        .select("date") \
+        .eq("bus_number", bus_number) \
+        .in_("date", dates) \
+        .execute()
+    already_migrated_dates = {r["date"] for r in (existing.data or [])}
 
     # Har date ke liye best-known rate nikालो: pehle per-row override,
     # warna diesel_details ka month/period rate, warna 95.69 fallback.
     inserted = 0
     for r in rows:
         date_str = r["date"]
+        if date_str in already_migrated_dates:
+            continue  # ✅ is date ki entry fuel_fills me pehle se hai — skip (no duplicate)
         qty = float(r["diesel"] or 0)
         if qty <= 0:
             continue
@@ -398,7 +416,6 @@ def migrate_diesel_to_fuel_fills(bus_number: str) -> int:
             "rate":       rate,
         }).execute()
         inserted += 1
-    mark_fuel_migrated(bus_number)  # ✅ done — button ab dobara nahi dikhega
     return inserted
 
 
