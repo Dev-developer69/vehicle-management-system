@@ -18,7 +18,7 @@ from src.database.db import (
     get_products, save_product, delete_product,
     get_requirements, save_requirement, fulfill_requirement, delete_requirement,
     save_fuel_fill, get_fuel_fills, update_fuel_fill, delete_fuel_fill,
-    migrate_diesel_to_fuel_fills, is_fuel_migrated,
+    migrate_diesel_to_fuel_fills, get_unmigrated_diesel_dates,
 )
 
 # ──────────────────────────────────────────────
@@ -298,7 +298,7 @@ def editable_grid(bus_number: str):
 
     # ── Extract Records from Image ──
     FIELD_DEFS = {
-        "Diesel":         ("diesel",         "'Diesel', 'DSL', 'Fuel' (litres)"),
+        "Diesel":         ("diesel",         "'DSL/CNG', 'Diesel', 'DSL', 'CNG', 'Fuel' column (litres, usually the LAST or near-last numeric column, right before the REMARKS column). This is NOT the 'LF' (Load Factor) column and NOT the 'IPKM' column — those two sit just before it in the table and contain similar-looking decimal numbers, but they are unrelated calculated ratios, not fuel litres. Double-check you picked the column whose header literally says DSL/CNG/DSL or CNG, not LF or IPKM."),
         "Income":         ("income",         "'Income', 'INCOME', 'Base Fare' (NOT per-km, NOT load factor)"),
         "Gross Income":   ("gross_income",   "'Gross', 'GROSS', 'Total Income'"),
         "Remark":         ("remark",         "'Remark', 'REMARK' column — copy the exact text as-is (e.g. 'ON ROUTE', 'LEAVE APPROVED', 'ABSENT', 'NEXT PERIOD'). If empty set null."),
@@ -316,7 +316,7 @@ def editable_grid(bus_number: str):
             "Fields",
             options=list(FIELD_DEFS.keys()),
             selection_mode="multi",
-            default=["Diesel", "Income", "Gross Income", "Remark"],
+            default=["Income", "Gross Income", "Remark"],
             key=f"extract_fields_{bus_number}",
             label_visibility="collapsed",
         )
@@ -441,6 +441,12 @@ def editable_grid(bus_number: str):
                 st.rerun()
             else:
                 st.warning("⚠️ Extraction failed, fill manually.")
+    st.caption(
+        f"ℹ️ **{fuel_label(bus_number)}** column ab yahan sirf ek auto-synced total dikhata hai "
+        f"({fuel_label(bus_number)}/CNG View se) — isliye edit disabled hai. Naya fill (2nd/3rd baar "
+        f"bhi) add karne ke liye **'{fuel_label(bus_number)} View'** tab pe jao aur '➕ Add Fill' use karo; "
+        f"yahan wapas aane pe total khud update ho jayega."
+    )
     st.data_editor(
         st.session_state[key],
         num_rows="dynamic",
@@ -454,7 +460,7 @@ def editable_grid(bus_number: str):
             "Conductor Name": st.column_config.TextColumn("Conductor Name"),
             "Scheduled KM":   st.column_config.NumberColumn("Scheduled KM", min_value=0, default=scheduled_km),
             "Actual KM":      st.column_config.NumberColumn("Actual KM", min_value=0, default=0),
-            "Diesel":         st.column_config.NumberColumn(fuel_label(bus_number), min_value=0.0, step=0.01, format="%.2f"),
+            "Diesel":         st.column_config.NumberColumn(fuel_label(bus_number), min_value=0.0, step=0.01, format="%.2f", disabled=True),
             "Diesel KM":      st.column_config.NumberColumn(f"{fuel_label(bus_number)} KM", min_value=0),
             "Income":         st.column_config.NumberColumn("Income", min_value=0),
             "Gross Income":   st.column_config.NumberColumn("Gross Income", min_value=0),
@@ -1003,36 +1009,39 @@ def diesel_view(bus_number: str = ""):
         )
     df = st.session_state.get(fetch_key, pd.DataFrame())
 
+    # ── Migration nudge — sirf df empty hone par nahi, balki JAB BHI
+    # kahin bhi (kisi bhi period me) legacy vehicle_records.diesel data
+    # ho jo fuel_fills me abhi tak nahi aaya — taaki koi bhi date miss na ho ──
+    unmigrated_dates = get_unmigrated_diesel_dates(bus_number)
+    if unmigrated_dates:
+        st.warning(
+            f"⚠️ Vehicle Records tab me {len(unmigrated_dates)} din ka purana "
+            f"{fuel.lower()} data bhara hua hai jo abhi yahan nahi aaya."
+        )
+        with st.expander("🔍 Kaunsi dates flag ho rahi hain (debug)"):
+            st.write(sorted(unmigrated_dates))
+        if st.button(f"📦 Purana {fuel} data migrate karo ({len(unmigrated_dates)} din)", key=f"migrate_{bus_number}"):
+            count = migrate_diesel_to_fuel_fills(bus_number)
+            st.session_state.pop(fetch_key, None)
+            if count:
+                st.success(f"✅ {count} purani entries migrate ho gayi! Refresh ho raha hai...")
+            else:
+                st.error(
+                    "⚠️ Koi entry migrate nahi hui — matlab in dates ka diesel value 0 ya "
+                    "khaali hai (sirf date column ka mismatch tha), ya fuel_fills me pehle "
+                    "se hi (kisi aur reason se) row maujood hai. Neeche dates check karo."
+                )
+            st.rerun()
+
     if df.empty:
         st.info(f"No {fuel.lower()} records found for this period.")
-        migrate_key = f"migrated_{bus_number}"
-        if migrate_key not in st.session_state:
-            st.session_state[migrate_key] = is_fuel_migrated(bus_number)
-        if not st.session_state[migrate_key]:
-            st.caption(
-                "⚠️ Agar purana data Vehicle Records tab me pehle se bhara hua tha, "
-                "wo yahan automatically nahi aayega — neeche wale button se ek baar "
-                "migrate kar lo."
-            )
-            if st.button(f"📦 Purana {fuel} data ek baar migrate karo", key=f"migrate_{bus_number}"):
-                count = migrate_diesel_to_fuel_fills(bus_number)
-                st.session_state[migrate_key] = True  # ✅ ab button dobara nahi dikhega
-                st.session_state.pop(fetch_key, None)
-                if count == -1:
-                    st.info("Yeh bus pehle hi migrate ho chuki hai.")
-                elif count:
-                    st.success(f"✅ {count} purani entries migrate ho gayi!")
-                else:
-                    st.info("Migrate karne ke liye koi purana diesel data nahi mila.")
-                st.rerun()
         return
 
     st.markdown(f"#### 📋 All {fuel} Entries (individual fills)")
-    st.caption("✏️ Rate/Qty edit karne ke liye cell pe click karo · 🗑️ Delete karne ke liye row select karke keyboard 'Delete' dabao (ya row ke left checkbox se select karke Delete key)")
+    st.caption("✏️ Rate/Qty edit karne ke liye cell pe click karo.")
     ed_key = f"diesel_editor_{bus_number}"
     st.data_editor(
         df, width='stretch', hide_index=True, key=ed_key,
-        num_rows="dynamic",  # ✅ isse delete (aur row-select) enable hota hai
         column_config={
             "id":       None,
             "Date":     st.column_config.TextColumn("Date", disabled=True),
@@ -1042,23 +1051,35 @@ def diesel_view(bus_number: str = ""):
         }
     )
     editor_state = st.session_state.get(ed_key, {})
-    original_len = len(df)
-    changed = False
     if editor_state.get("edited_rows"):
+        changed = False
         for row_idx, changes in editor_state["edited_rows"].items():
-            # ✅ sirf existing rows update karo — table ke "+" se add hui nayi
-            # (blank) row ko yahan ignore karo, uske liye upar wala "Add" button hai
-            if row_idx < original_len:
+            if row_idx < len(df):
                 update_fuel_fill(bus_number, df.iloc[row_idx]["id"], changes)
                 changed = True
-    for row_idx in sorted(editor_state.get("deleted_rows", []), reverse=True):
-        if row_idx < original_len:
-            delete_fuel_fill(bus_number, df.iloc[row_idx]["id"])
-            changed = True
-    if changed:
-        st.session_state.pop(fetch_key, None)
-        st.session_state.pop(ed_key, None)
-        st.rerun()
+        if changed:
+            st.session_state.pop(fetch_key, None)
+            st.session_state.pop(ed_key, None)
+            st.rerun()
+
+    # ── ✅ Explicit Delete section — data_editor ka checkbox-select+Delete-key
+    # tarika hide_index ke saath bharosemand nahi hai, isliye ek guaranteed
+    # dropdown+button diya hai (Vehicle Records tab ke "Delete by date" jaisa) ──
+    with st.expander(f"🗑️ Ek {fuel} entry delete karo"):
+        options = {
+            f"{row['Date']} — {row['Quantity']:.2f} L @ ₹{row['Rate']:.2f} (₹{row['Amount']:.2f})": row["id"]
+            for _, row in df.iterrows()
+        }
+        if options:
+            selected_label = st.selectbox("Entry chuno", options=list(options.keys()), key=f"del_fill_select_{bus_number}")
+            if st.button("Delete this entry", key=f"del_fill_btn_{bus_number}"):
+                delete_fuel_fill(bus_number, options[selected_label])
+                st.success("✅ Entry delete ho gayi!")
+                st.session_state.pop(fetch_key, None)
+                st.session_state.pop(ed_key, None)
+                st.rerun()
+        else:
+            st.caption("Koi entry nahi hai delete karne ke liye.")
 
     # ── ✅ Date-wise summary — same date ke multiple fills yahan add hoke dikhenge ──
     st.markdown(f"#### 📊 Date-wise {fuel} Summary")
