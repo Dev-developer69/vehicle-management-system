@@ -442,10 +442,10 @@ def editable_grid(bus_number: str):
             else:
                 st.warning("⚠️ Extraction failed, fill manually.")
     st.caption(
-        f"ℹ️ **{fuel_label(bus_number)}** column ab yahan sirf ek auto-synced total dikhata hai "
-        f"({fuel_label(bus_number)}/CNG View se) — isliye edit disabled hai. Naya fill (2nd/3rd baar "
-        f"bhi) add karne ke liye **'{fuel_label(bus_number)} View'** tab pe jao aur '➕ Add Fill' use karo; "
-        f"yahan wapas aane pe total khud update ho jayega."
+        f"ℹ️ **{fuel_label(bus_number)}** yahan bharoge to woh ek **naya alag fill** ban "
+        f"kar add hoga (purana overwrite nahi hoga) — same date pe pehle se koi fill ho "
+        f"to yeh uski 2nd/3rd entry ban jayegi. Rate '{fuel_label(bus_number)} View' tab ke "
+        f"current default rate se li jayegi (baad me wahan jaake rate change kar sakte ho)."
     )
     st.data_editor(
         st.session_state[key],
@@ -460,7 +460,7 @@ def editable_grid(bus_number: str):
             "Conductor Name": st.column_config.TextColumn("Conductor Name"),
             "Scheduled KM":   st.column_config.NumberColumn("Scheduled KM", min_value=0, default=scheduled_km),
             "Actual KM":      st.column_config.NumberColumn("Actual KM", min_value=0, default=0),
-            "Diesel":         st.column_config.NumberColumn(fuel_label(bus_number), min_value=0.0, step=0.01, format="%.2f", disabled=True),
+            "Diesel":         st.column_config.NumberColumn(f"{fuel_label(bus_number)} (naya fill)", min_value=0.0, step=0.01, format="%.2f"),
             "Diesel KM":      st.column_config.NumberColumn(f"{fuel_label(bus_number)} KM", min_value=0),
             "Income":         st.column_config.NumberColumn("Income", min_value=0),
             "Gross Income":   st.column_config.NumberColumn("Gross Income", min_value=0),
@@ -479,7 +479,7 @@ def editable_grid(bus_number: str):
     #    ho) pe hi confirmation mango. Agar sirf khaali field bhari ja rahi
     #    hai (jaise Diesel pehle blank tha), to seedha save ho jaye. ──
     _COMPARE_COLS = ["Status", "Driver Name", "Conductor Name", "Scheduled KM",
-                     "Actual KM", "Diesel", "Diesel KM", "Income", "Gross Income", "Remark"]
+                     "Actual KM", "Diesel KM", "Income", "Gross Income", "Remark"]
 
     def _is_empty_val(v) -> bool:
         if v is None:
@@ -531,6 +531,23 @@ def editable_grid(bus_number: str):
             if cleaned_df.empty:
                 st.warning("⚠️ No valid rows to save.")
                 return
+
+            # ── ✅ Diesel/CNG yahan bharoge to woh seedha vehicle_records.diesel
+            # overwrite NAHI karta — ek naya fuel_fills entry ban jaata hai
+            # (same date pe pehle se fill ho to yeh uski 2nd/3rd entry banegi).
+            # save_fuel_fill() internally us date ka vehicle_records.diesel
+            # total bhi khud sync kar deta hai. ──
+            new_fill_count = 0
+            for idx, row in cleaned_df.iterrows():
+                diesel_val = row.get("Diesel")
+                if diesel_val is not None and pd.notna(diesel_val) and float(diesel_val) > 0:
+                    row_date = pd.Timestamp(row["Date"])
+                    row_period = "1-15" if row_date.day <= 15 else "16-31"
+                    rate_data = get_diesel_rate_payment(bus_number, row_date.month, row_period)
+                    save_fuel_fill(bus_number, str(row["Date"]), float(diesel_val), rate_data["rate"])
+                    new_fill_count += 1
+                cleaned_df.at[idx, "Diesel"] = None  # ✅ vehicle_records save-path isko touch na kare
+
             if fetch_key not in st.session_state:
                 st.session_state[fetch_key] = get_vehicle_records(bus_number)
             fetched_df = st.session_state[fetch_key]
@@ -567,12 +584,20 @@ def editable_grid(bus_number: str):
                 st.session_state[pending_key]              = pd.DataFrame(conflict_rows)
                 st.session_state[f"{pending_key}_old"]      = conflict_old
                 st.session_state[confirm_key]               = True
+                msg_parts = []
                 if safe_rows:
-                    st.success(f"✅ {len(safe_rows)} row(s) direct save ho gayi (naya data / khaali fields).")
+                    msg_parts.append(f"{len(safe_rows)} row(s) direct save ho gayi")
+                if new_fill_count:
+                    msg_parts.append(f"{new_fill_count} naya {fuel_label(bus_number)} fill add hua")
+                if msg_parts:
+                    st.success("✅ " + ", ".join(msg_parts) + ".")
                 st.session_state.pop(fetch_key, None)
                 st.rerun()
             else:
-                st.success("✅ Saved!")
+                msg_parts = ["✅ Saved!"]
+                if new_fill_count:
+                    msg_parts.append(f"({new_fill_count} naya {fuel_label(bus_number)} fill bhi add hua)")
+                st.success(" ".join(msg_parts))
                 st.session_state.pop(key, None)
                 st.session_state.pop(fetch_key, None)
                 st.rerun()
