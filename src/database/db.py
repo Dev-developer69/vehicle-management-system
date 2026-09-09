@@ -349,6 +349,28 @@ def delete_fuel_fill(bus_number: str, fill_id) -> None:
         _sync_vehicle_record_diesel(bus_number, fill_date)
 
 
+def clear_fuel_fills_for_date(bus_number: str, date_str: str) -> int:
+    """Us date ki saari fuel_fills entries delete karta hai (reset-to-zero) —
+    jab Vehicle Records tab me Diesel explicitly '0' bhara jaaye, taaki galti
+    se ho gayi galat fills ko ek click me clear kiya ja sake. Return: kitni
+    entries delete hui."""
+    existing = supabase.table("fuel_fills") \
+        .select("id") \
+        .eq("bus_number", bus_number) \
+        .eq("date", date_str) \
+        .execute()
+    rows = existing.data or []
+    if not rows:
+        return 0
+    supabase.table("fuel_fills") \
+        .delete() \
+        .eq("bus_number", bus_number) \
+        .eq("date", date_str) \
+        .execute()
+    _sync_vehicle_record_diesel(bus_number, date_str)  # ✅ ab total 0 ho jayega
+    return len(rows)
+
+
 def get_unmigrated_diesel_dates(bus_number: str) -> list:
     """Un dates ki list deta hai jinka vehicle_records.diesel bhara hai
     (diesel > 0) lekin fuel_fills me abhi tak koi entry nahi hai us
