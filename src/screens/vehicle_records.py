@@ -347,16 +347,23 @@ def quick_overview(bus_list: list):
             st.rerun()
         return
 
-    df = pd.DataFrame(rows)
-    df = df[df["status"] != "On Leave"].copy()
-    df["actual_km"]      = pd.to_numeric(df["actual_km"],    errors="coerce").fillna(0)
-    df["scheduled_km"]   = pd.to_numeric(df["scheduled_km"], errors="coerce").fillna(0)
+    df_all = pd.DataFrame(rows)
+    # ── df_all: On Leave dates INCLUDED — sirf Daily KM Trend chart ke liye,
+    # taaki us din bus ka Actual KM asal me 0 dikhaya jaaye (leave ke din
+    # scheduled_km/actual_km save hote waqt already 0 hote hain), na ki
+    # graph se poori tarah gayab ho ke line ko interpolate/smooth kar de. ──
+    df_all["actual_km"]    = pd.to_numeric(df_all["actual_km"],    errors="coerce").fillna(0)
+    df_all["scheduled_km"] = pd.to_numeric(df_all["scheduled_km"], errors="coerce").fillna(0)
+    df_all["date"]         = pd.to_datetime(df_all["date"])
+    df_all["bus_number"]   = df_all["bus_number"].astype(str)
+    df_all["days_count"]   = 1
+    df_all["days_label"]   = df_all["date"].dt.strftime("%d %b")
+
+    df = df_all[df_all["status"] != "On Leave"].copy()
     df["income"]         = pd.to_numeric(df["income"],       errors="coerce").fillna(0)
     df["diesel"]         = pd.to_numeric(df["diesel"],       errors="coerce").fillna(0)
     df["diesel_km"]      = pd.to_numeric(df["diesel_km"] if "diesel_km" in df.columns else 0, errors="coerce").fillna(0)
     df["conductor_name"] = df["conductor_name"].fillna("") if "conductor_name" in df.columns else ""
-    df["date"]           = pd.to_datetime(df["date"])
-    df["bus_number"]     = df["bus_number"].astype(str)
 
     # ── Combine-merge logic Quick Overview me DISABLED — har date apni raw
     # actual/scheduled KM ke saath alag row rehti hai, taaki "Days" count
@@ -364,8 +371,6 @@ def quick_overview(bus_list: list):
     # (Saved Records table ka "Kayi Din Ka KM Combine Karo" feature isse
     # unaffected hai — wahan waisa hi combine-merge dikhega). ──
     df_by_day = df.copy()
-    df["days_count"] = 1
-    df["days_label"] = df["date"].dt.strftime("%d %b")
 
     df_by_day["date_str"] = df_by_day["date"].dt.strftime("%d %b")
     df_by_day["efficiency_pct"] = (df_by_day["actual_km"] / df_by_day["scheduled_km"].replace(0, float("nan")) * 100).round(1)
@@ -466,19 +471,22 @@ def quick_overview(bus_list: list):
     ])
 
     with tab1:
-        pivot = df.pivot_table(
+        # ✅ df_all use karo — isme On Leave dates bhi shamil hain (Actual KM=0
+        # ke saath), taaki graph pe woh din poori tarah gayab hone ke bajaye
+        # sahi se "0" pe dip dikhaye, na ki line interpolate ho ke smooth dikhe.
+        pivot = df_all.pivot_table(
             index="date", columns="bus_number",
             values="actual_km", aggfunc="sum"
         ).sort_index()
-        pivot_sched = df.pivot_table(
+        pivot_sched = df_all.pivot_table(
             index="date", columns="bus_number",
             values="scheduled_km", aggfunc="sum"
         ).sort_index()
-        pivot_days = df.pivot_table(
+        pivot_days = df_all.pivot_table(
             index="date", columns="bus_number",
             values="days_count", aggfunc="sum"
         ).sort_index()
-        pivot_labels = df.pivot_table(
+        pivot_labels = df_all.pivot_table(
             index="date", columns="bus_number",
             values="days_label", aggfunc="last"
         ).sort_index()
