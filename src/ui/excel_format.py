@@ -18,7 +18,7 @@ from src.database.db import (
     get_products, save_product, delete_product,
     get_requirements, save_requirement, fulfill_requirement, delete_requirement,
     save_fuel_fill, get_fuel_fills, update_fuel_fill, delete_fuel_fill,
-    clear_fuel_fills_for_date,
+    clear_fuel_fills_for_date, get_existing_fuel_fill_dates, replace_fuel_fill_for_date,
     migrate_diesel_to_fuel_fills, get_unmigrated_diesel_dates,
 )
 
@@ -448,13 +448,7 @@ def editable_grid(bus_number: str):
                 st.rerun()
             else:
                 st.warning("⚠️ Extraction failed, fill manually.")
-    st.caption(
-        f"ℹ️ **{fuel_label(bus_number)}** yahan bharoge to woh ek **naya alag fill** ban "
-        f"kar add hoga (purana overwrite nahi hoga) — same date pe pehle se koi fill ho "
-        f"to yeh uski 2nd/3rd entry ban jayegi. **Explicitly '0' bharoge** to us date ki "
-        f"saari existing fills clear/reset ho jaayengi (galti thik karne ke liye). Rate "
-        f"'{fuel_label(bus_number)} View' tab ke current default rate se li jayegi."
-    )
+
     st.data_editor(
         st.session_state[key],
         num_rows="dynamic",
@@ -487,7 +481,7 @@ def editable_grid(bus_number: str):
     #    ho) pe hi confirmation mango. Agar sirf khaali field bhari ja rahi
     #    hai (jaise Diesel pehle blank tha), to seedha save ho jaye. ──
     _COMPARE_COLS = ["Status", "Driver Name", "Conductor Name", "Scheduled KM",
-                     "Actual KM", "Diesel KM", "Income", "Gross Income", "Remark"]
+                     "Actual KM", "Diesel KM", "Income", "Gross Income", "Remark", "Next"]
 
     def _is_empty_val(v) -> bool:
         if v is None:
@@ -496,6 +490,48 @@ def editable_grid(bus_number: str):
             return True
         s = str(v).strip().lower()
         return s in ("", "none", "nan")
+
+    diesel_confirm_key = f"diesel_confirm_{bus_number}"
+    diesel_pending_key = f"diesel_pending_{bus_number}"
+
+    # ── ✅ Diesel-specific 3-button confirmation — sirf tab dikhta hai jab
+    # kisi date ka Diesel field bhara ho AUR us date ka fuel_fills me pehle
+    # se data ho. Yeh KM/Income wale generic conflict-confirmation (upar)
+    # se bilkul alag/independent hai — dono ek saath bhi dikh sakte hain. ──
+    if st.session_state.get(diesel_confirm_key):
+        pending_diesel = st.session_state.get(diesel_pending_key, [])
+        st.warning(
+            f"⚠️ Neeche di gayi dates ka {fuel_label(bus_number)} data already maujood "
+            f"hai — batao kya karna hai:"
+        )
+        for item in pending_diesel:
+            st.markdown(f"📅 **{item['date']}** — naya entered value: **{item['qty']:.2f} L**")
+
+        dc1, dc2, dc3 = st.columns(3)
+        with dc1:
+            if st.button("✅ Yes, Update", key=f"diesel_yes_{bus_number}", width='stretch'):
+                for item in pending_diesel:
+                    rate_data = get_diesel_rate_payment(bus_number, item["month"], item["period"])
+                    replace_fuel_fill_for_date(bus_number, item["date"], item["qty"], rate_data["rate"])
+                st.session_state.pop(diesel_confirm_key, None)
+                st.session_state.pop(diesel_pending_key, None)
+                st.success(f"✅ {fuel_label(bus_number)} data update ho gaya (purani saari entries replace ho gayi)!")
+                st.rerun()
+        with dc2:
+            if st.button("➕ Add Diesel", key=f"diesel_add_{bus_number}", width='stretch'):
+                for item in pending_diesel:
+                    rate_data = get_diesel_rate_payment(bus_number, item["month"], item["period"])
+                    save_fuel_fill(bus_number, item["date"], item["qty"], rate_data["rate"])
+                st.session_state.pop(diesel_confirm_key, None)
+                st.session_state.pop(diesel_pending_key, None)
+                st.success(f"✅ Naya {fuel_label(bus_number)} fill add ho gaya (purani entries wahi rahengi)!")
+                st.rerun()
+        with dc3:
+            if st.button("❌ Cancel", key=f"diesel_cancel_{bus_number}", width='stretch'):
+                st.session_state.pop(diesel_confirm_key, None)
+                st.session_state.pop(diesel_pending_key, None)
+                st.info(f"{fuel_label(bus_number)} change cancel ho gaya.")
+                st.rerun()
 
     if st.session_state.get(confirm_key):
         conflict_df = st.session_state.get(pending_key)
@@ -541,32 +577,55 @@ def editable_grid(bus_number: str):
                 return
 
             # ── ✅ Diesel/CNG yahan bharoge to woh seedha vehicle_records.diesel
-            # overwrite NAHI karta — ek naya fuel_fills entry ban jaata hai
-            # (same date pe pehle se fill ho to yeh uski 2nd/3rd entry banegi).
-            # Agar explicitly '0' bharoge (khaali nahi, literally 0), to us
-            # date ki SAARI existing fuel_fills entries clear/reset ho jaayengi
-            # — galti se hui galat fills ek click me theek karne ke liye.
-            # save_fuel_fill()/clear_fuel_fills_for_date() internally us date
-            # ka vehicle_records.diesel total bhi khud sync kar dete hain. ──
-            new_fill_count    = 0
-            cleared_date_count = 0
-            for idx, row in cleaned_df.iterrows():
-                diesel_val = row.get("Diesel")
-                if diesel_val is not None and pd.notna(diesel_val):
-                    qty = float(diesel_val)
-                    row_date_str = str(row["Date"])
-                    if qty > 0:
-                        row_date = pd.Timestamp(row["Date"])
-                        row_period = "1-15" if row_date.day <= 15 else "16-31"
+            # overwrite NAHI karta. Teen cases:
+            # 1. Khaali → kuch nahi hota
+            # 2. Positive value, us date ka fuel_fills me PEHLE SE koi data
+            #    nahi → seedha naya fill add ho jaata hai (koi confirmation nahi)
+            # 3. Positive value, us date ka data PEHLE SE hai → save nahi hota,
+            #    3-button confirmation (Yes Update / Add Diesel / Cancel) upar
+            #    dikhta hai agli baar page render hone par
+            # 4. Explicitly 0 → us date ki saari existing fills clear ho jaati hain
+            # save_fuel_fill()/clear_fuel_fills_for_date()/replace_fuel_fill_for_date()
+            # internally us date ka vehicle_records.diesel total bhi khud sync
+            # kar dete hain. ──
+            new_fill_count      = 0
+            cleared_date_count  = 0
+            diesel_conflict_pending = []
+
+            diesel_rows = [
+                (idx, row) for idx, row in cleaned_df.iterrows()
+                if row.get("Diesel") is not None and pd.notna(row.get("Diesel"))
+            ]
+            positive_dates = [
+                str(row["Date"]) for _, row in diesel_rows if float(row["Diesel"]) > 0
+            ]
+            already_filled_dates = get_existing_fuel_fill_dates(bus_number, positive_dates)
+
+            for idx, row in diesel_rows:
+                qty = float(row["Diesel"])
+                row_date_str = str(row["Date"])
+                if qty > 0:
+                    row_date   = pd.Timestamp(row["Date"])
+                    row_period = "1-15" if row_date.day <= 15 else "16-31"
+                    if row_date_str in already_filled_dates:
+                        diesel_conflict_pending.append({
+                            "date": row_date_str, "qty": qty,
+                            "month": row_date.month, "period": row_period,
+                        })
+                    else:
                         rate_data = get_diesel_rate_payment(bus_number, row_date.month, row_period)
                         save_fuel_fill(bus_number, row_date_str, qty, rate_data["rate"])
                         new_fill_count += 1
-                    else:
-                        # ✅ explicitly 0 — is date ki saari fills clear/reset karo
-                        cleared = clear_fuel_fills_for_date(bus_number, row_date_str)
-                        if cleared:
-                            cleared_date_count += 1
+                else:
+                    # ✅ explicitly 0 — is date ki saari fills clear/reset karo
+                    cleared = clear_fuel_fills_for_date(bus_number, row_date_str)
+                    if cleared:
+                        cleared_date_count += 1
                 cleaned_df.at[idx, "Diesel"] = None  # ✅ vehicle_records save-path isko touch na kare
+
+            if diesel_conflict_pending:
+                st.session_state[diesel_pending_key] = diesel_conflict_pending
+                st.session_state[diesel_confirm_key]  = True
 
             if fetch_key not in st.session_state:
                 st.session_state[fetch_key] = get_vehicle_records(bus_number)
@@ -613,6 +672,8 @@ def editable_grid(bus_number: str):
                     msg_parts.append(f"{cleared_date_count} date ki {fuel_label(bus_number)} entries clear hui")
                 if msg_parts:
                     st.success("✅ " + ", ".join(msg_parts) + ".")
+                if diesel_conflict_pending:
+                    st.info(f"ℹ️ {len(diesel_conflict_pending)} date(s) ke {fuel_label(bus_number)} data ke liye confirmation chahiye — neeche dekho.")
                 st.session_state.pop(fetch_key, None)
                 st.rerun()
             else:
@@ -622,6 +683,8 @@ def editable_grid(bus_number: str):
                 if cleared_date_count:
                     msg_parts.append(f"({cleared_date_count} date ki {fuel_label(bus_number)} entries clear hui)")
                 st.success(" ".join(msg_parts))
+                if diesel_conflict_pending:
+                    st.info(f"ℹ️ {len(diesel_conflict_pending)} date(s) ke {fuel_label(bus_number)} data ke liye confirmation chahiye — neeche dekho.")
                 st.session_state.pop(key, None)
                 st.session_state.pop(fetch_key, None)
                 st.rerun()
