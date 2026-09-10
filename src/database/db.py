@@ -535,6 +535,11 @@ def get_driver_salary(bus_number: str = "") -> pd.DataFrame:
 
 
 def get_salary_check(from_date: str = None, to_date: str = None, bus_numbers: list = None) -> pd.DataFrame:
+    """Driver Name ke hisaab se ek hi combined row banata hai (saare buses ki
+    duties jod ke) — Bus Number ab optional/informational hai. SIRF us driver
+    ke liye bus-wise SPLIT rakhta hai jiski alag-alag vehicle pe alag rate
+    set ho (genuine per-bus rate override) — baaki sab drivers ke liye ek
+    hi row, jitni bhi buses pe kaam kiya ho."""
     query = supabase.table("vehicle_records").select("driver_name, bus_number, date")
     if from_date:
         query = query.gte("date", from_date)
@@ -550,16 +555,34 @@ def get_salary_check(from_date: str = None, to_date: str = None, bus_numbers: li
     df = pd.DataFrame(res.data)
     df = df[df["driver_name"].notna()]
     df = df[~df["driver_name"].str.strip().str.lower().isin(["no", "test", "none", ""])]
+    if df.empty:
+        return pd.DataFrame(columns=["Sr No", "Driver Name", "Bus Number", "Duties", "Salary Due", "Salary Given", "Remaining"])
+    df["driver_key"] = df["driver_name"].str.strip().str.lower()
 
-    grouped = df.groupby(
-        [df["driver_name"].str.strip().str.lower(), "bus_number"]
-    ).agg(
+    per_bus = df.groupby(["driver_key", "bus_number"]).agg(
         driver_name=("driver_name", "first"),
         bus_number=("bus_number", "first"),
         duties=("date", "nunique"),
     ).reset_index(drop=True)
 
-    # ── Salary paid (already given) merge ──
+    # ── Driver rate fetch — kisi driver ki alag buses pe alag rate ho, to
+    # usko "override" maan ke bus-wise split rakhte hain; warna combine ──
+    rates_query = supabase.table("driver_salary_rates").select("driver_name, bus_number, rate")
+    if bus_numbers:
+        rates_query = rates_query.in_("bus_number", bus_numbers)
+    rates_res = rates_query.execute()
+    rates_df = pd.DataFrame(rates_res.data) if rates_res.data else pd.DataFrame(
+        columns=["driver_name", "bus_number", "rate"])
+    if not rates_df.empty:
+        rates_df["driver_key"] = rates_df["driver_name"].str.strip().str.lower()
+
+    override_drivers = set()
+    if not rates_df.empty:
+        distinct_rate_counts = rates_df.groupby("driver_key")["rate"].nunique()
+        override_drivers = set(distinct_rate_counts[distinct_rate_counts > 1].index)
+
+    # ── Salary paid (already given) — combined-drivers ke liye driver-level
+    # total (bus se independent), override-drivers ke liye bus-specific ──
     sal_query = supabase.table("driver_salary").select("driver_name, salary, bus_number, date")
     if from_date:
         sal_query = sal_query.gte("date", from_date)
@@ -568,33 +591,50 @@ def get_salary_check(from_date: str = None, to_date: str = None, bus_numbers: li
     if bus_numbers:
         sal_query = sal_query.in_("bus_number", bus_numbers)
     sal_res = sal_query.execute()
-    sal_df  = pd.DataFrame(sal_res.data) if sal_res.data else pd.DataFrame(
+    sal_df = pd.DataFrame(sal_res.data) if sal_res.data else pd.DataFrame(
         columns=["driver_name", "salary", "bus_number", "date"])
-
-    grouped["key"] = grouped["driver_name"].str.strip().str.lower() + "_" + grouped["bus_number"].fillna("")
-
+    combined_sal_sum, bus_sal_sum = {}, {}
     if not sal_df.empty:
-        sal_df["key"]  = sal_df["driver_name"].str.strip().str.lower() + "_" + sal_df["bus_number"].fillna("")
-        sal_sum        = sal_df.groupby("key")["salary"].sum().reset_index()
-        grouped        = grouped.merge(sal_sum, on="key", how="left")
-        grouped["salary"] = grouped["salary"].fillna(0)
-    else:
-        grouped["salary"] = 0
+        sal_df["driver_key"] = sal_df["driver_name"].str.strip().str.lower()
+        combined_sal_sum = sal_df.groupby("driver_key")["salary"].sum().to_dict()
+        sal_df["bus_key"] = sal_df["driver_key"] + "_" + sal_df["bus_number"].fillna("")
+        bus_sal_sum = sal_df.groupby("bus_key")["salary"].sum().to_dict()
 
-    # ── Driver rate merge (Salary Due nikalne ke liye) ──
-    rates_query = supabase.table("driver_salary_rates").select("driver_name, bus_number, rate")
-    if bus_numbers:
-        rates_query = rates_query.in_("bus_number", bus_numbers)
-    rates_res = rates_query.execute()
-    rates_df = pd.DataFrame(rates_res.data) if rates_res.data else pd.DataFrame(
-        columns=["driver_name", "bus_number", "rate"])
+    rows = []
+    for driver_key, sub in per_bus.groupby("driver_key"):
+        driver_name = sub["driver_name"].iloc[0]
+        if driver_key in override_drivers:
+            # ✅ is driver ki alag-alag bus pe alag rate hai — bus-wise split rakho
+            for _, r in sub.iterrows():
+                bus = r["bus_number"]
+                rate = 0.0
+                if not rates_df.empty:
+                    match = rates_df[(rates_df["driver_key"] == driver_key) & (rates_df["bus_number"] == bus)]
+                    if not match.empty:
+                        rate = float(match["rate"].iloc[0])
+                salary_given = bus_sal_sum.get(f"{driver_key}_{bus or ''}", 0)
+                rows.append({
+                    "driver_name": driver_name, "bus_number": bus,
+                    "duties": r["duties"], "rate": rate, "salary": salary_given,
+                })
+        else:
+            # ✅ ek hi rate hai (ya koi override nahi) — driver ka combined ek row
+            total_duties = sub["duties"].sum()
+            buses = ", ".join(sorted(b for b in sub["bus_number"].dropna().unique().tolist()))
+            rate = 0.0
+            if not rates_df.empty:
+                match = rates_df[rates_df["driver_key"] == driver_key]
+                if not match.empty:
+                    rate = float(match["rate"].iloc[0])
+            salary_given = combined_sal_sum.get(driver_key, 0)
+            rows.append({
+                "driver_name": driver_name, "bus_number": buses,
+                "duties": total_duties, "rate": rate, "salary": salary_given,
+            })
 
-    if not rates_df.empty:
-        rates_df["key"] = rates_df["driver_name"].str.strip().str.lower() + "_" + rates_df["bus_number"].fillna("")
-        rate_map = rates_df.groupby("key")["rate"].first()
-        grouped["rate"] = grouped["key"].map(rate_map).fillna(0)
-    else:
-        grouped["rate"] = 0
+    grouped = pd.DataFrame(rows)
+    if grouped.empty:
+        return pd.DataFrame(columns=["Sr No", "Driver Name", "Bus Number", "Duties", "Salary Due", "Salary Given", "Remaining"])
 
     # ── Due aur Remaining calculate karo ──
     grouped["salary_due"] = grouped["duties"] * grouped["rate"]
@@ -602,6 +642,7 @@ def get_salary_check(from_date: str = None, to_date: str = None, bus_numbers: li
 
     grouped = grouped[["driver_name", "bus_number", "duties", "salary_due", "salary", "remaining"]]
     grouped.columns = ["Driver Name", "Bus Number", "Duties", "Salary Due", "Salary Given", "Remaining"]
+    grouped = grouped.sort_values("Driver Name").reset_index(drop=True)
     grouped.insert(0, "Sr No", range(1, len(grouped) + 1))
     return grouped
 
