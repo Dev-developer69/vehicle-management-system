@@ -560,6 +560,7 @@ def get_salary_check(from_date: str = None, to_date: str = None, bus_numbers: li
     df["driver_key"] = df["driver_name"].str.strip().str.lower()
 
     per_bus = df.groupby(["driver_key", "bus_number"]).agg(
+        driver_key=("driver_key", "first"),
         driver_name=("driver_name", "first"),
         bus_number=("bus_number", "first"),
         duties=("date", "nunique"),
