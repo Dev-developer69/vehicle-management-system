@@ -11,6 +11,53 @@ from src.database.db import (
 )
 
 
+
+def _render_html_table(df: pd.DataFrame, total_row: dict = None):
+    cols = list(df.columns)
+    html = [
+        "<div style='overflow-x:auto;border-radius:14px;"
+        "border:1px solid rgba(123,140,255,0.35);"
+        "box-shadow:0 4px 24px rgba(20,160,133,0.15), 0 0 0 1px rgba(255,255,255,0.03) inset;'>"
+        "<table style='width:100%;border-collapse:collapse;color:#f0f0f0;font-size:0.88rem;'>"
+    ]
+    html.append("<thead><tr>")
+    for c in cols:
+        html.append(
+            f"<th style='padding:12px 10px;text-align:left;white-space:nowrap;"
+            f"background:linear-gradient(90deg,#14A085,#7B8CFF);color:#fff;"
+            f"font-weight:700;letter-spacing:0.3px;'>{c}</th>"
+        )
+    html.append("</tr></thead><tbody>")
+
+    for i, r in enumerate(df.to_dict("records")):
+        row_bg = "#182838" if i % 2 == 0 else "#1E2B3D"
+        html.append(f"<tr style='transition:background 0.2s;'>")
+        for c in cols:
+            val = r.get(c, "")
+            val = "" if pd.isna(val) else val
+            html.append(
+                f"<td style='border-bottom:1px solid rgba(123,140,255,0.12);padding:10px;"
+                f"white-space:nowrap;background:{row_bg};color:#eee;'>{val}</td>"
+            )
+        html.append("</tr>")
+
+    if total_row:
+        html.append(
+            "<tr style='background:linear-gradient(90deg,rgba(20,160,133,0.35),rgba(123,140,255,0.35));'>"
+        )
+        for c in cols:
+            val = total_row.get(c, "")
+            html.append(
+                f"<td style='padding:12px 10px;white-space:nowrap;"
+                f"color:#FFD700;font-weight:800;font-size:0.95rem;"
+                f"text-shadow:0 0 8px rgba(255,215,0,0.35);'>{val}</td>"
+            )
+        html.append("</tr>")
+
+    html.append("</tbody></table></div>")
+    st.markdown("".join(html), unsafe_allow_html=True)
+
+
 def driver_records():
     if st.button('Home page', type='secondary', width='stretch', icon=':material/home:', shortcut='control+backspace'):
         st.session_state['login_state'] = None
@@ -99,17 +146,16 @@ def salary_check_view():
     if "salary_check_df" in st.session_state:
         df = st.session_state["salary_check_df"]
         if not df.empty:
-            st.dataframe(df, use_container_width=True, hide_index=True)
-
-            # Total row
             total = {
-                "Sr No": "",
-                "Driver Name": "TOTAL",
-                "Bus Number": "",
-                "Duties": df["Duties"].sum(),
-                "Salary Given": df["Salary Given"].sum(),
+                "Sr No":        "",
+                "Driver Name":  "TOTAL",
+                "Bus Number":   "",
+                "Duties":       int(df["Duties"].sum()),
+                "Salary Due":   f"{df['Salary Due'].sum():,.0f}",
+                "Salary Given": f"{df['Salary Given'].sum():,.0f}",
+                "Remaining":    f"{df['Remaining'].sum():,.0f}",
             }
-            st.dataframe(pd.DataFrame([total]), use_container_width=True, hide_index=True)
+            _render_html_table(df, total_row=total)
         else:
             st.info("No data found.")
 
@@ -176,16 +222,13 @@ def salary_check_view():
         df = st.session_state["sal_records_df"]
         if not df.empty:
             show_df = df.drop(columns=["id", "Updated By"], errors="ignore")
-            st.dataframe(show_df, use_container_width=True, hide_index=True)
-
-            # Total row
             total = {
-                "Date": "",
+                "Date":        "",
                 "Driver Name": "TOTAL",
-                "Salary": df["Salary"].sum(),
+                "Salary":      f"{df['Salary'].sum():,.0f}",
                 "Transaction": "",
             }
-            st.dataframe(pd.DataFrame([total]), use_container_width=True, hide_index=True)
+            _render_html_table(show_df, total_row=total)
         else:
             st.info("No salary records found for this period.")
 
@@ -202,19 +245,38 @@ def set_driver_rate_view():
         st.info("Koi accessible vehicle nahi mila.")
         return
 
-    bus_number = st.selectbox("Bus Number", options=accessible, key="rate_bus")
+    # ✅ Agar driver har vehicle ke liye same rate leta hai, to Bus Number
+    # select karne ki zaroorat nahi — ek hi baar "Sabhi vehicles" rate set
+    # ho jaayegi (Salary Check automatically fallback karega agar kisi
+    # particular bus ki alag rate na mili ho).
+    same_for_all = st.checkbox(
+        "🚌 Sabhi vehicles ke liye same rate (Bus Number select nahi karna)",
+        key="rate_same_all",
+    )
 
-    # ✅ Sirf isi selected bus ke drivers
-    drivers = get_drivers_for_buses([bus_number])
+    if same_for_all:
+        bus_number = "ALL"
+        drivers = get_drivers_for_buses(accessible)
+    else:
+        bus_number = st.selectbox("Bus Number", options=accessible, key="rate_bus")
+        drivers = get_drivers_for_buses([bus_number])
 
     if not drivers:
-        st.info(f"Bus {bus_number} ke liye koi driver nahi mila.")
+        st.info("Koi driver nahi mila.")
         return
 
     driver_name = st.selectbox("Driver Name", options=drivers, key="rate_driver")
 
     current_rate = get_driver_rate(bus_number, driver_name)
-    st.caption(f"Current Rate: ₹{current_rate:,.2f} / duty")
+    if same_for_all:
+        st.caption(f"Current Rate (sabhi vehicles): ₹{current_rate:,.2f} / duty")
+    else:
+        st.caption(f"Current Rate: ₹{current_rate:,.2f} / duty")
+        st.caption(
+            "ℹ️ Agar is driver ki is bus ke liye koi specific rate set nahi hai, "
+            "to 'Sabhi vehicles' wali rate (agar set ki hui ho) fallback ke taur "
+            "par use hogi."
+        )
 
     new_rate = st.number_input(
         "Rate (per duty)",
@@ -228,7 +290,10 @@ def set_driver_rate_view():
         user = st.session_state.get("user")
         updated_by = user.email if user else "unknown"
         save_driver_rate(bus_number, driver_name, new_rate, updated_by)
-        st.success(f"{driver_name} ka rate ₹{new_rate:,.2f} set ho gaya.")
+        if same_for_all:
+            st.success(f"{driver_name} ka rate ₹{new_rate:,.2f} SABHI vehicles ke liye set ho gaya.")
+        else:
+            st.success(f"{driver_name} ka rate ₹{new_rate:,.2f} bus {bus_number} ke liye set ho gaya.")
         st.rerun()
         
 # ──────────────────────────────────────────────
