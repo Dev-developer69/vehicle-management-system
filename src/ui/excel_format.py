@@ -299,7 +299,7 @@ def editable_grid(bus_number: str):
 
     # ── Extract Records from Image ──
     FIELD_DEFS = {
-        "Diesel":         ("diesel",         "'DSL/CNG', 'Diesel', 'DSL', 'CNG', 'Fuel' column (litres, usually the LAST or near-last numeric column, right before the REMARKS column). This is NOT the 'LF' (Load Factor) column and NOT the 'IPKM' column — those two sit just before it in the table and contain similar-looking decimal numbers, but they are unrelated calculated ratios, not fuel litres. Double-check you picked the column whose header literally says DSL/CNG/DSL or CNG, not LF or IPKM."),
+        "Diesel":         ("diesel",         "'DSL/CNG' column. POSITIONAL RULE (most reliable — use this over header text): scan each row from RIGHT to LEFT starting at the REMARKS column (which contains 'ON ROUTE'/'LEAVE APPROVED'/'NEXT PERIOD' text). The Diesel/DSL/CNG number is in the column IMMEDIATELY to the left of REMARKS — the very last numeric column in the row, adjacent to REMARKS with nothing numeric between them. Do NOT use the 'LF' (Load Factor) or 'IPKM' columns — those are several columns further left (right after the INCOME column) and contain unrelated calculated decimal ratios that superficially look similar. If a row's REMARKS says 'ON ROUTE' and there's a number just to its left, THAT number is the Diesel/CNG value, not IPKM or LF. If genuinely blank/zero for that row, set 0 or null."),
         "Income":         ("income",         "'Income', 'INCOME', 'Base Fare' (NOT per-km, NOT load factor)"),
         "Gross Income":   ("gross_income",   "'Gross', 'GROSS', 'Total Income'"),
         "Remark":         ("remark",         "'Remark', 'REMARK' column — copy the exact text as-is (e.g. 'ON ROUTE', 'LEAVE APPROVED', 'ABSENT', 'NEXT PERIOD'). If empty set null."),
@@ -366,7 +366,13 @@ def editable_grid(bus_number: str):
                     "- date: Convert to YYYY-MM-DD.\n"
                     f"{field_bullets}\n\n"
                     f"IGNORE: {ignore_list}. "
-                    "If field not present set null. "
+                    + ("CRITICAL for the diesel field: it sits immediately left of the REMARKS "
+                       "column, NOT immediately left of the INCOME column (that position, a few "
+                       "columns further left, holds IPKM then LF — both must be ignored for diesel). "
+                       "Verify by counting from the right edge of the table (REMARKS is rightmost, "
+                       "diesel is one column left of it) rather than from the left. "
+                       if "Diesel" in selected_fields else "")
+                    + "If field not present set null. "
                     f"Return ONLY JSON array with keys: {json_keys}. "
                     "No explanation, no markdown."
                 )
@@ -442,7 +448,13 @@ def editable_grid(bus_number: str):
                 st.rerun()
             else:
                 st.warning("⚠️ Extraction failed, fill manually.")
-    
+    st.caption(
+        f"ℹ️ **{fuel_label(bus_number)}** yahan bharoge to woh ek **naya alag fill** ban "
+        f"kar add hoga (purana overwrite nahi hoga) — same date pe pehle se koi fill ho "
+        f"to yeh uski 2nd/3rd entry ban jayegi. **Explicitly '0' bharoge** to us date ki "
+        f"saari existing fills clear/reset ho jaayengi (galti thik karne ke liye). Rate "
+        f"'{fuel_label(bus_number)} View' tab ke current default rate se li jayegi."
+    )
     st.data_editor(
         st.session_state[key],
         num_rows="dynamic",
