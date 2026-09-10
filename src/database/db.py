@@ -371,6 +371,37 @@ def clear_fuel_fills_for_date(bus_number: str, date_str: str) -> int:
     return len(rows)
 
 
+def get_existing_fuel_fill_dates(bus_number: str, dates: list) -> set:
+    """Un dates ka set deta hai jinke liye fuel_fills me is bus ke liye
+    pehle se kam se kam ek entry maujood hai."""
+    if not dates:
+        return set()
+    res = supabase.table("fuel_fills") \
+        .select("date") \
+        .eq("bus_number", bus_number) \
+        .in_("date", dates) \
+        .execute()
+    return {r["date"] for r in (res.data or [])}
+
+
+def replace_fuel_fill_for_date(bus_number: str, date_str: str, quantity: float, rate: float) -> None:
+    """'Yes, Update' action — us date ki SAARI purani fuel_fills entries
+    hata ke sirf ek nayi entry (di gayi quantity/rate ke saath) daal deta
+    hai, matlab total replace ho jaata hai (add nahi hota)."""
+    supabase.table("fuel_fills") \
+        .delete() \
+        .eq("bus_number", bus_number) \
+        .eq("date", date_str) \
+        .execute()
+    supabase.table("fuel_fills").insert({
+        "bus_number": bus_number,
+        "date":       date_str,
+        "quantity":   float(quantity),
+        "rate":       float(rate),
+    }).execute()
+    _sync_vehicle_record_diesel(bus_number, date_str)
+
+
 def get_unmigrated_diesel_dates(bus_number: str) -> list:
     """Un dates ki list deta hai jinka vehicle_records.diesel bhara hai
     (diesel > 0) lekin fuel_fills me abhi tak koi entry nahi hai us
