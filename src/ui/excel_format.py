@@ -48,6 +48,7 @@ def _render_km_merged_table(display_df: pd.DataFrame, groups: list):
     rowspan_at = {}   # idx -> merge info, is row se rowspan shuru hoga
     skip_at    = set()  # baaki group-member rows ke indices (merge cells yaha skip honge)
     claimed_dates = set()  # ab tak jitni dates kisi group me use ho chuki hain
+    group_breakdowns = []  # ✅ mobile-friendly breakdown (hover tooltip ki jagah tap se bhi dikhega)
 
     for group in groups:
         dates = group["dates"] if isinstance(group, dict) else group
@@ -85,6 +86,17 @@ def _render_km_merged_table(display_df: pd.DataFrame, groups: list):
         tooltip = "\n".join(lines)
 
         rowspan_at[insert_at] = {"sums": col_sums, "span": len(extracted), "tooltip": tooltip}
+        group_breakdowns.append({
+            "label": " + ".join(date_vals),
+            "rows": [
+                {"Date": d, "Scheduled KM": sch, "Actual KM": act, "Income": inc, "Gross Income": gr}
+                for d, sch, act, inc, gr in zip(
+                    date_vals, col_vals["Scheduled KM"], col_vals["Actual KM"],
+                    col_vals["Income"], col_vals["Gross Income"]
+                )
+            ],
+            "total": {"Date": "TOTAL", **col_sums},
+        })
         for i in range(insert_at + 1, insert_at + len(extracted)):
             skip_at.add(i)
 
@@ -119,6 +131,17 @@ def _render_km_merged_table(display_df: pd.DataFrame, groups: list):
     st.markdown("".join(html), unsafe_allow_html=True)
     groups_text = ", ".join(" + ".join(g["dates"] if isinstance(g, dict) else g) for g in groups)
     st.caption(f"🔗 Combined: {groups_text}")
+
+    # ── ✅ Mobile-friendly breakdown — HTML 'title' hover tooltip phone pe
+    # kaam nahi karta (koi hover event nahi hota touch devices pe), isliye
+    # yahan ek tap-able expander me wahi breakdown dikhaya hai (desktop pe
+    # bhi kaam karega, hover ke alawa). ──
+    if group_breakdowns:
+        with st.expander("📱 Combined KM/Income breakdown (tap to view)"):
+            for gb in group_breakdowns:
+                st.markdown(f"**🔗 {gb['label']}**")
+                breakdown_df = pd.DataFrame(gb["rows"] + [gb["total"]])
+                st.dataframe(breakdown_df, width='stretch', hide_index=True)
 
 
 # ──────────────────────────────────────────────
@@ -448,7 +471,12 @@ def editable_grid(bus_number: str):
                 st.rerun()
             else:
                 st.warning("⚠️ Extraction failed, fill manually.")
-
+    st.caption(
+        f"ℹ️ **{fuel_label(bus_number)}** yahan bharoge to: nayi date pe seedha add ho "
+        f"jayega; purani date (jisme pehle se data hai) pe **3 options milenge** — "
+        f"Yes Update (purana replace), Add Diesel (naya add), Cancel. **Explicitly '0'** "
+        f"bharoge to us date ki saari existing fills clear ho jaayengi."
+    )
     st.data_editor(
         st.session_state[key],
         num_rows="dynamic",
@@ -792,7 +820,7 @@ def editable_grid(bus_number: str):
                         st.caption("⚠️ Kam se kam 2 dates chuno.")
 
                 if active_groups:
-                    st.caption("Combined groups: (hover karo details ke liye)")
+                    st.caption("Combined groups:")
                     for g in active_groups:
                         dates = g["dates"]
                         rows_g = [display_df[display_df["Date"] == d] for d in dates]
@@ -804,25 +832,35 @@ def editable_grid(bus_number: str):
                         act_sum = sum(v for v in act_vals if pd.notna(v))
                         inc_sum = sum(v for v in inc_vals if pd.notna(v))
                         gr_sum  = sum(v for v in gr_vals if pd.notna(v))
-                        lines = [
-                            f"{d} — Sch {s:.0f} / Actual {a:.0f} / Income {inc:,.0f} / Gross {gr:,.0f}"
-                            for d, s, a, inc, gr in zip(dates, sch_vals, act_vals, inc_vals, gr_vals)
-                        ]
-                        lines.append(f"Total — Sch {sch_sum:.0f} / Actual {act_sum:.0f} / Income {inc_sum:,.0f} / Gross {gr_sum:,.0f}")
-                        tooltip = "\n".join(lines)
                         is_overlap = g["id"] in overlapping_group_ids
                         label = f"{'⚠️ ' if is_overlap else '🔗 '}{' + '.join(dates)}"
-                        rc1, rc2 = st.columns([4, 1])
+                        rc1, rc2, rc3 = st.columns([3, 1, 1])
                         with rc1:
                             st.markdown(
-                                f"<span title=\"{tooltip}\" style='cursor:help;{'color:#FFB347;' if is_overlap else ''}'>{label}</span>",
+                                f"<span style='{'color:#FFB347;' if is_overlap else ''}'>{label}</span>",
                                 unsafe_allow_html=True,
                             )
                         with rc2:
+                            # ✅ Mobile-friendly — button tap karke breakdown dikhega,
+                            # hover tooltip ki tarah phone pe fail nahi hoga
+                            if st.button("🔍 Details", key=f"combine_detail_{bus_number}_{g['id']}"):
+                                st.session_state[f"show_detail_{bus_number}_{g['id']}"] = \
+                                    not st.session_state.get(f"show_detail_{bus_number}_{g['id']}", False)
+                        with rc3:
                             if st.button("❌ Hatao", key=f"uncombine_btn_{bus_number}_{g['id']}"):
                                 delete_km_combine(bus_number, g["id"])
                                 st.session_state[combine_key] = get_km_combines(bus_number)
                                 st.rerun()
+                        if st.session_state.get(f"show_detail_{bus_number}_{g['id']}"):
+                            detail_rows = [
+                                {"Date": d, "Scheduled KM": s, "Actual KM": a, "Income": inc, "Gross Income": gr}
+                                for d, s, a, inc, gr in zip(dates, sch_vals, act_vals, inc_vals, gr_vals)
+                            ]
+                            detail_rows.append({
+                                "Date": "TOTAL", "Scheduled KM": sch_sum, "Actual KM": act_sum,
+                                "Income": inc_sum, "Gross Income": gr_sum,
+                            })
+                            st.dataframe(pd.DataFrame(detail_rows), width='stretch', hide_index=True)
 
         total_row = build_total_row(display_df, numeric_cols, label_col="Driver Name")
         st.dataframe(total_row, width='stretch', hide_index=True)
