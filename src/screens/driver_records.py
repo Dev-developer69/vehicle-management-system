@@ -8,10 +8,17 @@ from src.database.auth import get_accessible_vehicles, get_current_role
 from src.database.db import (
     get_salary_check, get_driver_salary, save_driver_salary,
     get_driver_rate, save_driver_rate, get_drivers_for_buses,
+    get_driver_license, save_driver_license, get_driver_report, rename_driver,
 )
 
 
-
+# ──────────────────────────────────────────────
+# HELPER: Vibrant, eye-catching HTML table — teal→purple gradient header
+# (matches app theme), soft glow border, subtle hover-pop on rows, aur ek
+# glowing gradient TOTAL row. TOTAL row isi <table> ke andar hoti hai (alag
+# floating widget nahi), isliye neeche wale fixed-position footer
+# ("Created with ❤️...") se visually overlap nahi hoti.
+# ──────────────────────────────────────────────
 def _render_html_table(df: pd.DataFrame, total_row: dict = None):
     cols = list(df.columns)
     html = [
@@ -68,7 +75,7 @@ def driver_records():
     if "driver_records_view" not in st.session_state:
         st.session_state["driver_records_view"] = "salary_check"
 
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     with col1:
         if st.button("📊 Salary Check", type='primary' if st.session_state["driver_records_view"] == "salary_check" else 'secondary',
                      use_container_width=True, key="btn_salary_check"):
@@ -84,6 +91,11 @@ def driver_records():
                      use_container_width=True, key="btn_set_rate"):
             st.session_state["driver_records_view"] = "set_rate"
             st.rerun()
+    with col4:
+        if st.button("🔍 Driver Report", type='primary' if st.session_state["driver_records_view"] == "driver_report" else 'secondary',
+                     use_container_width=True, key="btn_driver_report"):
+            st.session_state["driver_records_view"] = "driver_report"
+            st.rerun()
 
     st.markdown("---")
 
@@ -91,6 +103,8 @@ def driver_records():
         salary_check_view()
     elif st.session_state["driver_records_view"] == "add_salary":
         add_driver_salary_view()
+    elif st.session_state["driver_records_view"] == "driver_report":
+        driver_report_view()
     else:
         set_driver_rate_view()
 
@@ -341,3 +355,134 @@ def add_driver_salary_view():
                 save_driver_salary(df, bus_number=bus_number)
                 st.success(f"₹{amount:,.2f} {driver_name} ko diya gaya — record ho gaya.")
                 st.rerun()
+
+
+# ──────────────────────────────────────────────
+# DRIVER REPORT (search + full A-Z monthly detail)
+# ──────────────────────────────────────────────
+def driver_report_view():
+    st.markdown("### 🔍 Driver Report")
+
+    accessible   = get_accessible_vehicles()
+    all_drivers  = get_drivers_for_buses(accessible)
+    if not all_drivers:
+        st.info("Koi driver nahi mila.")
+        return
+
+    driver_name = st.selectbox(
+        "Driver chuno (type karke search bhi kar sakte ho)",
+        options=all_drivers, key="dr_search_driver",
+    )
+
+    col1, col2, col3 = st.columns([2, 2, 1])
+    with col1:
+        dr_month = st.selectbox(
+            "Month", options=list(range(1, 13)), index=date.today().month - 1,
+            format_func=lambda x: date(2000, x, 1).strftime("%B"), key="dr_month",
+        )
+    with col2:
+        dr_period = st.radio("Period", ["1-15", "16-31", "01-31"], index=2, horizontal=True, key="dr_period")
+    with col3:
+        st.markdown("<br>", unsafe_allow_html=True)
+        load = st.button("🔄 Load Report", key="dr_load", type='primary', use_container_width=True)
+
+    year = date.today().year
+    if dr_period == "1-15":
+        from_date, to_date = f"{year}-{dr_month:02d}-01", f"{year}-{dr_month:02d}-15"
+    elif dr_period == "16-31":
+        last_day = calendar.monthrange(year, dr_month)[1]
+        from_date, to_date = f"{year}-{dr_month:02d}-16", f"{year}-{dr_month:02d}-{last_day}"
+    else:
+        last_day = calendar.monthrange(year, dr_month)[1]
+        from_date, to_date = f"{year}-{dr_month:02d}-01", f"{year}-{dr_month:02d}-{last_day}"
+
+    report_key = f"dr_report_{driver_name}_{from_date}_{to_date}"
+    if load or report_key not in st.session_state:
+        st.session_state[report_key] = get_driver_report(driver_name, from_date, to_date)
+    report = st.session_state[report_key]
+
+    st.markdown("---")
+
+    # ── License info (editable) ──
+    st.markdown("#### 🪪 License Info")
+    lic = get_driver_license(driver_name)
+    lc1, lc2, lc3 = st.columns(3)
+    with lc1:
+        lic_num = st.text_input("License Number", value=lic["license_number"], key="dr_lic_num")
+    with lc2:
+        lic_val_default = pd.to_datetime(lic["license_validity"]).date() if lic["license_validity"] else date.today()
+        lic_validity = st.date_input("License Validity", value=lic_val_default, key="dr_lic_val")
+    with lc3:
+        phone = st.text_input("Phone (optional)", value=lic.get("phone", ""), key="dr_lic_phone")
+    if st.button("💾 Save License Info", key="dr_save_lic"):
+        save_driver_license(driver_name, lic_num, lic_validity, phone)
+        st.success("✅ License info saved!")
+        st.rerun()
+
+    if lic["license_validity"]:
+        val_date  = pd.to_datetime(lic["license_validity"]).date()
+        days_left = (val_date - date.today()).days
+        if days_left < 0:
+            st.error(f"⚠️ License EXPIRED {abs(days_left)} din pehle ({val_date})")
+        elif days_left <= 30:
+            st.warning(f"⚠️ License {days_left} din me expire ho rahi hai ({val_date})")
+        else:
+            st.success(f"✅ License valid hai ({val_date} tak)")
+
+    st.markdown("---")
+
+    # ── Summary cards ──
+    st.markdown(f"#### 📊 {driver_name} — Monthly Summary")
+    s1, s2, s3, s4 = st.columns(4)
+    s1.metric("🚌 Vehicles Chalayi", len(report["buses"]))
+    s2.metric("📅 Total Duties", report["total_duties"])
+    s3.metric("🛣️ Total Actual KM", f"{report['total_actual_km']:,.0f}")
+    s4.metric("⛽ Avg Mileage", f"{report['avg_mileage']:.2f} km/L")
+
+    s5, s6, s7 = st.columns(3)
+    s5.metric("💰 Salary Due", f"₹{report['salary_due']:,.0f}")
+    s6.metric("✅ Salary Given", f"₹{report['salary_given']:,.0f}")
+    s7.metric("⏳ Remaining", f"₹{report['remaining']:,.0f}")
+
+    # ── Vehicles chalayi breakdown ──
+    st.markdown("#### 🚌 Vehicle-wise Duties")
+    if report["duties_by_bus"]:
+        veh_df = pd.DataFrame([
+            {"Bus Number": bus, "Duties": duties}
+            for bus, duties in report["duties_by_bus"].items()
+        ])
+        _render_html_table(veh_df)
+    else:
+        st.info("Is period me koi duty nahi mili.")
+
+    # ── Daily log (a-z detail) ──
+    st.markdown("#### 📋 Daily Log (A-Z Details)")
+    if not report["daily_log"].empty:
+        _render_html_table(report["daily_log"])
+    else:
+        st.info("Koi record nahi mila.")
+
+    st.markdown("---")
+
+    # ── Rename/merge driver (typo-fix tool) ──
+    with st.expander("✏️ Is driver ka naam sahi karo (typo/duplicate merge)"):
+        st.caption(
+            "Agar isi driver ki koi aur galat-naam wali entry hai (jaise 'Ashok' "
+            "vs 'Ashok (sahawar)'), to yahan naya sahi naam daal ke saari tables "
+            "(Vehicle Records, Salary, Rate, License) me ek saath update kar do."
+        )
+        new_name = st.text_input("Naya sahi naam", value=driver_name, key="dr_rename_new")
+        if st.button("🔀 Rename/Merge karo", key="dr_rename_btn"):
+            if new_name.strip() and new_name.strip().lower() != driver_name.strip().lower():
+                counts = rename_driver(driver_name, new_name)
+                st.success(
+                    f"✅ '{driver_name}' → '{new_name}' rename ho gaya — "
+                    f"Vehicle Records: {counts['vehicle_records']}, "
+                    f"Salary: {counts['driver_salary']}, "
+                    f"Rate: {counts['driver_salary_rates']}, "
+                    f"License: {counts['drivers']}"
+                )
+                st.session_state.pop(report_key, None)
+                st.rerun()
+            else:
+                st.warning("⚠️ Naya naam khaali ya same nahi hona chahiye.")
