@@ -20,6 +20,7 @@ from src.database.db import (
     save_fuel_fill, get_fuel_fills, update_fuel_fill, delete_fuel_fill,
     clear_fuel_fills_for_date, get_existing_fuel_fill_dates, replace_fuel_fill_for_date,
     migrate_diesel_to_fuel_fills, get_unmigrated_diesel_dates,
+    get_vehicle_payment_rate, save_vehicle_payment_rate,
 )
 
 # ──────────────────────────────────────────────
@@ -80,7 +81,7 @@ def _render_html_table(df: pd.DataFrame, total_row: dict = None):
 
 def _render_km_merged_table(display_df: pd.DataFrame, groups: list):
     """Renders display_df as an HTML table where Scheduled KM / Actual KM /
-    Income / Gross Income cells for each group of 2+ dates are visually
+    Income cells for each group of 2+ dates are visually
     merged (rowspan) into a single SUMMED value, Excel-style — every other
     column stays per-row/unchanged. Multiple non-overlapping groups (of any
     size) supported at once.
@@ -91,7 +92,7 @@ def _render_km_merged_table(display_df: pd.DataFrame, groups: list):
     Agar kisi purani/duplicate group ki wajah se dates OVERLAP karte hain
     (ek hi date do groups me ho), to baad wali overlapping group ko skip
     kar deta hai — taaki table half-broken na dikhe."""
-    MERGE_COLS = ["Scheduled KM", "Actual KM", "Income", "Gross Income"]
+    MERGE_COLS = ["Scheduled KM", "Actual KM", "Income"]
     rows = display_df.to_dict("records")
 
     rowspan_at = {}   # idx -> merge info, is row se rowspan shuru hoga
@@ -122,15 +123,14 @@ def _render_km_merged_table(display_df: pd.DataFrame, groups: list):
         col_sums  = {c: sum(v for v in col_vals[c] if pd.notna(v)) for c in MERGE_COLS}
 
         lines = [
-            f"{d} — Sch {sch:.0f} / Actual {act:.0f} / Income {inc:,.0f} / Gross {gr:,.0f}"
-            for d, sch, act, inc, gr in zip(
-                date_vals, col_vals["Scheduled KM"], col_vals["Actual KM"],
-                col_vals["Income"], col_vals["Gross Income"]
+            f"{d} — Sch {sch:.0f} / Actual {act:.0f} / Income {inc:,.0f}"
+            for d, sch, act, inc in zip(
+                date_vals, col_vals["Scheduled KM"], col_vals["Actual KM"], col_vals["Income"]
             )
         ]
         lines.append(
             f"Total — Sch {col_sums['Scheduled KM']:.0f} / Actual {col_sums['Actual KM']:.0f} "
-            f"/ Income {col_sums['Income']:,.0f} / Gross {col_sums['Gross Income']:,.0f}"
+            f"/ Income {col_sums['Income']:,.0f}"
         )
         tooltip = "\n".join(lines)
 
@@ -138,10 +138,9 @@ def _render_km_merged_table(display_df: pd.DataFrame, groups: list):
         group_breakdowns.append({
             "label": " + ".join(date_vals),
             "rows": [
-                {"Date": d, "Scheduled KM": sch, "Actual KM": act, "Income": inc, "Gross Income": gr}
-                for d, sch, act, inc, gr in zip(
-                    date_vals, col_vals["Scheduled KM"], col_vals["Actual KM"],
-                    col_vals["Income"], col_vals["Gross Income"]
+                {"Date": d, "Scheduled KM": sch, "Actual KM": act, "Income": inc}
+                for d, sch, act, inc in zip(
+                    date_vals, col_vals["Scheduled KM"], col_vals["Actual KM"], col_vals["Income"]
                 )
             ],
             "total": {"Date": "TOTAL", **col_sums},
@@ -345,7 +344,7 @@ def _generate_expenses_pdf(df, bus_number, month, period):
 # 1. VEHICLE RECORDS
 # ──────────────────────────────────────────────
 def editable_grid(bus_number: str):
-    numeric_cols = ["Scheduled KM", "Actual KM", "Diesel", "Diesel KM", "Avg", "Income", "Gross Income"]
+    numeric_cols = ["Scheduled KM", "Actual KM", "Diesel", "Diesel KM", "Avg", "Income"]
     key          = f"grid_{bus_number}"
     ed_key       = f"editor_{bus_number}"
     fetch_key    = f"fetched_{bus_number}"
@@ -370,7 +369,6 @@ def editable_grid(bus_number: str):
             "Diesel":         [None],
             "Diesel KM":      [None],
             "Income":         [None],
-            "Gross Income":   [None],
             "Remark":         [""],
             "Next":           [False],
         })
@@ -380,7 +378,6 @@ def editable_grid(bus_number: str):
     FIELD_DEFS = {
         "Diesel":         ("diesel",         "'DSL/CNG' column. POSITIONAL RULE (most reliable — use this over header text): scan each row from RIGHT to LEFT starting at the REMARKS column (which contains 'ON ROUTE'/'LEAVE APPROVED'/'NEXT PERIOD' text). The Diesel/DSL/CNG number is in the column IMMEDIATELY to the left of REMARKS — the very last numeric column in the row, adjacent to REMARKS with nothing numeric between them. Do NOT use the 'LF' (Load Factor) or 'IPKM' columns — those are several columns further left (right after the INCOME column) and contain unrelated calculated decimal ratios that superficially look similar. If a row's REMARKS says 'ON ROUTE' and there's a number just to its left, THAT number is the Diesel/CNG value, not IPKM or LF. If genuinely blank/zero for that row, set 0 or null."),
         "Income":         ("income",         "'Income', 'INCOME', 'Base Fare' (NOT per-km, NOT load factor)"),
-        "Gross Income":   ("gross_income",   "'Gross', 'GROSS', 'Total Income'"),
         "Remark":         ("remark",         "'Remark', 'REMARK' column — copy the exact text as-is (e.g. 'ON ROUTE', 'LEAVE APPROVED', 'ABSENT', 'NEXT PERIOD'). If empty set null."),
         "Driver Name":    ("driver_name",    "'Driver', 'Driver Name', 'DRIVER' column — copy exact name as-is"),
         "Conductor Name": ("conductor_name", "'Conductor', 'Conductor Name', 'COND' column — copy exact name as-is"),
@@ -396,7 +393,7 @@ def editable_grid(bus_number: str):
             "Fields",
             options=list(FIELD_DEFS.keys()),
             selection_mode="multi",
-            default=["Income", "Gross Income", "Remark"],
+            default=["Income", "Remark"],
             key=f"extract_fields_{bus_number}",
             label_visibility="collapsed",
         )
@@ -515,7 +512,6 @@ def editable_grid(bus_number: str):
                         "Diesel":         r.get("diesel") if "Diesel" in selected_fields else None,
                         "Diesel KM":      None,
                         "Income":         r.get("income") if "Income" in selected_fields else None,
-                        "Gross Income":   (r.get("gross_income") or 0) if "Gross Income" in selected_fields else None,
                         "Remark":         "",
                         "Next":           is_next,
                     })
@@ -549,7 +545,6 @@ def editable_grid(bus_number: str):
             "Diesel":         st.column_config.NumberColumn(f"{fuel_label(bus_number)} (naya fill)", min_value=0.0, step=0.01, format="%.2f"),
             "Diesel KM":      st.column_config.NumberColumn(f"{fuel_label(bus_number)} KM", min_value=0),
             "Income":         st.column_config.NumberColumn("Income", min_value=0),
-            "Gross Income":   st.column_config.NumberColumn("Gross Income", min_value=0),
             "Remark":         st.column_config.TextColumn("Remark"),
             "Next":           st.column_config.CheckboxColumn("Next", default=False),
         },
@@ -565,7 +560,7 @@ def editable_grid(bus_number: str):
     #    ho) pe hi confirmation mango. Agar sirf khaali field bhari ja rahi
     #    hai (jaise Diesel pehle blank tha), to seedha save ho jaye. ──
     _COMPARE_COLS = ["Status", "Driver Name", "Conductor Name", "Scheduled KM",
-                     "Actual KM", "Diesel KM", "Income", "Gross Income", "Remark", "Next"]
+                     "Actual KM", "Diesel KM", "Income", "Remark", "Next"]
 
     def _is_empty_val(v) -> bool:
         if v is None:
@@ -819,12 +814,12 @@ def editable_grid(bus_number: str):
             pd.to_numeric(display_df["Diesel KM"], errors="coerce") /
             pd.to_numeric(display_df["Diesel"], errors="coerce").replace(0, float("nan"))
         ).round(2)
-        for col, default in [("Income", 0), ("Gross Income", 0), ("Remark", "")]:
+        for col, default in [("Income", 0), ("Remark", "")]:
             if col not in display_df.columns:
                 display_df[col] = default
         display_df = display_df[["Date", "Status", "Driver Name", "Conductor Name",
                                   "Scheduled KM", "Actual KM", "Diesel", "Diesel KM",
-                                  "Avg", "Income", "Gross Income", "Remark", "Next"]]
+                                  "Avg", "Income", "Remark", "Next"]]
         # ── Kayi din ke KM combine karo (Excel jaisa merge cell) — same period me kayi groups ho sakte hain ──
         date_options = display_df["Date"].tolist()
         combine_key = f"km_combines_{bus_number}"
@@ -883,11 +878,9 @@ def editable_grid(bus_number: str):
                         sch_vals = [pd.to_numeric(r["Scheduled KM"].iloc[0], errors="coerce") if not r.empty else 0 for r in rows_g]
                         act_vals = [pd.to_numeric(r["Actual KM"].iloc[0], errors="coerce") if not r.empty else 0 for r in rows_g]
                         inc_vals = [pd.to_numeric(r["Income"].iloc[0], errors="coerce") if not r.empty else 0 for r in rows_g]
-                        gr_vals  = [pd.to_numeric(r["Gross Income"].iloc[0], errors="coerce") if not r.empty else 0 for r in rows_g]
                         sch_sum = sum(v for v in sch_vals if pd.notna(v))
                         act_sum = sum(v for v in act_vals if pd.notna(v))
                         inc_sum = sum(v for v in inc_vals if pd.notna(v))
-                        gr_sum  = sum(v for v in gr_vals if pd.notna(v))
                         is_overlap = g["id"] in overlapping_group_ids
                         label = f"{'⚠️ ' if is_overlap else '🔗 '}{' + '.join(dates)}"
                         rc1, rc2, rc3 = st.columns([3, 1, 1])
@@ -909,17 +902,48 @@ def editable_grid(bus_number: str):
                                 st.rerun()
                         if st.session_state.get(f"show_detail_{bus_number}_{g['id']}"):
                             detail_rows = [
-                                {"Date": d, "Scheduled KM": s, "Actual KM": a, "Income": inc, "Gross Income": gr}
-                                for d, s, a, inc, gr in zip(dates, sch_vals, act_vals, inc_vals, gr_vals)
+                                {"Date": d, "Scheduled KM": s, "Actual KM": a, "Income": inc}
+                                for d, s, a, inc in zip(dates, sch_vals, act_vals, inc_vals)
                             ]
                             detail_rows.append({
-                                "Date": "TOTAL", "Scheduled KM": sch_sum, "Actual KM": act_sum,
-                                "Income": inc_sum, "Gross Income": gr_sum,
+                                "Date": "TOTAL", "Scheduled KM": sch_sum, "Actual KM": act_sum, "Income": inc_sum,
                             })
                             _render_html_table(pd.DataFrame(detail_rows))
 
         total_row = build_total_row(display_df, numeric_cols, label_col="Driver Name")
         _render_html_table(pd.DataFrame(columns=total_row.columns), total_row=total_row.iloc[0].to_dict())
+
+        # ── 💰 Payment Summary — Income - (Actual KM × per-vehicle rate) - fixed period tax ──
+        st.markdown("#### 💰 Payment Summary")
+        rate_key = f"payment_rate_{bus_number}"
+        if rate_key not in st.session_state:
+            st.session_state[rate_key] = get_vehicle_payment_rate(bus_number)
+        pc1, pc2 = st.columns([2, 1])
+        with pc1:
+            payment_rate = st.number_input(
+                "Rate per Actual KM (₹) — is vehicle ke liye",
+                min_value=0.0, step=0.5, format="%.2f",
+                value=float(st.session_state[rate_key]), key=f"payment_rate_input_{bus_number}",
+            )
+        with pc2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("💾 Save Rate", key=f"save_payment_rate_{bus_number}", width='stretch'):
+                save_vehicle_payment_rate(bus_number, payment_rate)
+                st.session_state[rate_key] = payment_rate
+                st.success("✅ Rate saved!")
+                st.rerun()
+
+        total_income     = pd.to_numeric(display_df["Income"], errors="coerce").fillna(0).sum()
+        total_actual_km  = pd.to_numeric(display_df["Actual KM"], errors="coerce").fillna(0).sum()
+        PERIOD_TAX       = 11700  # ✅ fixed, har period (chahe 15 din ho ya kam/zyada) ke liye ek hi baar
+        km_cost          = total_actual_km * payment_rate
+        payment          = total_income - km_cost - PERIOD_TAX
+
+        mc1, mc2, mc3, mc4 = st.columns(4)
+        mc1.metric("Total Income", f"₹{total_income:,.0f}")
+        mc2.metric("KM Cost", f"₹{km_cost:,.0f}", help=f"{total_actual_km:,.0f} km × ₹{payment_rate:.2f}")
+        mc3.metric("Tax (fixed)", f"₹{PERIOD_TAX:,.0f}")
+        mc4.metric("💵 Payment", f"₹{payment:,.0f}")
 
         pdf_bytes = _generate_pdf(display_df, total_row, bus_number, month, half)
         st.download_button("📥 Download PDF", data=pdf_bytes,
