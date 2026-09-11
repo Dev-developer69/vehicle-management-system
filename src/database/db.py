@@ -673,6 +673,178 @@ def get_drivers_for_buses(bus_numbers: list = None) -> list:
     }
     return sorted(names)
 
+
+def rename_driver(old_name: str, new_name: str) -> dict:
+    """Ek driver ka naam saari tables me ek saath update karta hai — stray/typo
+    entries (jaise 'Ashok' → 'Ashok (sahawar)') ko sahi naam me merge karne ke
+    liye. Case-insensitive match karta hai (old_name se exactly match karne
+    wali saari rows update hongi). Return: kitni rows kis table me update hui."""
+    old_name = old_name.strip()
+    new_name = new_name.strip()
+    if not old_name or not new_name or old_name.lower() == new_name.lower():
+        return {"vehicle_records": 0, "driver_salary": 0, "driver_salary_rates": 0, "drivers": 0}
+
+    counts = {}
+
+    # ✅ vehicle_records
+    res = supabase.table("vehicle_records").select("bus_number, date").ilike("driver_name", old_name).execute()
+    vr_count = len(res.data or [])
+    if vr_count:
+        supabase.table("vehicle_records").update({"driver_name": new_name}).ilike("driver_name", old_name).execute()
+    counts["vehicle_records"] = vr_count
+
+    # ✅ driver_salary (payment history — 'id' column confirmed via
+    # update_driver_salary/delete_driver_salary elsewhere)
+    res = supabase.table("driver_salary").select("id").ilike("driver_name", old_name).execute()
+    ids = [r["id"] for r in (res.data or [])]
+    if ids:
+        supabase.table("driver_salary").update({"driver_name": new_name}).in_("id", ids).execute()
+    counts["driver_salary"] = len(ids)
+
+    # ✅ driver_salary_rates — agar new_name ke liye already koi rate row hai
+    # (kisi bus ke liye), to old_name wali row ko delete karo (conflict avoid
+    # karne ke liye), warna sirf naam update kar do.
+    res = supabase.table("driver_salary_rates").select("bus_number").ilike("driver_name", old_name).execute()
+    old_buses = [r["bus_number"] for r in (res.data or [])]
+    updated = 0
+    for bus in old_buses:
+        existing = supabase.table("driver_salary_rates") \
+            .select("driver_name") \
+            .eq("driver_name", new_name).eq("bus_number", bus).execute()
+        if existing.data:
+            supabase.table("driver_salary_rates") \
+                .delete().ilike("driver_name", old_name).eq("bus_number", bus).execute()
+        else:
+            supabase.table("driver_salary_rates") \
+                .update({"driver_name": new_name}).ilike("driver_name", old_name).eq("bus_number", bus).execute()
+            updated += 1
+    counts["driver_salary_rates"] = updated
+
+    # ✅ drivers (license info) — agar new_name ke liye already license row hai,
+    # to old wali delete karo, warna naam update kar do
+    res = supabase.table("drivers").select("driver_name").ilike("driver_name", old_name).execute()
+    if res.data:
+        existing = supabase.table("drivers").select("driver_name").eq("driver_name", new_name).execute()
+        if existing.data:
+            supabase.table("drivers").delete().ilike("driver_name", old_name).execute()
+        else:
+            supabase.table("drivers").update({"driver_name": new_name}).ilike("driver_name", old_name).execute()
+        counts["drivers"] = 1
+    else:
+        counts["drivers"] = 0
+
+    return counts
+
+
+# ══════════════════════════════════════════════
+# DRIVER LICENSE INFO + FULL DRIVER REPORT
+# ══════════════════════════════════════════════
+
+def get_driver_license(driver_name: str) -> dict:
+    res = supabase.table("drivers") \
+        .select("license_number, license_validity, phone") \
+        .eq("driver_name", driver_name.strip()) \
+        .execute()
+    if res.data:
+        row = res.data[0]
+        return {
+            "license_number":   row.get("license_number") or "",
+            "license_validity": row.get("license_validity"),
+            "phone":            row.get("phone") or "",
+        }
+    return {"license_number": "", "license_validity": None, "phone": ""}
+
+
+def save_driver_license(driver_name: str, license_number: str, license_validity, phone: str = "") -> None:
+    supabase.table("drivers").upsert({
+        "driver_name":      driver_name.strip(),
+        "license_number":   license_number.strip(),
+        "license_validity": str(license_validity) if license_validity else None,
+        "phone":            phone.strip(),
+    }, on_conflict="driver_name").execute()
+
+
+def get_driver_report(driver_name: str, from_date: str, to_date: str) -> dict:
+    """Ek driver ka poora monthly report — kaunsi buses chalayi, kitni duties,
+    diesel/mileage stats, income, aur salary due/given/remaining (rate
+    lookup 'ALL vehicles' fallback ke saath, jaisa get_salary_check karta hai)."""
+    driver_key = driver_name.strip().lower()
+
+    res = supabase.table("vehicle_records") \
+        .select("driver_name, bus_number, date, status, actual_km, scheduled_km, diesel, diesel_km, income") \
+        .gte("date", from_date) \
+        .lte("date", to_date) \
+        .execute()
+    rows = res.data or []
+    my_rows = [r for r in rows if (r.get("driver_name") or "").strip().lower() == driver_key]
+
+    empty_log = pd.DataFrame(columns=["Date", "Bus", "Status", "Actual KM", "Diesel", "Income"])
+    if not my_rows:
+        return {
+            "duties_by_bus": {}, "total_duties": 0, "buses": [],
+            "total_actual_km": 0, "total_scheduled_km": 0,
+            "total_diesel": 0.0, "total_diesel_km": 0, "avg_mileage": 0.0,
+            "total_income": 0, "salary_due": 0.0, "salary_given": 0.0, "remaining": 0.0,
+            "daily_log": empty_log,
+        }
+
+    df = pd.DataFrame(my_rows)
+    df = df[df["status"] != "On Leave"]
+    df["actual_km"]    = pd.to_numeric(df["actual_km"], errors="coerce").fillna(0)
+    df["scheduled_km"] = pd.to_numeric(df["scheduled_km"], errors="coerce").fillna(0)
+    df["diesel"]       = pd.to_numeric(df["diesel"], errors="coerce").fillna(0)
+    df["diesel_km"]    = pd.to_numeric(df["diesel_km"], errors="coerce").fillna(0)
+    df["income"]       = pd.to_numeric(df["income"], errors="coerce").fillna(0)
+
+    if df.empty:
+        return {
+            "duties_by_bus": {}, "total_duties": 0, "buses": [],
+            "total_actual_km": 0, "total_scheduled_km": 0,
+            "total_diesel": 0.0, "total_diesel_km": 0, "avg_mileage": 0.0,
+            "total_income": 0, "salary_due": 0.0, "salary_given": 0.0, "remaining": 0.0,
+            "daily_log": empty_log,
+        }
+
+    duties_by_bus = df.groupby("bus_number")["date"].nunique().to_dict()
+    total_duties  = df["date"].nunique()
+    buses         = sorted(duties_by_bus.keys())
+
+    total_actual_km    = df["actual_km"].sum()
+    total_scheduled_km = df["scheduled_km"].sum()
+    total_income       = df["income"].sum()
+
+    diesel_rows     = df[df["diesel"] > 0]
+    total_diesel    = diesel_rows["diesel"].sum()
+    total_diesel_km = diesel_rows["diesel_km"].sum()
+    avg_mileage     = round(total_diesel_km / total_diesel, 2) if total_diesel > 0 else 0.0
+
+    # ── Salary due — har bus ki apni rate (specific ya 'ALL vehicles' fallback) ──
+    salary_due = 0.0
+    for bus, duties in duties_by_bus.items():
+        rate = get_driver_rate(bus, driver_name)
+        salary_due += duties * rate
+
+    sal_res = supabase.table("driver_salary") \
+        .select("driver_name, salary, date") \
+        .gte("date", from_date).lte("date", to_date).execute()
+    salary_given = sum(
+        float(r["salary"] or 0) for r in (sal_res.data or [])
+        if (r.get("driver_name") or "").strip().lower() == driver_key
+    )
+    remaining = salary_due - salary_given
+
+    daily_log = df[["date", "bus_number", "status", "actual_km", "diesel", "income"]] \
+        .sort_values("date", ascending=False).copy()
+    daily_log.columns = ["Date", "Bus", "Status", "Actual KM", "Diesel", "Income"]
+
+    return {
+        "duties_by_bus": duties_by_bus, "total_duties": total_duties, "buses": buses,
+        "total_actual_km": total_actual_km, "total_scheduled_km": total_scheduled_km,
+        "total_diesel": total_diesel, "total_diesel_km": total_diesel_km, "avg_mileage": avg_mileage,
+        "total_income": total_income, "salary_due": salary_due, "salary_given": salary_given,
+        "remaining": remaining, "daily_log": daily_log,
+    }
+
 def update_driver_salary(record_id: str, updates: dict) -> None:
     rename = {"Date": "date", "Driver Name": "driver_name",
               "Salary": "salary", "Transaction": "transaction"}
