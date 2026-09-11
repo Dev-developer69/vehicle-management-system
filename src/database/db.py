@@ -1,6 +1,35 @@
+import json
+from datetime import datetime, timedelta, timezone
+
 import pandas as pd
 import streamlit as st
 from src.database.config import supabase, supabase_admin
+
+
+# ══════════════════════════════════════════════
+# SHARED HELPERS
+# ══════════════════════════════════════════════
+
+def _to_df(rows, rename: dict, cols: list) -> pd.DataFrame:
+    """Supabase rows -> renamed/ordered DataFrame; empty rows par bhi sahi columns ke saath khali df deta hai."""
+    if not rows:
+        return pd.DataFrame(columns=cols)
+    df = pd.DataFrame(rows).rename(columns=rename)
+    for c in cols:
+        if c not in df.columns:
+            df[c] = None
+    return df[cols]
+
+
+def _safe_int(val):
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return None
+    try:
+        if isinstance(val, str) and val.strip() == "":
+            return None
+        return int(float(val))
+    except (ValueError, TypeError):
+        return None
 
 
 # ══════════════════════════════════════════════
@@ -8,30 +37,30 @@ from src.database.config import supabase, supabase_admin
 # ══════════════════════════════════════════════
 
 def get_scheduled_km(bus_number: str) -> int:
-    res = supabase.table("vehicle_scheduled_km") \
-        .select("scheduled_km") \
-        .eq("bus_number", bus_number) \
-        .execute()
-    if res.data:
-        return int(res.data[0]["scheduled_km"] or 466)
-    return 466
+    res = supabase.table("vehicle_scheduled_km").select("scheduled_km").eq("bus_number", bus_number).execute()
+    return int(res.data[0]["scheduled_km"] or 466) if res.data else 466
 
 
 def save_scheduled_km(bus_number: str, scheduled_km: int) -> None:
-    supabase_admin.table("vehicle_scheduled_km").upsert({
-        "bus_number":   bus_number,
-        "scheduled_km": scheduled_km,
-    }, on_conflict="bus_number").execute()
+    supabase_admin.table("vehicle_scheduled_km").upsert(
+        {"bus_number": bus_number, "scheduled_km": scheduled_km}, on_conflict="bus_number").execute()
+
+
+def get_vehicle_payment_rate(bus_number: str) -> float:
+    """Payment calculation ke liye per-vehicle rate (₹ per Actual KM) — Gross Income
+    replace karne wale Payment Summary feature ke liye."""
+    res = supabase_admin.table("vehicle_payment_rate").select("rate").eq("bus_number", bus_number).execute()
+    return float(res.data[0]["rate"] or 0) if res.data else 0.0
+
+
+def save_vehicle_payment_rate(bus_number: str, rate: float) -> None:
+    supabase_admin.table("vehicle_payment_rate").upsert(
+        {"bus_number": bus_number, "rate": float(rate)}, on_conflict="bus_number").execute()
 
 
 def get_km_combines(bus_number: str):
-    """Bus ke liye saare combined (merged) date-groups return karta hai.
-    Har group: {"id": <row id>, "dates": [<date strings>, ...]}"""
-    res = supabase.table("vehicle_km_combines") \
-        .select("id, dates") \
-        .eq("bus_number", bus_number) \
-        .execute()
-    import json
+    """Har group: {'id':.., 'dates':[...]}"""
+    res = supabase.table("vehicle_km_combines").select("id, dates").eq("bus_number", bus_number).execute()
     groups = []
     for r in (res.data or []):
         try:
@@ -44,222 +73,119 @@ def get_km_combines(bus_number: str):
 
 
 def save_km_combine(bus_number: str, dates: list) -> None:
-    import json
-    supabase_admin.table("vehicle_km_combines").insert({
-        "bus_number": bus_number,
-        "dates":      json.dumps(sorted(dates)),
-    }).execute()
+    supabase_admin.table("vehicle_km_combines").insert(
+        {"bus_number": bus_number, "dates": json.dumps(sorted(dates))}).execute()
 
 
 def delete_km_combine(bus_number: str, group_id) -> None:
-    supabase_admin.table("vehicle_km_combines") \
-        .delete() \
-        .eq("bus_number", bus_number) \
-        .eq("id", group_id) \
-        .execute()
+    supabase_admin.table("vehicle_km_combines").delete().eq("bus_number", bus_number).eq("id", group_id).execute()
 
 
 def delete_vehicle_record(bus_number: str, date_str: str) -> None:
-    supabase.table("vehicle_records") \
-        .delete() \
-        .eq("bus_number", bus_number) \
-        .eq("date", date_str) \
-        .execute()
-
-
-def _safe_int(val):
-    """None/NaN/empty-safe int conversion."""
-    if val is None or (isinstance(val, float) and pd.isna(val)):
-        return None
-    try:
-        if isinstance(val, str) and val.strip() == "":
-            return None
-        return int(float(val))
-    except (ValueError, TypeError):
-        return None
+    supabase.table("vehicle_records").delete().eq("bus_number", bus_number).eq("date", date_str).execute()
 
 
 def save_vehicle_records(bus_number: str, df: pd.DataFrame) -> None:
     from src.database.auth import get_current_role
-    import streamlit as st
+    user = st.session_state.get("user")
+    current_email, current_role = (user.email if user else "unknown"), get_current_role()
 
-    user          = st.session_state.get("user")
-    current_email = user.email if user else "unknown"
-    current_role  = get_current_role()
+    def keep(new_val, old_val, empty_vals):
+        return new_val if new_val not in empty_vals else old_val
 
     for _, row in df.iterrows():
         date_str = str(row["Date"])
         on_leave = str(row.get("Status", "Present")).strip() == "On Leave"
-
-        existing = supabase.table("vehicle_records") \
-            .select("*") \
-            .eq("bus_number", bus_number) \
-            .eq("date", date_str) \
-            .execute()
+        existing = supabase.table("vehicle_records").select("*").eq("bus_number", bus_number).eq("date", date_str).execute()
 
         new_data = {
-            "bus_number":      bus_number,
-            "date":            date_str,
-            "status":          "On Leave" if on_leave else "Present",
-            "driver_name":     row.get("Driver Name"),
-            "conductor_name":  row.get("Conductor Name"),
-            # ✅ FIX: pehle _safe_int se clean karo, taaki NaN/None JSON crash na kare
-            "scheduled_km":    0 if on_leave else _safe_int(row.get("Scheduled KM")),
-            "actual_km":       0 if on_leave else _safe_int(row.get("Actual KM")),
-            "diesel": None if on_leave else (float(row.get("Diesel")) if pd.notna(row.get("Diesel")) else None),
-            "diesel_km": None if on_leave else _safe_int(row.get("Diesel KM")),
-            "income":    None if on_leave else _safe_int(row.get("Income")),
+            "bus_number": bus_number, "date": date_str, "status": "On Leave" if on_leave else "Present",
+            "driver_name": row.get("Driver Name"), "conductor_name": row.get("Conductor Name"),
+            "scheduled_km": 0 if on_leave else _safe_int(row.get("Scheduled KM")),
+            "actual_km":    0 if on_leave else _safe_int(row.get("Actual KM")),
+            "diesel":       None if on_leave else (float(row.get("Diesel")) if pd.notna(row.get("Diesel")) else None),
+            "diesel_km":    None if on_leave else _safe_int(row.get("Diesel KM")),
+            "income":       None if on_leave else _safe_int(row.get("Income")),
             "gross_income": None if on_leave else _safe_int(row.get("Gross Income")),
-            "updated_by":      current_email,
-            "updated_by_role": current_role,
-            "remark":          str(row.get("Remark") or ""),
-            "next_period":     bool(row.get("Next", False)),
+            "updated_by": current_email, "updated_by_role": current_role,
+            "remark": str(row.get("Remark") or ""), "next_period": bool(row.get("Next", False)),
         }
 
         if existing.data:
             old = existing.data[0]
-
-            def keep(new_val, old_val, empty_vals):
-                return new_val if new_val not in empty_vals else old_val
-
             merged = {
-                "bus_number":      bus_number,
-                "date":            date_str,
-                "status":          new_data["status"],
-                "updated_by":      current_email,
-                "updated_by_role": current_role,
-                "remark":          new_data["remark"] or old.get("remark", ""),
-                "next_period":     new_data["next_period"],
-                "driver_name":     keep(new_data["driver_name"],    old.get("driver_name"),    [None, "", "None","none"]),
-                "conductor_name":  keep(new_data["conductor_name"], old.get("conductor_name"), [None, "", "None","none"]),
-                # ✅ FIX: ab scheduled_km/actual_km bhi None hone par purani value retain karte hain,
-                # bilkul diesel/income jaisa hi. On-leave case mein 0 hi rahega.
-                "scheduled_km":    new_data["scheduled_km"] if on_leave else keep(new_data["scheduled_km"], old.get("scheduled_km"), [None]),
-                "actual_km":       new_data["actual_km"]    if on_leave else keep(new_data["actual_km"],    old.get("actual_km"),    [None]),
-                "diesel":          keep(new_data["diesel"],         old.get("diesel"),          [None]),
-                "diesel_km":       keep(new_data["diesel_km"],      old.get("diesel_km"),       [None]),
-                "income":          keep(new_data["income"],         old.get("income"),          [None]),
-                "gross_income":    keep(new_data["gross_income"],   old.get("gross_income"),    [None]),
+                "bus_number": bus_number, "date": date_str, "status": new_data["status"],
+                "updated_by": current_email, "updated_by_role": current_role,
+                "remark": new_data["remark"] or old.get("remark", ""), "next_period": new_data["next_period"],
+                "driver_name":    keep(new_data["driver_name"],    old.get("driver_name"),    [None, "", "None", "none"]),
+                "conductor_name": keep(new_data["conductor_name"], old.get("conductor_name"), [None, "", "None", "none"]),
+                "scheduled_km": new_data["scheduled_km"] if on_leave else keep(new_data["scheduled_km"], old.get("scheduled_km"), [None]),
+                "actual_km":    new_data["actual_km"]    if on_leave else keep(new_data["actual_km"],    old.get("actual_km"),    [None]),
+                "diesel":       keep(new_data["diesel"],       old.get("diesel"),       [None]),
+                "diesel_km":    keep(new_data["diesel_km"],    old.get("diesel_km"),    [None]),
+                "income":       keep(new_data["income"],       old.get("income"),       [None]),
+                "gross_income": keep(new_data["gross_income"], old.get("gross_income"), [None]),
             }
-            supabase.table("vehicle_records") \
-                .update(merged) \
-                .eq("bus_number", bus_number) \
-                .eq("date", date_str) \
-                .execute()
+            supabase.table("vehicle_records").update(merged).eq("bus_number", bus_number).eq("date", date_str).execute()
         else:
             supabase.table("vehicle_records").insert(new_data).execute()
 
 
 def get_vehicle_records(bus_number: str) -> pd.DataFrame:
-    res = supabase.table("vehicle_records") \
-        .select("*") \
-        .eq("bus_number", bus_number) \
-        .order("date", desc=True) \
-        .execute()
-
-    if not res.data:
-        return pd.DataFrame(columns=[
-            "Date", "Status", "Driver Name", "Conductor Name",
-            "Scheduled KM", "Actual KM", "Diesel", "Diesel KM", "Income", "Gross Income", "Remark", "Next"
-        ])
-
-    df = pd.DataFrame(res.data)
-    df = df.rename(columns={
-        "date":           "Date",
-        "status":         "Status",
-        "driver_name":    "Driver Name",
-        "conductor_name": "Conductor Name",
-        "scheduled_km":   "Scheduled KM",
-        "actual_km":      "Actual KM",
-        "diesel":         "Diesel",
-        "diesel_km":      "Diesel KM",
-        "income":         "Income",
-        "gross_income":   "Gross Income",
-        "remark":         "Remark",
-        "next_period":    "Next",
-    })
-
+    res = supabase.table("vehicle_records").select("*").eq("bus_number", bus_number).order("date", desc=True).execute()
+    cols = ["Date", "Status", "Driver Name", "Conductor Name", "Scheduled KM", "Actual KM",
+            "Diesel", "Diesel KM", "Income", "Gross Income", "Remark", "Next"]
+    df = _to_df(res.data or [], {
+        "date": "Date", "status": "Status", "driver_name": "Driver Name", "conductor_name": "Conductor Name",
+        "scheduled_km": "Scheduled KM", "actual_km": "Actual KM", "diesel": "Diesel", "diesel_km": "Diesel KM",
+        "income": "Income", "gross_income": "Gross Income", "remark": "Remark", "next_period": "Next",
+    }, cols)
     for col, default in [("Status", "Present"), ("Remark", ""), ("Next", False), ("Diesel KM", 0), ("Gross Income", 0)]:
-        if col not in df.columns:
-            df[col] = default
-
-    return df[["Date", "Status", "Driver Name", "Conductor Name",
-               "Scheduled KM", "Actual KM", "Diesel", "Diesel KM", "Income", "Gross Income", "Remark", "Next"]]
+        df[col] = df[col].fillna(default) if col in df.columns and not df.empty else df[col]
+    return df
 
 
 def get_diesel_summary(bus_number: str, from_date: str, to_date: str) -> pd.DataFrame:
-    res = supabase.table("vehicle_records") \
-        .select("date, diesel, status") \
-        .eq("bus_number", bus_number) \
-        .gte("date", from_date) \
-        .lte("date", to_date) \
-        .order("date", desc=False) \
-        .execute()
-
+    res = supabase.table("vehicle_records").select("date, diesel, status") \
+        .eq("bus_number", bus_number).gte("date", from_date).lte("date", to_date).order("date").execute()
     if not res.data:
         return pd.DataFrame(columns=["Date", "Diesel"])
-
     df = pd.DataFrame(res.data)
-    df = df[df["status"] != "On Leave"]
-    df = df.rename(columns={"date": "Date", "diesel": "Diesel"})
+    df = df[df["status"] != "On Leave"].rename(columns={"date": "Date", "diesel": "Diesel"})
     df["Diesel"] = pd.to_numeric(df["Diesel"], errors="coerce").fillna(0)
     return df[["Date", "Diesel"]]
 
 
 # ══════════════════════════════════════════════
-# DIESEL RATE + PAYMENT (universal — per bus, month, period)
+# DIESEL RATE + PAYMENT (universal), PER-ROW RATE
 # ══════════════════════════════════════════════
 
 def get_diesel_rate_payment(bus_number: str, month: int, period: str) -> dict:
-    res = supabase_admin.table("diesel_details") \
-        .select("rate, paid_amount, payment_done") \
-        .eq("bus_number", bus_number) \
-        .eq("month", month) \
-        .eq("period", period) \
-        .execute()
+    res = supabase_admin.table("diesel_details").select("rate, paid_amount, payment_done") \
+        .eq("bus_number", bus_number).eq("month", month).eq("period", period).execute()
     if res.data:
-        return {
-            "rate":         float(res.data[0]["rate"] or 95.69),
-            "paid_amount":  float(res.data[0]["paid_amount"] or 0),
-            "payment_done": bool(res.data[0]["payment_done"]),
-        }
+        r = res.data[0]
+        return {"rate": float(r["rate"] or 95.69), "paid_amount": float(r["paid_amount"] or 0), "payment_done": bool(r["payment_done"])}
     return {"rate": 95.69, "paid_amount": 0.0, "payment_done": False}
 
 
-def save_diesel_rate_payment(bus_number: str, month: int, period: str,
-                              rate: float, paid_amount: float, payment_done: bool) -> None:
+def save_diesel_rate_payment(bus_number: str, month: int, period: str, rate: float, paid_amount: float, payment_done: bool) -> None:
     supabase_admin.table("diesel_details").upsert({
-        "bus_number":   bus_number,
-        "month":        month,
-        "period":       period,
-        "rate":         rate,
-        "paid_amount":  paid_amount,
-        "payment_done": payment_done,
+        "bus_number": bus_number, "month": month, "period": period,
+        "rate": rate, "paid_amount": paid_amount, "payment_done": payment_done,
     }, on_conflict="bus_number,month,period").execute()
 
 
-# ══════════════════════════════════════════════
-# DIESEL PER-ROW RATE (per date override)
-# ══════════════════════════════════════════════
-
 def get_diesel_row_rates(bus_number: str, dates: list) -> dict:
-    """{date_str: rate} map fetch karo"""
     if not dates:
         return {}
-    res = supabase_admin.table("diesel_row_rates") \
-        .select("date, rate") \
-        .eq("bus_number", bus_number) \
-        .in_("date", dates) \
-        .execute()
+    res = supabase_admin.table("diesel_row_rates").select("date, rate").eq("bus_number", bus_number).in_("date", dates).execute()
     return {row["date"]: float(row["rate"]) for row in res.data} if res.data else {}
 
 
 def save_diesel_row_rate(bus_number: str, row_date: str, rate: float) -> None:
-    supabase_admin.table("diesel_row_rates").upsert({
-        "bus_number": bus_number,
-        "date":       row_date,
-        "rate":       rate,
-    }, on_conflict="bus_number,date").execute()
+    supabase_admin.table("diesel_row_rates").upsert(
+        {"bus_number": bus_number, "date": row_date, "rate": rate}, on_conflict="bus_number,date").execute()
 
 
 # ══════════════════════════════════════════════
@@ -267,73 +193,35 @@ def save_diesel_row_rate(bus_number: str, row_date: str, rate: float) -> None:
 # ══════════════════════════════════════════════
 
 def _sync_vehicle_record_diesel(bus_number: str, date_str: str) -> None:
-    """Us din ke saare fuel_fills ka total nikal ke vehicle_records.diesel
-    (usi din ke trip-record row) me update kar deta hai — taaki Vehicle
-    Records tab ka Avg/Mileage calculation bhi sahi rahe, bina manually
-    dobara Diesel value bharay. Agar us date ka koi trip-record row hi
-    nahi hai (driver/KM entry nahi hui), to kuch nahi karta — trip record
-    ban ne par khud-ba-khud sync ho jayega jab agli baar fill add/edit ho."""
-    fills = supabase.table("fuel_fills") \
-        .select("quantity") \
-        .eq("bus_number", bus_number) \
-        .eq("date", date_str) \
-        .execute()
+    """Us din ka fuel_fills total nikal ke vehicle_records.diesel (agar row exist kare) me sync karta hai."""
+    fills = supabase.table("fuel_fills").select("quantity").eq("bus_number", bus_number).eq("date", date_str).execute()
     total_qty = sum(float(r["quantity"] or 0) for r in (fills.data or []))
-
-    existing = supabase.table("vehicle_records") \
-        .select("id") \
-        .eq("bus_number", bus_number) \
-        .eq("date", date_str) \
-        .execute()
+    existing = supabase.table("vehicle_records").select("id").eq("bus_number", bus_number).eq("date", date_str).execute()
     if existing.data:
-        supabase.table("vehicle_records") \
-            .update({"diesel": total_qty}) \
-            .eq("bus_number", bus_number) \
-            .eq("date", date_str) \
-            .execute()
+        supabase.table("vehicle_records").update({"diesel": total_qty}).eq("bus_number", bus_number).eq("date", date_str).execute()
 
 
 def save_fuel_fill(bus_number: str, fill_date: str, quantity: float, rate: float) -> None:
-    """Naya fill insert karta hai — same date pe dobara call karne se
-    naya alag row banta hai, purana overwrite nahi hota (isliye ek din
-    mein 2+ baar CNG/Diesel fill possible hai). Fill ke baad us din ka
-    vehicle_records.diesel total bhi auto-sync ho jaata hai."""
-    supabase.table("fuel_fills").insert({
-        "bus_number": bus_number,
-        "date":       fill_date,
-        "quantity":   float(quantity),
-        "rate":       float(rate),
-    }).execute()
+    """Naya fill insert (same date pe dobara call = alag row, overwrite nahi)."""
+    supabase.table("fuel_fills").insert(
+        {"bus_number": bus_number, "date": fill_date, "quantity": float(quantity), "rate": float(rate)}).execute()
     _sync_vehicle_record_diesel(bus_number, fill_date)
 
 
 def get_fuel_fills(bus_number: str, from_date: str, to_date: str) -> pd.DataFrame:
-    res = supabase.table("fuel_fills") \
-        .select("*") \
-        .eq("bus_number", bus_number) \
-        .gte("date", from_date) \
-        .lte("date", to_date) \
-        .order("date", desc=False) \
-        .order("created_at", desc=False) \
-        .execute()
-    if not res.data:
-        return pd.DataFrame(columns=["id", "Date", "Quantity", "Rate", "Amount"])
-    df = pd.DataFrame(res.data)
-    df = df.rename(columns={"date": "Date", "quantity": "Quantity", "rate": "Rate", "amount": "Amount"})
-    return df[["id", "Date", "Quantity", "Rate", "Amount"]]
+    res = supabase.table("fuel_fills").select("*").eq("bus_number", bus_number) \
+        .gte("date", from_date).lte("date", to_date).order("date").order("created_at").execute()
+    return _to_df(res.data or [], {"date": "Date", "quantity": "Quantity", "rate": "Rate", "amount": "Amount"},
+                  ["id", "Date", "Quantity", "Rate", "Amount"])
 
 
 def update_fuel_fill(bus_number: str, fill_id, updates: dict) -> None:
-    """updates me 'Date' change ho sakti hai, isliye purani aur nayi dono
-    dates ka vehicle_records.diesel total re-sync karte hain."""
     existing = supabase.table("fuel_fills").select("date").eq("id", fill_id).execute()
     old_date = existing.data[0]["date"] if existing.data else None
-
     rename = {"Date": "date", "Quantity": "quantity", "Rate": "rate"}
     db_updates = {rename.get(k, k): v for k, v in updates.items() if k in rename}
     if db_updates:
         supabase.table("fuel_fills").update(db_updates).eq("id", fill_id).execute()
-
     if old_date:
         _sync_vehicle_record_diesel(bus_number, old_date)
     new_date = db_updates.get("date")
@@ -350,124 +238,62 @@ def delete_fuel_fill(bus_number: str, fill_id) -> None:
 
 
 def clear_fuel_fills_for_date(bus_number: str, date_str: str) -> int:
-    """Us date ki saari fuel_fills entries delete karta hai (reset-to-zero) —
-    jab Vehicle Records tab me Diesel explicitly '0' bhara jaaye, taaki galti
-    se ho gayi galat fills ko ek click me clear kiya ja sake. Return: kitni
-    entries delete hui."""
-    existing = supabase.table("fuel_fills") \
-        .select("id") \
-        .eq("bus_number", bus_number) \
-        .eq("date", date_str) \
-        .execute()
+    """Explicit '0' fill par — us date ki saari entries reset/delete karta hai."""
+    existing = supabase.table("fuel_fills").select("id").eq("bus_number", bus_number).eq("date", date_str).execute()
     rows = existing.data or []
     if not rows:
         return 0
-    supabase.table("fuel_fills") \
-        .delete() \
-        .eq("bus_number", bus_number) \
-        .eq("date", date_str) \
-        .execute()
-    _sync_vehicle_record_diesel(bus_number, date_str)  # ✅ ab total 0 ho jayega
+    supabase.table("fuel_fills").delete().eq("bus_number", bus_number).eq("date", date_str).execute()
+    _sync_vehicle_record_diesel(bus_number, date_str)
     return len(rows)
 
 
 def get_existing_fuel_fill_dates(bus_number: str, dates: list) -> set:
-    """Un dates ka set deta hai jinke liye fuel_fills me is bus ke liye
-    pehle se kam se kam ek entry maujood hai."""
     if not dates:
         return set()
-    res = supabase.table("fuel_fills") \
-        .select("date") \
-        .eq("bus_number", bus_number) \
-        .in_("date", dates) \
-        .execute()
+    res = supabase.table("fuel_fills").select("date").eq("bus_number", bus_number).in_("date", dates).execute()
     return {r["date"] for r in (res.data or [])}
 
 
 def replace_fuel_fill_for_date(bus_number: str, date_str: str, quantity: float, rate: float) -> None:
-    """'Yes, Update' action — us date ki SAARI purani fuel_fills entries
-    hata ke sirf ek nayi entry (di gayi quantity/rate ke saath) daal deta
-    hai, matlab total replace ho jaata hai (add nahi hota)."""
-    supabase.table("fuel_fills") \
-        .delete() \
-        .eq("bus_number", bus_number) \
-        .eq("date", date_str) \
-        .execute()
-    supabase.table("fuel_fills").insert({
-        "bus_number": bus_number,
-        "date":       date_str,
-        "quantity":   float(quantity),
-        "rate":       float(rate),
-    }).execute()
+    """'Yes, Update' — purani saari entries hata ke ek nayi (total) daal deta hai."""
+    supabase.table("fuel_fills").delete().eq("bus_number", bus_number).eq("date", date_str).execute()
+    supabase.table("fuel_fills").insert(
+        {"bus_number": bus_number, "date": date_str, "quantity": float(quantity), "rate": float(rate)}).execute()
     _sync_vehicle_record_diesel(bus_number, date_str)
 
 
 def get_unmigrated_diesel_dates(bus_number: str) -> list:
-    """Un dates ki list deta hai jinka vehicle_records.diesel bhara hai
-    (diesel > 0) lekin fuel_fills me abhi tak koi entry nahi hai us
-    date ke liye — matlab yeh 'legacy' data hai jo migrate karna baaki
-    hai. Empty list = kuch bhi migrate karne ko nahi bacha (UI me button
-    khud-ba-khud chhup jaata hai)."""
-    records = supabase.table("vehicle_records") \
-        .select("date, diesel") \
-        .eq("bus_number", bus_number) \
-        .gt("diesel", 0) \
-        .execute()
+    """Dates jinka vehicle_records.diesel bhara hai par fuel_fills me abhi entry nahi hai."""
+    records = supabase.table("vehicle_records").select("date, diesel").eq("bus_number", bus_number).gt("diesel", 0).execute()
     rows = records.data or []
     if not rows:
         return []
-
     dates = [r["date"] for r in rows]
-    existing = supabase.table("fuel_fills") \
-        .select("date") \
-        .eq("bus_number", bus_number) \
-        .in_("date", dates) \
-        .execute()
-    already_migrated_dates = {r["date"] for r in (existing.data or [])}
-    return [r["date"] for r in rows if r["date"] not in already_migrated_dates]
+    existing = supabase.table("fuel_fills").select("date").eq("bus_number", bus_number).in_("date", dates).execute()
+    already = {r["date"] for r in (existing.data or [])}
+    return [r["date"] for r in rows if r["date"] not in already]
 
 
 def migrate_diesel_to_fuel_fills(bus_number: str) -> int:
-    """Un dates ka vehicle_records.diesel data fuel_fills me copy karta hai
-    jinke liye fuel_fills me abhi tak koi entry nahi hai (per-date check,
-    naye legacy data ke liye bhi baar-baar chalaya ja sakta hai bina
-    duplicate kiye — jo dates already migrate ho chuki hain unhe skip
-    kar deta hai)."""
-    records = supabase.table("vehicle_records") \
-        .select("date, diesel") \
-        .eq("bus_number", bus_number) \
-        .gt("diesel", 0) \
-        .execute()
+    """Legacy vehicle_records.diesel -> fuel_fills copy (per-date, duplicate-safe, dobara chalane par bhi safe)."""
+    records = supabase.table("vehicle_records").select("date, diesel").eq("bus_number", bus_number).gt("diesel", 0).execute()
     rows = records.data or []
     if not rows:
         return 0
-
     dates = [r["date"] for r in rows]
-    existing = supabase.table("fuel_fills") \
-        .select("date") \
-        .eq("bus_number", bus_number) \
-        .in_("date", dates) \
-        .execute()
-    already_migrated_dates = {r["date"] for r in (existing.data or [])}
-
-    # Har date ke liye best-known rate nikालो: pehle per-row override,
-    # warna diesel_details ka month/period rate, warna 95.69 fallback.
+    existing = supabase.table("fuel_fills").select("date").eq("bus_number", bus_number).in_("date", dates).execute()
+    already = {r["date"] for r in (existing.data or [])}
     inserted = 0
     for r in rows:
-        date_str = r["date"]
-        if date_str in already_migrated_dates:
-            continue  # ✅ is date ki entry fuel_fills me pehle se hai — skip (no duplicate)
+        if r["date"] in already:
+            continue
         qty = float(r["diesel"] or 0)
         if qty <= 0:
             continue
-        row_rate = get_diesel_row_rates(bus_number, [date_str]).get(date_str)
-        rate = row_rate if row_rate else 95.69
-        supabase.table("fuel_fills").insert({
-            "bus_number": bus_number,
-            "date":       date_str,
-            "quantity":   qty,
-            "rate":       rate,
-        }).execute()
+        rate = get_diesel_row_rates(bus_number, [r["date"]]).get(r["date"]) or 95.69
+        supabase.table("fuel_fills").insert(
+            {"bus_number": bus_number, "date": r["date"], "quantity": qty, "rate": rate}).execute()
         inserted += 1
     return inserted
 
@@ -477,161 +303,106 @@ def migrate_diesel_to_fuel_fills(bus_number: str) -> int:
 # ══════════════════════════════════════════════
 
 def save_driver_salary(df: pd.DataFrame, bus_number: str = "") -> None:
-    import streamlit as st
-    from datetime import datetime, timezone
     user = st.session_state.get("user")
     updated_by = user.email if user else "unknown"
-
     records = []
     for _, row in df.iterrows():
         try:
             salary_val = float(str(row["Salary"]).replace(",", "").strip() or 0)
         except (ValueError, TypeError):
             salary_val = 0.0
-
         txn_val = str(row.get("Transaction") or "").strip().lower()
-        if txn_val not in ("cash", "online"):
-            txn_val = "cash"
-
+        txn_val = txn_val if txn_val in ("cash", "online") else "cash"
         records.append({
-            "driver_name": str(row["Driver Name"]).strip(),
-            "date":        str(row["Date"]),
-            "salary":      salary_val,
-            "transaction": txn_val,
-            "bus_number":  bus_number,
-            "updated_by":  updated_by,
-            "updated_at":  datetime.now(timezone.utc).isoformat(),
+            "driver_name": str(row["Driver Name"]).strip(), "date": str(row["Date"]),
+            "salary": salary_val, "transaction": txn_val, "bus_number": bus_number,
+            "updated_by": updated_by, "updated_at": datetime.now(timezone.utc).isoformat(),
         })
-
     if not records:
         return
-
     try:
         supabase.table("driver_salary").insert(records).execute()
     except Exception as e:
         log_error("save_driver_salary", str(e), bus_number=bus_number, extra_data=str(records))
-        import streamlit as st
         st.error("⚠️ Save failed — error logged.")
+
 
 def get_driver_salary(bus_number: str = "") -> pd.DataFrame:
     query = supabase.table("driver_salary").select("*").order("date", desc=True)
     if bus_number:
         query = query.eq("bus_number", bus_number)
-    res = query.execute()
-
-    if not res.data:
-        return pd.DataFrame(columns=["id", "Date", "Driver Name", "Salary", "Transaction", "Updated By"])
-
-    df = pd.DataFrame(res.data)
-    df = df.rename(columns={
-        "date":        "Date",
-        "driver_name": "Driver Name",
-        "salary":      "Salary",
-        "transaction": "Transaction",
-        "updated_by":  "Updated By",
-    })
-    df["Updated By"] = df["Updated By"].fillna("")
-    return df[["id", "Date", "Driver Name", "Salary", "Transaction", "Updated By"]]
+    df = _to_df(query.execute().data or [],
+                {"date": "Date", "driver_name": "Driver Name", "salary": "Salary", "transaction": "Transaction", "updated_by": "Updated By"},
+                ["id", "Date", "Driver Name", "Salary", "Transaction", "Updated By"])
+    if not df.empty:
+        df["Updated By"] = df["Updated By"].fillna("")
+    return df
 
 
 def get_salary_check(from_date: str = None, to_date: str = None, bus_numbers: list = None) -> pd.DataFrame:
     query = supabase.table("vehicle_records").select("driver_name, bus_number, date")
-    if from_date:
-        query = query.gte("date", from_date)
-    if to_date:
-        query = query.lte("date", to_date)
-    if bus_numbers:
-        query = query.in_("bus_number", bus_numbers)
+    if from_date: query = query.gte("date", from_date)
+    if to_date: query = query.lte("date", to_date)
+    if bus_numbers: query = query.in_("bus_number", bus_numbers)
     res = query.execute()
-
+    empty = pd.DataFrame(columns=["Sr No", "Driver Name", "Bus Number", "Duties", "Salary Due", "Salary Given", "Remaining"])
     if not res.data:
-        return pd.DataFrame(columns=["Sr No", "Driver Name", "Bus Number", "Duties", "Salary Due", "Salary Given", "Remaining"])
+        return empty
 
     df = pd.DataFrame(res.data)
     df = df[df["driver_name"].notna()]
     df = df[~df["driver_name"].str.strip().str.lower().isin(["no", "test", "none", ""])]
 
-    grouped = df.groupby(
-        [df["driver_name"].str.strip().str.lower(), "bus_number"]
-    ).agg(
-        driver_name=("driver_name", "first"),
-        bus_number=("bus_number", "first"),
-        duties=("date", "nunique"),
+    grouped = df.groupby([df["driver_name"].str.strip().str.lower(), "bus_number"]).agg(
+        driver_name=("driver_name", "first"), bus_number=("bus_number", "first"), duties=("date", "nunique"),
     ).reset_index(drop=True)
-
-    # ── Salary paid (already given) merge ──
-    sal_query = supabase.table("driver_salary").select("driver_name, salary, bus_number, date")
-    if from_date:
-        sal_query = sal_query.gte("date", from_date)
-    if to_date:
-        sal_query = sal_query.lte("date", to_date)
-    if bus_numbers:
-        sal_query = sal_query.in_("bus_number", bus_numbers)
-    sal_res = sal_query.execute()
-    sal_df  = pd.DataFrame(sal_res.data) if sal_res.data else pd.DataFrame(
-        columns=["driver_name", "salary", "bus_number", "date"])
-
     grouped["key"] = grouped["driver_name"].str.strip().str.lower() + "_" + grouped["bus_number"].fillna("")
 
+    # ── Salary given ──
+    sal_query = supabase.table("driver_salary").select("driver_name, salary, bus_number, date")
+    if from_date: sal_query = sal_query.gte("date", from_date)
+    if to_date: sal_query = sal_query.lte("date", to_date)
+    if bus_numbers: sal_query = sal_query.in_("bus_number", bus_numbers)
+    sal_res = sal_query.execute()
+    sal_df = pd.DataFrame(sal_res.data) if sal_res.data else pd.DataFrame(columns=["driver_name", "salary", "bus_number", "date"])
     if not sal_df.empty:
-        sal_df["key"]  = sal_df["driver_name"].str.strip().str.lower() + "_" + sal_df["bus_number"].fillna("")
-        sal_sum        = sal_df.groupby("key")["salary"].sum().reset_index()
-        grouped        = grouped.merge(sal_sum, on="key", how="left")
+        sal_df["key"] = sal_df["driver_name"].str.strip().str.lower() + "_" + sal_df["bus_number"].fillna("")
+        grouped = grouped.merge(sal_df.groupby("key")["salary"].sum().reset_index(), on="key", how="left")
         grouped["salary"] = grouped["salary"].fillna(0)
     else:
         grouped["salary"] = 0
 
-    # ── Driver rate merge (Salary Due nikalne ke liye) — pehle specific-bus
-    # wali rate try karo, warna driver ki "ALL vehicles" wali rate fallback
-    # use karo (Set Rate page pe "Sabhi vehicles" wala option isi "ALL"
-    # bus_number ke saath save hota hai) ──
+    # ── Rate: specific-bus rate, warna 'ALL vehicles' fallback ──
     rates_res = supabase.table("driver_salary_rates").select("driver_name, bus_number, rate").execute()
-    rates_df = pd.DataFrame(rates_res.data) if rates_res.data else pd.DataFrame(
-        columns=["driver_name", "bus_number", "rate"])
-
+    rates_df = pd.DataFrame(rates_res.data) if rates_res.data else pd.DataFrame(columns=["driver_name", "bus_number", "rate"])
     if not rates_df.empty:
         rates_df["driver_key"] = rates_df["driver_name"].str.strip().str.lower()
         rates_df["key"] = rates_df["driver_key"] + "_" + rates_df["bus_number"].fillna("")
-        specific_rate_map = rates_df[rates_df["bus_number"] != "ALL"].groupby("key")["rate"].first()
-        all_rate_map      = rates_df[rates_df["bus_number"] == "ALL"].groupby("driver_key")["rate"].first()
-
+        specific = rates_df[rates_df["bus_number"] != "ALL"].groupby("key")["rate"].first()
+        allrate  = rates_df[rates_df["bus_number"] == "ALL"].groupby("driver_key")["rate"].first()
         grouped["driver_key"] = grouped["driver_name"].str.strip().str.lower()
-        grouped["rate"] = grouped["key"].map(specific_rate_map)
-        grouped["rate"] = grouped["rate"].fillna(grouped["driver_key"].map(all_rate_map))
-        grouped["rate"] = grouped["rate"].fillna(0)
+        grouped["rate"] = grouped["key"].map(specific).fillna(grouped["driver_key"].map(allrate)).fillna(0)
     else:
         grouped["rate"] = 0
 
-    # ── Due aur Remaining calculate karo ──
     grouped["salary_due"] = grouped["duties"] * grouped["rate"]
     grouped["remaining"]  = grouped["salary_due"] - grouped["salary"]
-
     grouped = grouped[["driver_name", "bus_number", "duties", "salary_due", "salary", "remaining"]]
     grouped.columns = ["Driver Name", "Bus Number", "Duties", "Salary Due", "Salary Given", "Remaining"]
     grouped.insert(0, "Sr No", range(1, len(grouped) + 1))
     return grouped
+
 
 # ══════════════════════════════════════════════
 # DRIVER SALARY RATE
 # ══════════════════════════════════════════════
 
 def get_driver_rate(bus_number: str, driver_name: str) -> float:
-    res = supabase.table("driver_salary_rates") \
-        .select("rate") \
-        .eq("bus_number", bus_number) \
-        .eq("driver_name", driver_name) \
-        .execute()
+    res = supabase.table("driver_salary_rates").select("rate").eq("bus_number", bus_number).eq("driver_name", driver_name).execute()
     if res.data:
         return float(res.data[0]["rate"] or 0)
-    # ✅ specific-bus wali rate nahi mili — driver ki "ALL vehicles" wali
-    # rate fallback try karo (agar "Set Rate" page pe "Sabhi vehicles" wala
-    # option use karke set ki gayi thi)
-    if bus_number != "ALL":
-        res_all = supabase.table("driver_salary_rates") \
-            .select("rate") \
-            .eq("bus_number", "ALL") \
-            .eq("driver_name", driver_name) \
-            .execute()
+    if bus_number != "ALL":  # ✅ 'ALL vehicles' rate fallback
+        res_all = supabase.table("driver_salary_rates").select("rate").eq("bus_number", "ALL").eq("driver_name", driver_name).execute()
         if res_all.data:
             return float(res_all.data[0]["rate"] or 0)
     return 0.0
@@ -639,10 +410,7 @@ def get_driver_rate(bus_number: str, driver_name: str) -> float:
 
 def save_driver_rate(bus_number: str, driver_name: str, rate: float, updated_by: str) -> None:
     supabase.table("driver_salary_rates").upsert({
-        "bus_number":   bus_number,
-        "driver_name":  driver_name.strip(),
-        "rate":         float(rate),
-        "updated_by":   updated_by,
+        "bus_number": bus_number, "driver_name": driver_name.strip(), "rate": float(rate), "updated_by": updated_by,
     }, on_conflict="bus_number,driver_name").execute()
 
 
@@ -650,89 +418,59 @@ def get_all_driver_rates(bus_numbers: list = None) -> pd.DataFrame:
     query = supabase.table("driver_salary_rates").select("*").order("driver_name")
     if bus_numbers:
         query = query.in_("bus_number", bus_numbers)
-    res = query.execute()
-    if not res.data:
-        return pd.DataFrame(columns=["Bus Number", "Driver Name", "Rate"])
-    df = pd.DataFrame(res.data)
-    df = df.rename(columns={"bus_number": "Bus Number", "driver_name": "Driver Name", "rate": "Rate"})
-    return df[["Bus Number", "Driver Name", "Rate"]]
+    return _to_df(query.execute().data or [], {"bus_number": "Bus Number", "driver_name": "Driver Name", "rate": "Rate"},
+                  ["Bus Number", "Driver Name", "Rate"])
 
 
 def get_drivers_for_buses(bus_numbers: list = None) -> list:
-    """Access-scoped driver dropdown ke liye — vehicle_records se distinct driver names"""
     query = supabase.table("vehicle_records").select("driver_name, bus_number")
     if bus_numbers:
         query = query.in_("bus_number", bus_numbers)
     res = query.execute()
     if not res.data:
         return []
-    names = {
-        row["driver_name"].strip()
-        for row in res.data
-        if row.get("driver_name") and row["driver_name"].strip().lower() not in ("no", "test", "none", "")
-    }
+    names = {r["driver_name"].strip() for r in res.data
+             if r.get("driver_name") and r["driver_name"].strip().lower() not in ("no", "test", "none", "")}
     return sorted(names)
 
 
 def rename_driver(old_name: str, new_name: str) -> dict:
-    """Ek driver ka naam saari tables me ek saath update karta hai — stray/typo
-    entries (jaise 'Ashok' → 'Ashok (sahawar)') ko sahi naam me merge karne ke
-    liye. Case-insensitive match karta hai (old_name se exactly match karne
-    wali saari rows update hongi). Return: kitni rows kis table me update hui."""
-    old_name = old_name.strip()
-    new_name = new_name.strip()
+    """Ek driver ka naam saari tables (vehicle_records, salary, rate, license) me merge karta hai — typo/duplicate fix ke liye."""
+    old_name, new_name = old_name.strip(), new_name.strip()
     if not old_name or not new_name or old_name.lower() == new_name.lower():
         return {"vehicle_records": 0, "driver_salary": 0, "driver_salary_rates": 0, "drivers": 0}
 
     counts = {}
-
-    # ✅ vehicle_records
     res = supabase.table("vehicle_records").select("bus_number, date").ilike("driver_name", old_name).execute()
-    vr_count = len(res.data or [])
-    if vr_count:
+    counts["vehicle_records"] = len(res.data or [])
+    if counts["vehicle_records"]:
         supabase.table("vehicle_records").update({"driver_name": new_name}).ilike("driver_name", old_name).execute()
-    counts["vehicle_records"] = vr_count
 
-    # ✅ driver_salary (payment history — 'id' column confirmed via
-    # update_driver_salary/delete_driver_salary elsewhere)
     res = supabase.table("driver_salary").select("id").ilike("driver_name", old_name).execute()
     ids = [r["id"] for r in (res.data or [])]
     if ids:
         supabase.table("driver_salary").update({"driver_name": new_name}).in_("id", ids).execute()
     counts["driver_salary"] = len(ids)
 
-    # ✅ driver_salary_rates — agar new_name ke liye already koi rate row hai
-    # (kisi bus ke liye), to old_name wali row ko delete karo (conflict avoid
-    # karne ke liye), warna sirf naam update kar do.
     res = supabase.table("driver_salary_rates").select("bus_number").ilike("driver_name", old_name).execute()
-    old_buses = [r["bus_number"] for r in (res.data or [])]
     updated = 0
-    for bus in old_buses:
-        existing = supabase.table("driver_salary_rates") \
-            .select("driver_name") \
-            .eq("driver_name", new_name).eq("bus_number", bus).execute()
+    for bus in [r["bus_number"] for r in (res.data or [])]:
+        existing = supabase.table("driver_salary_rates").select("driver_name").eq("driver_name", new_name).eq("bus_number", bus).execute()
         if existing.data:
-            supabase.table("driver_salary_rates") \
-                .delete().ilike("driver_name", old_name).eq("bus_number", bus).execute()
+            supabase.table("driver_salary_rates").delete().ilike("driver_name", old_name).eq("bus_number", bus).execute()
         else:
-            supabase.table("driver_salary_rates") \
-                .update({"driver_name": new_name}).ilike("driver_name", old_name).eq("bus_number", bus).execute()
+            supabase.table("driver_salary_rates").update({"driver_name": new_name}).ilike("driver_name", old_name).eq("bus_number", bus).execute()
             updated += 1
     counts["driver_salary_rates"] = updated
 
-    # ✅ drivers (license info) — agar new_name ke liye already license row hai,
-    # to old wali delete karo, warna naam update kar do
     res = supabase.table("drivers").select("driver_name").ilike("driver_name", old_name).execute()
     if res.data:
         existing = supabase.table("drivers").select("driver_name").eq("driver_name", new_name).execute()
-        if existing.data:
-            supabase.table("drivers").delete().ilike("driver_name", old_name).execute()
-        else:
+        supabase.table("drivers").delete().ilike("driver_name", old_name).execute() if existing.data else \
             supabase.table("drivers").update({"driver_name": new_name}).ilike("driver_name", old_name).execute()
         counts["drivers"] = 1
     else:
         counts["drivers"] = 0
-
     return counts
 
 
@@ -741,119 +479,63 @@ def rename_driver(old_name: str, new_name: str) -> dict:
 # ══════════════════════════════════════════════
 
 def get_driver_license(driver_name: str) -> dict:
-    res = supabase.table("drivers") \
-        .select("license_number, license_validity, phone") \
-        .eq("driver_name", driver_name.strip()) \
-        .execute()
+    res = supabase.table("drivers").select("license_number, license_validity, phone").eq("driver_name", driver_name.strip()).execute()
     if res.data:
-        row = res.data[0]
-        return {
-            "license_number":   row.get("license_number") or "",
-            "license_validity": row.get("license_validity"),
-            "phone":            row.get("phone") or "",
-        }
+        r = res.data[0]
+        return {"license_number": r.get("license_number") or "", "license_validity": r.get("license_validity"), "phone": r.get("phone") or ""}
     return {"license_number": "", "license_validity": None, "phone": ""}
 
 
 def save_driver_license(driver_name: str, license_number: str, license_validity, phone: str = "") -> None:
     supabase.table("drivers").upsert({
-        "driver_name":      driver_name.strip(),
-        "license_number":   license_number.strip(),
-        "license_validity": str(license_validity) if license_validity else None,
-        "phone":            phone.strip(),
+        "driver_name": driver_name.strip(), "license_number": license_number.strip(),
+        "license_validity": str(license_validity) if license_validity else None, "phone": phone.strip(),
     }, on_conflict="driver_name").execute()
 
 
 def get_driver_report(driver_name: str, from_date: str, to_date: str) -> dict:
-    """Ek driver ka poora monthly report — kaunsi buses chalayi, kitni duties,
-    diesel/mileage stats, income, aur salary due/given/remaining (rate
-    lookup 'ALL vehicles' fallback ke saath, jaisa get_salary_check karta hai)."""
+    """Ek driver ka poora monthly report — buses, duties, diesel/mileage, income, salary due/given/remaining."""
     driver_key = driver_name.strip().lower()
-
     res = supabase.table("vehicle_records") \
         .select("driver_name, bus_number, date, status, actual_km, scheduled_km, diesel, diesel_km, income") \
-        .gte("date", from_date) \
-        .lte("date", to_date) \
-        .execute()
-    rows = res.data or []
-    my_rows = [r for r in rows if (r.get("driver_name") or "").strip().lower() == driver_key]
+        .gte("date", from_date).lte("date", to_date).execute()
+    my_rows = [r for r in (res.data or []) if (r.get("driver_name") or "").strip().lower() == driver_key]
 
-    empty_log = pd.DataFrame(columns=["Date", "Bus", "Status", "Actual KM", "Diesel", "Income"])
+    empty = {
+        "duties_by_bus": {}, "total_duties": 0, "buses": [], "total_actual_km": 0, "total_scheduled_km": 0,
+        "total_diesel": 0.0, "total_diesel_km": 0, "avg_mileage": 0.0, "total_income": 0,
+        "salary_due": 0.0, "salary_given": 0.0, "remaining": 0.0,
+        "daily_log": pd.DataFrame(columns=["Date", "Bus", "Status", "Actual KM", "Diesel", "Income"]),
+    }
     if not my_rows:
-        return {
-            "duties_by_bus": {}, "total_duties": 0, "buses": [],
-            "total_actual_km": 0, "total_scheduled_km": 0,
-            "total_diesel": 0.0, "total_diesel_km": 0, "avg_mileage": 0.0,
-            "total_income": 0, "salary_due": 0.0, "salary_given": 0.0, "remaining": 0.0,
-            "daily_log": empty_log,
-        }
+        return empty
 
     df = pd.DataFrame(my_rows)
     df = df[df["status"] != "On Leave"]
-    df["actual_km"]    = pd.to_numeric(df["actual_km"], errors="coerce").fillna(0)
-    df["scheduled_km"] = pd.to_numeric(df["scheduled_km"], errors="coerce").fillna(0)
-    df["diesel"]       = pd.to_numeric(df["diesel"], errors="coerce").fillna(0)
-    df["diesel_km"]    = pd.to_numeric(df["diesel_km"], errors="coerce").fillna(0)
-    df["income"]       = pd.to_numeric(df["income"], errors="coerce").fillna(0)
-
+    for c in ["actual_km", "scheduled_km", "diesel", "diesel_km", "income"]:
+        df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
     if df.empty:
-        return {
-            "duties_by_bus": {}, "total_duties": 0, "buses": [],
-            "total_actual_km": 0, "total_scheduled_km": 0,
-            "total_diesel": 0.0, "total_diesel_km": 0, "avg_mileage": 0.0,
-            "total_income": 0, "salary_due": 0.0, "salary_given": 0.0, "remaining": 0.0,
-            "daily_log": empty_log,
-        }
+        return empty
 
     duties_by_bus = df.groupby("bus_number")["date"].nunique().to_dict()
-    total_duties  = df["date"].nunique()
-    buses         = sorted(duties_by_bus.keys())
+    diesel_rows = df[df["diesel"] > 0]
+    total_diesel, total_diesel_km = diesel_rows["diesel"].sum(), diesel_rows["diesel_km"].sum()
 
-    total_actual_km    = df["actual_km"].sum()
-    total_scheduled_km = df["scheduled_km"].sum()
-    total_income       = df["income"].sum()
+    salary_due = sum(duties * get_driver_rate(bus, driver_name) for bus, duties in duties_by_bus.items())
+    sal_res = supabase.table("driver_salary").select("driver_name, salary, date").gte("date", from_date).lte("date", to_date).execute()
+    salary_given = sum(float(r["salary"] or 0) for r in (sal_res.data or []) if (r.get("driver_name") or "").strip().lower() == driver_key)
 
-    diesel_rows     = df[df["diesel"] > 0]
-    total_diesel    = diesel_rows["diesel"].sum()
-    total_diesel_km = diesel_rows["diesel_km"].sum()
-    avg_mileage     = round(total_diesel_km / total_diesel, 2) if total_diesel > 0 else 0.0
-
-    # ── Salary due — har bus ki apni rate (specific ya 'ALL vehicles' fallback) ──
-    salary_due = 0.0
-    for bus, duties in duties_by_bus.items():
-        rate = get_driver_rate(bus, driver_name)
-        salary_due += duties * rate
-
-    sal_res = supabase.table("driver_salary") \
-        .select("driver_name, salary, date") \
-        .gte("date", from_date).lte("date", to_date).execute()
-    salary_given = sum(
-        float(r["salary"] or 0) for r in (sal_res.data or [])
-        if (r.get("driver_name") or "").strip().lower() == driver_key
-    )
-    remaining = salary_due - salary_given
-
-    daily_log = df[["date", "bus_number", "status", "actual_km", "diesel", "income"]] \
-        .sort_values("date", ascending=False).copy()
+    daily_log = df[["date", "bus_number", "status", "actual_km", "diesel", "income"]].sort_values("date", ascending=False).copy()
     daily_log.columns = ["Date", "Bus", "Status", "Actual KM", "Diesel", "Income"]
 
     return {
-        "duties_by_bus": duties_by_bus, "total_duties": total_duties, "buses": buses,
-        "total_actual_km": total_actual_km, "total_scheduled_km": total_scheduled_km,
-        "total_diesel": total_diesel, "total_diesel_km": total_diesel_km, "avg_mileage": avg_mileage,
-        "total_income": total_income, "salary_due": salary_due, "salary_given": salary_given,
-        "remaining": remaining, "daily_log": daily_log,
+        "duties_by_bus": duties_by_bus, "total_duties": df["date"].nunique(), "buses": sorted(duties_by_bus.keys()),
+        "total_actual_km": df["actual_km"].sum(), "total_scheduled_km": df["scheduled_km"].sum(),
+        "total_diesel": total_diesel, "total_diesel_km": total_diesel_km,
+        "avg_mileage": round(total_diesel_km / total_diesel, 2) if total_diesel > 0 else 0.0,
+        "total_income": df["income"].sum(), "salary_due": salary_due, "salary_given": salary_given,
+        "remaining": salary_due - salary_given, "daily_log": daily_log,
     }
-
-def update_driver_salary(record_id: str, updates: dict) -> None:
-    rename = {"Date": "date", "Driver Name": "driver_name",
-              "Salary": "salary", "Transaction": "transaction"}
-    db_updates = {rename.get(k, k): v for k, v in updates.items()}
-    supabase.table("driver_salary").update(db_updates).eq("id", record_id).execute()
-
-
-def delete_driver_salary(record_id: str) -> None:
-    supabase.table("driver_salary").delete().eq("id", record_id).execute()
 
 
 # ══════════════════════════════════════════════
@@ -861,44 +543,22 @@ def delete_driver_salary(record_id: str) -> None:
 # ══════════════════════════════════════════════
 
 def save_vehicle_expenses(bus_number: str, df: pd.DataFrame) -> None:
-    records = [
-        {
-            "bus_number":  bus_number,
-            "date":        str(row["Date"]),
-            "category":    row["Category"].strip(),
-            "amount":      float(row["Amount"] or 0),
-            "description": row["Description"] or "",
-        }
-        for _, row in df.iterrows()
-    ]
+    records = [{
+        "bus_number": bus_number, "date": str(row["Date"]), "category": row["Category"].strip(),
+        "amount": float(row["Amount"] or 0), "description": row["Description"] or "",
+    } for _, row in df.iterrows()]
     supabase.table("vehicle_expenses").insert(records).execute()
 
 
 def get_vehicle_expenses(bus_number: str) -> pd.DataFrame:
-    res = supabase.table("vehicle_expenses") \
-        .select("*") \
-        .eq("bus_number", bus_number) \
-        .order("date", desc=True) \
-        .execute()
-
-    if not res.data:
-        return pd.DataFrame(columns=["id", "Date", "Category", "Amount", "Description"])
-
-    df = pd.DataFrame(res.data)
-    df = df.rename(columns={
-        "date":        "Date",
-        "category":    "Category",
-        "amount":      "Amount",
-        "description": "Description",
-    })
-    return df[["id", "Date", "Category", "Amount", "Description"]]
+    res = supabase.table("vehicle_expenses").select("*").eq("bus_number", bus_number).order("date", desc=True).execute()
+    return _to_df(res.data or [], {"date": "Date", "category": "Category", "amount": "Amount", "description": "Description"},
+                  ["id", "Date", "Category", "Amount", "Description"])
 
 
 def update_vehicle_expense(expense_id: str, updates: dict) -> None:
-    rename = {"Date": "date", "Category": "category",
-              "Amount": "amount", "Description": "description"}
-    db_updates = {rename.get(k, k): v for k, v in updates.items()}
-    supabase.table("vehicle_expenses").update(db_updates).eq("id", expense_id).execute()
+    rename = {"Date": "date", "Category": "category", "Amount": "amount", "Description": "description"}
+    supabase.table("vehicle_expenses").update({rename.get(k, k): v for k, v in updates.items()}).eq("id", expense_id).execute()
 
 
 def delete_vehicle_expense(expense_id: str) -> None:
@@ -908,166 +568,121 @@ def delete_vehicle_expense(expense_id: str) -> None:
 def log_error(function_name: str, error_message: str, bus_number: str = "", extra_data: str = "") -> None:
     try:
         supabase_admin.table("error_logs").insert({
-            "function_name": function_name,
-            "bus_number":    bus_number,
-            "error_message": str(error_message),
-            "extra_data":    extra_data,
+            "function_name": function_name, "bus_number": bus_number,
+            "error_message": str(error_message), "extra_data": extra_data,
         }).execute()
     except Exception:
-        pass  # logging fail ho jaye to bhi app crash na ho
+        pass
+
+
+def update_driver_salary(record_id: str, updates: dict) -> None:
+    rename = {"Date": "date", "Driver Name": "driver_name", "Salary": "salary", "Transaction": "transaction"}
+    supabase.table("driver_salary").update({rename.get(k, k): v for k, v in updates.items()}).eq("id", record_id).execute()
+
+
+def delete_driver_salary(record_id: str) -> None:
+    supabase.table("driver_salary").delete().eq("id", record_id).execute()
 
 
 # ══════════════════════════════════════════════
-# SUPPLIERS
+# SUPPLIERS / PRODUCTS / REQUIREMENTS
 # ══════════════════════════════════════════════
 
 def get_suppliers() -> pd.DataFrame:
     res = supabase_admin.table("suppliers").select("*").order("name").execute()
-    if not res.data:
-        return pd.DataFrame(columns=["id", "Name", "Phone", "Address", "Remark"])
-    df = pd.DataFrame(res.data)
-    df = df.rename(columns={
-        "name": "Name", "phone": "Phone",
-        "address": "Address", "remark": "Remark"
-    })
-    df["Remark"] = df["Remark"].fillna("")
-    return df[["id", "Name", "Phone", "Address", "Remark"]]
+    df = _to_df(res.data or [], {"name": "Name", "phone": "Phone", "address": "Address", "remark": "Remark"},
+                ["id", "Name", "Phone", "Address", "Remark"])
+    if not df.empty:
+        df["Remark"] = df["Remark"].fillna("")
+    return df
 
 
 def save_supplier(name: str, phone: str, address: str, remark: str = "") -> tuple:
-    name  = name.strip()
-    phone = phone.strip() if phone else ""
+    name, phone = name.strip(), (phone.strip() if phone else "")
     if not phone:
         return False, "no_phone"
-    existing = supabase_admin.table("suppliers").select("id").ilike("name", name).execute()
-    if existing.data:
+    if supabase_admin.table("suppliers").select("id").ilike("name", name).execute().data:
         return False, "duplicate"
     supabase_admin.table("suppliers").insert({
-        "name":    name,
-        "phone":   phone,
-        "address": address.strip() if address else "",
-        "remark":  remark.strip() if remark else "",
+        "name": name, "phone": phone, "address": (address or "").strip(), "remark": (remark or "").strip(),
     }).execute()
     return True, ""
+
 
 def delete_supplier(supplier_id: str) -> None:
     supabase_admin.table("suppliers").delete().eq("id", supplier_id).execute()
 
 
 def get_supplier_products(supplier_id: str) -> pd.DataFrame:
-    res = supabase_admin.table("products").select("*") \
-        .eq("supplier_id", supplier_id).order("purchased_date", desc=True).execute()
-    if not res.data:
-        return pd.DataFrame(columns=["Name", "Latest Price", "Old Price", "MRP", "Purchased Date"])
-    df = pd.DataFrame(res.data)
-    return df.rename(columns={
-        "name": "Name", "mrp": "MRP",
-        "latest_price": "Latest Price", "old_price": "Old Price",
-        "purchased_date": "Purchased Date",
-    })[["Name", "Latest Price", "Old Price", "MRP", "Purchased Date"]]
+    res = supabase_admin.table("products").select("*").eq("supplier_id", supplier_id).order("purchased_date", desc=True).execute()
+    return _to_df(res.data or [], {"name": "Name", "mrp": "MRP", "latest_price": "Latest Price",
+                                    "old_price": "Old Price", "purchased_date": "Purchased Date"},
+                  ["Name", "Latest Price", "Old Price", "MRP", "Purchased Date"])
 
-
-# ══════════════════════════════════════════════
-# PRODUCTS
-# ══════════════════════════════════════════════
 
 def get_products(search: str = "") -> pd.DataFrame:
     res = supabase_admin.table("products").select("*, suppliers(name)").order("name").execute()
+    cols = ["id", "Name", "MRP", "Latest Price", "Old Price", "Quantity", "Remark", "Supplier", "Purchased Date"]
     if not res.data:
-        return pd.DataFrame(columns=["id", "Name", "MRP", "Latest Price", "Old Price",
-                                      "Quantity", "Remark", "Supplier", "Purchased Date"])
+        return pd.DataFrame(columns=cols)
     df = pd.DataFrame(res.data)
     df["Supplier"] = df["suppliers"].apply(lambda x: x["name"] if isinstance(x, dict) else "")
-    df = df.rename(columns={
-        "name": "Name", "mrp": "MRP",
-        "latest_price": "Latest Price", "old_price": "Old Price",
-        "purchased_date": "Purchased Date",
-        "quantity": "Quantity", "remark": "Remark",
-    })
-    df["Quantity"] = df["Quantity"].fillna("")
-    df["Remark"]   = df["Remark"].fillna("")
+    df = df.rename(columns={"name": "Name", "mrp": "MRP", "latest_price": "Latest Price", "old_price": "Old Price",
+                             "purchased_date": "Purchased Date", "quantity": "Quantity", "remark": "Remark"})
+    df["Quantity"], df["Remark"] = df["Quantity"].fillna(""), df["Remark"].fillna("")
     if search:
         df = df[df["Name"].str.lower().str.contains(search.lower(), na=False)]
-    return df[["id", "Name", "MRP", "Latest Price", "Old Price",
-               "Quantity", "Remark", "Supplier", "Purchased Date"]]
+    return df[cols]
 
 
-def save_product(name: str, latest_price: float, mrp: float,
-                 supplier_id: str, purchased_date: str,
-                 quantity: str = "", remark: str = "") -> None:
+def save_product(name: str, latest_price: float, mrp: float, supplier_id: str, purchased_date: str,
+                  quantity: str = "", remark: str = "") -> None:
     name = name.strip()
     existing = supabase_admin.table("products").select("*").eq("name", name).execute()
     if existing.data:
         old = existing.data[0]
         supabase_admin.table("products").update({
-            "old_price":      old.get("latest_price"),
-            "latest_price":   latest_price,
-            "mrp":            mrp if mrp else old.get("mrp"),
-            "supplier_id":    supplier_id if supplier_id else old.get("supplier_id"),
-            "purchased_date": purchased_date,
-            "quantity":       quantity or old.get("quantity", ""),
-            "remark":         remark or old.get("remark", ""),
+            "old_price": old.get("latest_price"), "latest_price": latest_price,
+            "mrp": mrp if mrp else old.get("mrp"), "supplier_id": supplier_id if supplier_id else old.get("supplier_id"),
+            "purchased_date": purchased_date, "quantity": quantity or old.get("quantity", ""),
+            "remark": remark or old.get("remark", ""),
         }).eq("name", name).execute()
     else:
         supabase_admin.table("products").insert({
-            "name":           name,
-            "mrp":            mrp,
-            "latest_price":   latest_price,
-            "old_price":      None,
-            "supplier_id":    supplier_id if supplier_id else None,
-            "purchased_date": purchased_date,
-            "quantity":       quantity,
-            "remark":         remark,
+            "name": name, "mrp": mrp, "latest_price": latest_price, "old_price": None,
+            "supplier_id": supplier_id or None, "purchased_date": purchased_date, "quantity": quantity, "remark": remark,
         }).execute()
+
 
 def delete_product(product_id: str) -> None:
     supabase_admin.table("products").delete().eq("id", product_id).execute()
 
 
-# ══════════════════════════════════════════════
-# REQUIREMENTS
-# ══════════════════════════════════════════════
-
 def get_requirements() -> pd.DataFrame:
-    from datetime import datetime, timedelta
     week_ago = (datetime.utcnow() - timedelta(days=7)).isoformat()
-    supabase_admin.table("product_requirements") \
-        .delete().eq("fulfilled", True).lt("created_at", week_ago).execute()
-
-    res = supabase_admin.table("product_requirements") \
-        .select("*").order("created_at", desc=True).execute()
-    if not res.data:
-        return pd.DataFrame(columns=["id", "Product Name", "Quantity", "Remark", "Fulfilled", "Created"])
-    df = pd.DataFrame(res.data)
-    df = df.rename(columns={
-        "product_name": "Product Name", "quantity": "Quantity",
-        "remark": "Remark", "fulfilled": "Fulfilled", "created_at": "Created",
-    })
-    df["Created"] = pd.to_datetime(df["Created"]).dt.strftime("%Y-%m-%d")
-    return df[["id", "Product Name", "Quantity", "Remark", "Fulfilled", "Created"]]
+    supabase_admin.table("product_requirements").delete().eq("fulfilled", True).lt("created_at", week_ago).execute()
+    res = supabase_admin.table("product_requirements").select("*").order("created_at", desc=True).execute()
+    df = _to_df(res.data or [], {"product_name": "Product Name", "quantity": "Quantity", "remark": "Remark",
+                                  "fulfilled": "Fulfilled", "created_at": "Created"},
+                ["id", "Product Name", "Quantity", "Remark", "Fulfilled", "Created"])
+    if not df.empty:
+        df["Created"] = pd.to_datetime(df["Created"]).dt.strftime("%Y-%m-%d")
+    return df
 
 
 def save_requirement(product_name: str, quantity: str, remark: str) -> None:
     supabase_admin.table("product_requirements").insert({
-        "product_name": product_name.strip(),
-        "quantity":     quantity.strip(),
-        "remark":       remark.strip(),
-        "fulfilled":    False,
+        "product_name": product_name.strip(), "quantity": quantity.strip(), "remark": remark.strip(), "fulfilled": False,
     }).execute()
 
 
-def fulfill_requirement(req_id: str, product_name: str,
-                         latest_price: float, mrp: float,
-                         supplier_id: str, purchased_date: str) -> None:
+def fulfill_requirement(req_id: str, product_name: str, latest_price: float, mrp: float, supplier_id: str, purchased_date: str) -> None:
     save_product(product_name, latest_price, mrp, supplier_id, purchased_date)
-    supabase_admin.table("product_requirements") \
-        .update({"fulfilled": True}).eq("id", req_id).execute()
+    supabase_admin.table("product_requirements").update({"fulfilled": True}).eq("id", req_id).execute()
 
 
 def delete_requirement(req_id: str) -> None:
     supabase_admin.table("product_requirements").delete().eq("id", req_id).execute()
-
-
 
 
 # ══════════════════════════════════════════════
@@ -1075,79 +690,38 @@ def delete_requirement(req_id: str) -> None:
 # ══════════════════════════════════════════════
 
 def get_maintenance_records(bus_number: str) -> pd.DataFrame:
-    res = supabase.table("maintenance_records") \
-        .select("*") \
-        .eq("bus_number", bus_number) \
-        .order("record_date", desc=True) \
-        .execute()
-
-    if not res.data:
-        return pd.DataFrame(columns=[
-            "id", "Date", "Service Type", "Garage", "Labour Cost", "Item Cost", "Cost",
-            "Next Due Date", "Next Due KM", "Notes"
-        ])
-
-    df = pd.DataFrame(res.data)
-    df = df.rename(columns={
-        "record_date":   "Date",
-        "service_type":  "Service Type",
-        "garage_name":   "Garage",
-        "labour_cost":   "Labour Cost",
-        "item_cost":     "Item Cost",
-        "cost":          "Cost",
-        "next_due_date": "Next Due Date",
-        "next_due_km":   "Next Due KM",
-        "notes":         "Notes",
-    })
-    for col, default in [("Next Due Date", None), ("Next Due KM", None), ("Notes", ""),
-                          ("Labour Cost", 0), ("Item Cost", 0)]:
-        if col not in df.columns:
-            df[col] = default
-
-    return df[["id", "Date", "Service Type", "Garage", "Labour Cost", "Item Cost", "Cost",
-               "Next Due Date", "Next Due KM", "Notes"]]
+    res = supabase.table("maintenance_records").select("*").eq("bus_number", bus_number).order("record_date", desc=True).execute()
+    df = _to_df(res.data or [], {
+        "record_date": "Date", "service_type": "Service Type", "garage_name": "Garage", "labour_cost": "Labour Cost",
+        "item_cost": "Item Cost", "cost": "Cost", "next_due_date": "Next Due Date", "next_due_km": "Next Due KM", "notes": "Notes",
+    }, ["id", "Date", "Service Type", "Garage", "Labour Cost", "Item Cost", "Cost", "Next Due Date", "Next Due KM", "Notes"])
+    for col, default in [("Next Due Date", None), ("Next Due KM", None), ("Notes", ""), ("Labour Cost", 0), ("Item Cost", 0)]:
+        if not df.empty:
+            df[col] = df[col].fillna(default)
+    return df
 
 
-def save_maintenance_record(bus_number: str, record_date, service_type: str,
-                             garage_name: str, labour_cost: float, item_cost: float, notes: str,
-                             next_due_date, next_due_km, user_email: str) -> None:
-    labour_cost = float(labour_cost or 0)
-    item_cost   = float(item_cost or 0)
-    total_cost  = labour_cost + item_cost
-
+def save_maintenance_record(bus_number: str, record_date, service_type: str, garage_name: str, labour_cost: float,
+                             item_cost: float, notes: str, next_due_date, next_due_km, user_email: str) -> None:
+    labour_cost, item_cost = float(labour_cost or 0), float(item_cost or 0)
+    total_cost = labour_cost + item_cost
     res = supabase.table("maintenance_records").upsert({
-        "bus_number":     bus_number,
-        "record_date":    str(record_date),
-        "service_type":   service_type.strip(),
-        "garage_name":    (garage_name or "").strip(),
-        "labour_cost":    labour_cost,
-        "item_cost":      item_cost,
-        "cost":           total_cost,
-        "notes":          (notes or "").strip(),
-        "next_due_date":  str(next_due_date) if next_due_date else None,
-        "next_due_km":    int(next_due_km) if next_due_km else None,
-        "updated_by":     user_email,
+        "bus_number": bus_number, "record_date": str(record_date), "service_type": service_type.strip(),
+        "garage_name": (garage_name or "").strip(), "labour_cost": labour_cost, "item_cost": item_cost, "cost": total_cost,
+        "notes": (notes or "").strip(), "next_due_date": str(next_due_date) if next_due_date else None,
+        "next_due_km": int(next_due_km) if next_due_km else None, "updated_by": user_email,
     }, on_conflict="bus_number,record_date,service_type").execute()
     record_id = res.data[0]["id"] if res.data else None
     if not record_id:
         return
 
-    # ── Stale reminder clear ──
-    supabase.table("maintenance_records") \
-        .update({"next_due_date": None, "next_due_km": None}) \
-        .eq("bus_number", bus_number) \
-        .eq("service_type", service_type.strip()) \
-        .lt("record_date", str(record_date)) \
-        .execute()
+    supabase.table("maintenance_records").update({"next_due_date": None, "next_due_km": None}) \
+        .eq("bus_number", bus_number).eq("service_type", service_type.strip()).lt("record_date", str(record_date)).execute()
 
-    # ── Sync to Vehicle Expenses ──
     if total_cost > 0:
         supabase.table("vehicle_expenses").upsert({
-            "bus_number":         bus_number,
-            "date":               str(record_date),
-            "category":           f"Maintenance - {service_type.strip()}",
-            "amount":             total_cost,
-            "description":        f"{(garage_name or '').strip()} {(notes or '').strip()}".strip(),
+            "bus_number": bus_number, "date": str(record_date), "category": f"Maintenance - {service_type.strip()}",
+            "amount": total_cost, "description": f"{(garage_name or '').strip()} {(notes or '').strip()}".strip(),
             "maintenance_ref_id": record_id,
         }, on_conflict="maintenance_ref_id").execute()
     else:
@@ -1155,96 +729,49 @@ def save_maintenance_record(bus_number: str, record_date, service_type: str,
 
 
 def delete_maintenance_record(bus_number: str, record_id: str) -> None:
-    supabase.table("maintenance_records") \
-        .delete() \
-        .eq("id", record_id) \
-        .eq("bus_number", bus_number) \
-        .execute()
+    supabase.table("maintenance_records").delete().eq("id", record_id).eq("bus_number", bus_number).execute()
 
 
 def get_previous_service_date(bus_number: str, service_type: str, before_date):
-    """Same service_type ki turant pichli occurrence (before_date se strictly pehle)"""
-    res = supabase.table("maintenance_records") \
-        .select("record_date") \
-        .eq("bus_number", bus_number) \
-        .eq("service_type", service_type) \
-        .lt("record_date", str(before_date)) \
-        .order("record_date", desc=True) \
-        .limit(1) \
-        .execute()
+    res = supabase.table("maintenance_records").select("record_date").eq("bus_number", bus_number) \
+        .eq("service_type", service_type).lt("record_date", str(before_date)).order("record_date", desc=True).limit(1).execute()
     return res.data[0]["record_date"] if res.data else None
 
 
 def get_km_between(bus_number: str, start_date, end_date) -> int:
-    """vehicle_records se Actual KM sum karo, start_date ke baad se end_date tak"""
     query = supabase.table("vehicle_records").select("actual_km").eq("bus_number", bus_number)
-    if start_date:
-        query = query.gt("date", str(start_date))
-    if end_date:
-        query = query.lte("date", str(end_date))
-    records = query.execute()
-    return sum(r["actual_km"] or 0 for r in records.data)
+    if start_date: query = query.gt("date", str(start_date))
+    if end_date: query = query.lte("date", str(end_date))
+    return sum(r["actual_km"] or 0 for r in query.execute().data)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_avg_daily_km(bus_number: str, days: int = 30) -> float:
-    """Bus ka average daily KM (last N din se) — predictive maintenance ke
-    liye chahiye (src/ml/maintenance_predictor.py)."""
-    from datetime import date, timedelta
+    from datetime import date
     start = date.today() - timedelta(days=days)
-    res = supabase.table("vehicle_records") \
-        .select("actual_km") \
-        .eq("bus_number", bus_number) \
-        .gte("date", str(start)) \
-        .execute()
-    rows = res.data or []
-    if not rows:
-        return 0.0
-    total = sum(r["actual_km"] or 0 for r in rows)
-    return round(total / len(rows), 1) if rows else 0.0
+    rows = supabase.table("vehicle_records").select("actual_km").eq("bus_number", bus_number).gte("date", str(start)).execute().data or []
+    return round(sum(r["actual_km"] or 0 for r in rows) / len(rows), 1) if rows else 0.0
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_diesel_records_raw(bus_numbers: list) -> list:
-    """Diesel-wale (diesel > 0) records ka raw data fetch karta hai un buses ke
-    liye — poora available history (sirf loaded period nahi). Stats/ML
-    computation is data pe src/ml/mileage_anomaly.py karta hai, taaki
-    database layer aur ML logic alag-alag rahein."""
     if not bus_numbers:
         return []
-    res = supabase.table("vehicle_records") \
-        .select("bus_number, diesel, diesel_km") \
-        .in_("bus_number", bus_numbers) \
-        .gt("diesel", 0) \
-        .execute()
-    return res.data or []
+    return supabase.table("vehicle_records").select("bus_number, diesel, diesel_km") \
+        .in_("bus_number", bus_numbers).gt("diesel", 0).execute().data or []
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_income_records_raw(bus_numbers: list) -> list:
-    """Income-wale records ka raw data fetch karta hai un buses ke liye —
-    poora available history. Stats/ML computation src/ml/income_anomaly.py
-    karta hai."""
     if not bus_numbers:
         return []
-    res = supabase.table("vehicle_records") \
-        .select("bus_number, income, actual_km") \
-        .in_("bus_number", bus_numbers) \
-        .gt("actual_km", 0) \
-        .execute()
-    return res.data or []
+    return supabase.table("vehicle_records").select("bus_number, income, actual_km") \
+        .in_("bus_number", bus_numbers).gt("actual_km", 0).execute().data or []
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_dated_diesel_records_raw(bus_numbers: list) -> list:
-    """Date ke saath diesel records — forecasting ke liye chahiye
-    (src/ml/diesel_forecast.py trend nikalta hai)."""
     if not bus_numbers:
         return []
-    res = supabase.table("vehicle_records") \
-        .select("bus_number, date, diesel") \
-        .in_("bus_number", bus_numbers) \
-        .gt("diesel", 0) \
-        .order("date") \
-        .execute()
-    return res.data or []
+    return supabase.table("vehicle_records").select("bus_number, date, diesel") \
+        .in_("bus_number", bus_numbers).gt("diesel", 0).order("date").execute().data or []
