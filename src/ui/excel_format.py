@@ -29,6 +29,55 @@ def fuel_label(bus_number: str) -> str:
     return "CNG" if bus_number == "AT7389" else "Diesel"
 
 
+# ──────────────────────────────────────────────
+# HELPER: Vibrant, eye-catching HTML table — teal→purple gradient header,
+# soft glow border, glowing gradient TOTAL row (Driver Report jaisi hi style,
+# app-wide consistent look ke liye). st.dataframe ke bajaye yahi use karo.
+# ──────────────────────────────────────────────
+def _render_html_table(df: pd.DataFrame, total_row: dict = None):
+    cols = list(df.columns)
+    html = [
+        "<div style='overflow-x:auto;border-radius:14px;"
+        "border:1px solid rgba(123,140,255,0.35);"
+        "box-shadow:0 4px 24px rgba(20,160,133,0.15), 0 0 0 1px rgba(255,255,255,0.03) inset;'>"
+        "<table style='width:100%;border-collapse:collapse;color:#f0f0f0;font-size:0.88rem;'>"
+    ]
+    html.append("<thead><tr>")
+    for c in cols:
+        html.append(
+            f"<th style='padding:12px 10px;text-align:left;white-space:nowrap;"
+            f"background:linear-gradient(90deg,#14A085,#7B8CFF);color:#fff;"
+            f"font-weight:700;letter-spacing:0.3px;'>{c}</th>"
+        )
+    html.append("</tr></thead><tbody>")
+
+    for i, r in enumerate(df.to_dict("records")):
+        row_bg = "#182838" if i % 2 == 0 else "#1E2B3D"
+        html.append("<tr>")
+        for c in cols:
+            val = r.get(c, "")
+            val = "" if pd.isna(val) else val
+            html.append(
+                f"<td style='border-bottom:1px solid rgba(123,140,255,0.12);padding:10px;"
+                f"white-space:nowrap;background:{row_bg};color:#eee;'>{val}</td>"
+            )
+        html.append("</tr>")
+
+    if total_row:
+        html.append("<tr style='background:linear-gradient(90deg,rgba(20,160,133,0.35),rgba(123,140,255,0.35));'>")
+        for c in cols:
+            val = total_row.get(c, "")
+            html.append(
+                f"<td style='padding:12px 10px;white-space:nowrap;"
+                f"color:#FFD700;font-weight:800;font-size:0.95rem;"
+                f"text-shadow:0 0 8px rgba(255,215,0,0.35);'>{val}</td>"
+            )
+        html.append("</tr>")
+
+    html.append("</tbody></table></div>")
+    st.markdown("".join(html), unsafe_allow_html=True)
+
+
 def _render_km_merged_table(display_df: pd.DataFrame, groups: list):
     """Renders display_df as an HTML table where Scheduled KM / Actual KM /
     Income / Gross Income cells for each group of 2+ dates are visually
@@ -101,22 +150,30 @@ def _render_km_merged_table(display_df: pd.DataFrame, groups: list):
             skip_at.add(i)
 
     cols = list(display_df.columns)
-    html = ["<div style='overflow-x:auto;border-radius:8px;border:1px solid #2D2D5E;'>"
-            "<table style='width:100%;border-collapse:collapse;color:#eee;font-size:0.88rem;'>"]
+    html = [
+        "<div style='overflow-x:auto;border-radius:14px;"
+        "border:1px solid rgba(123,140,255,0.35);"
+        "box-shadow:0 4px 24px rgba(20,160,133,0.15), 0 0 0 1px rgba(255,255,255,0.03) inset;'>"
+        "<table style='width:100%;border-collapse:collapse;color:#f0f0f0;font-size:0.88rem;'>"
+    ]
     html.append("<thead><tr>")
     for c in cols:
-        html.append(f"<th style='border:1px solid #2D2D5E;padding:8px;background:#1E1E3A;text-align:left;white-space:nowrap;'>{c}</th>")
+        html.append(
+            f"<th style='padding:12px 10px;text-align:left;white-space:nowrap;"
+            f"background:linear-gradient(90deg,#14A085,#7B8CFF);color:#fff;"
+            f"font-weight:700;letter-spacing:0.3px;'>{c}</th>"
+        )
     html.append("</tr></thead><tbody>")
 
     for i, r in enumerate(rows):
-        row_bg = "#161629" if i % 2 == 0 else "#1E1E3A"
+        row_bg = "#182838" if i % 2 == 0 else "#1E2B3D"
         html.append("<tr>")
         for c in cols:
             if c in MERGE_COLS and i in rowspan_at:
                 info = rowspan_at[i]
                 val = info["sums"][c]
                 html.append(
-                    f"<td rowspan='{info['span']}' title=\"{info['tooltip']}\" style='border:1px solid #2D2D5E;padding:8px;text-align:center;"
+                    f"<td rowspan='{info['span']}' title=\"{info['tooltip']}\" style='border-bottom:1px solid rgba(123,140,255,0.12);padding:10px;text-align:center;"
                     f"vertical-align:middle;background:{row_bg};color:#eee;cursor:help;'>{val:,.0f}</td>"
                 )
             elif c in MERGE_COLS and i in skip_at:
@@ -124,7 +181,7 @@ def _render_km_merged_table(display_df: pd.DataFrame, groups: list):
             else:
                 cell_val = r.get(c, "")
                 cell_val = "" if pd.isna(cell_val) else cell_val
-                html.append(f"<td style='border:1px solid #2D2D5E;padding:8px;white-space:nowrap;background:{row_bg};color:#eee;'>{cell_val}</td>")
+                html.append(f"<td style='border-bottom:1px solid rgba(123,140,255,0.12);padding:10px;white-space:nowrap;background:{row_bg};color:#eee;'>{cell_val}</td>")
         html.append("</tr>")
 
     html.append("</tbody></table></div>")
@@ -140,8 +197,7 @@ def _render_km_merged_table(display_df: pd.DataFrame, groups: list):
         with st.expander("📱 Combined KM/Income breakdown (tap to view)"):
             for gb in group_breakdowns:
                 st.markdown(f"**🔗 {gb['label']}**")
-                breakdown_df = pd.DataFrame(gb["rows"] + [gb["total"]])
-                st.dataframe(breakdown_df, width='stretch', hide_index=True)
+                _render_html_table(pd.DataFrame(gb["rows"] + [gb["total"]]))
 
 
 # ──────────────────────────────────────────────
@@ -577,7 +633,7 @@ def editable_grid(bus_number: str):
                     diff_rows.append({"Field": col, "Old Value": old_val, "New Value": new_val})
             st.markdown(f"**📅 {date_str}**")
             if diff_rows:
-                st.dataframe(pd.DataFrame(diff_rows), width='stretch', hide_index=True)
+                _render_html_table(pd.DataFrame(diff_rows))
             else:
                 st.caption("(koi conflicting field nahi mila)")
 
@@ -793,7 +849,7 @@ def editable_grid(bus_number: str):
         if active_groups:
             _render_km_merged_table(display_df, active_groups)
         else:
-            st.dataframe(display_df, width='stretch', hide_index=True)
+            _render_html_table(display_df)
 
         if overlapping_group_ids:
             st.warning(
@@ -860,10 +916,10 @@ def editable_grid(bus_number: str):
                                 "Date": "TOTAL", "Scheduled KM": sch_sum, "Actual KM": act_sum,
                                 "Income": inc_sum, "Gross Income": gr_sum,
                             })
-                            st.dataframe(pd.DataFrame(detail_rows), width='stretch', hide_index=True)
+                            _render_html_table(pd.DataFrame(detail_rows))
 
         total_row = build_total_row(display_df, numeric_cols, label_col="Driver Name")
-        st.dataframe(total_row, width='stretch', hide_index=True)
+        _render_html_table(pd.DataFrame(columns=total_row.columns), total_row=total_row.iloc[0].to_dict())
 
         pdf_bytes = _generate_pdf(display_df, total_row, bus_number, month, half)
         st.download_button("📥 Download PDF", data=pdf_bytes,
@@ -973,7 +1029,7 @@ def driver_salary(bus_number: str = ""):
             st.rerun()
 
         total_row = build_total_row(disp, ["Salary"], label_col="Driver Name")
-        st.dataframe(total_row, width='stretch', hide_index=True)
+        _render_html_table(pd.DataFrame(columns=total_row.columns), total_row=total_row.iloc[0].to_dict())
     else:
         st.info("No records found.")
 
@@ -1237,7 +1293,7 @@ def diesel_view(bus_number: str = ""):
         Fills=("id", "count"), Total_Qty=("Quantity", "sum"), Total_Amount=("Amount", "sum")
     ).reset_index()
     summary_df.columns = ["Date", "Fills", f"Total {fuel} (L)", "Total Amount (₹)"]
-    st.dataframe(summary_df, width='stretch', hide_index=True)
+    _render_html_table(summary_df)
 
     total_diesel = df["Quantity"].sum()
     total_amount = df["Amount"].sum()
@@ -1336,6 +1392,6 @@ def salary_check_view():
     if "salary_check_df" in st.session_state:
         df = st.session_state["salary_check_df"]
         if not df.empty:
-            st.dataframe(df, width='stretch', hide_index=True)
+            _render_html_table(df)
         else:
             st.info("No data found.")
