@@ -1,4 +1,4 @@
--"""
+"""
 Income Forecast — src/ml/diesel_forecast.py jaisa hi simple, explainable
 recency-weighted average pattern, income ke liye. Recent din jyada weight
 paate hain (naya trend jaldi capture ho), aur usi weighted daily average
