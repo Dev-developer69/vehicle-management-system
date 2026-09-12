@@ -981,12 +981,11 @@ def editable_grid(bus_number: str):
             mc3.metric("Tax (fixed)", f"₹{PERIOD_TAX:,.0f}")
             mc4.metric("Payment (before final cut)", f"₹{raw_payment:,.0f}")
         else:
-            ipkm = (total_income - PERIOD_TAX) / total_actual_km if total_actual_km > 0 else 0
+            ipkm = round((total_income - PERIOD_TAX) / total_actual_km, 2) if total_actual_km > 0 else 0
             if ipkm < threshold:
                 raw_payment = (ipkm - deduction) * total_actual_km
                 slab_used = "Below threshold"
             else:
-                # ✅ At/above threshold — High Rate hataya, ab (Threshold − Deduction) × KM
                 raw_payment = (threshold - deduction) * total_actual_km
                 slab_used = "At/Above threshold"
             mc1, mc2, mc3, mc4 = st.columns(4)
