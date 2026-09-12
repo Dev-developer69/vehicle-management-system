@@ -10,6 +10,7 @@ from src.database.config import supabase
 from src.database.db import (
     get_diesel_rate_payment, get_km_combines, get_diesel_records_raw,
     get_income_records_raw, get_dated_diesel_records_raw, get_maintenance_records,
+    get_vehicle_payment_config,
 )
 from src.ml.mileage_anomaly import (
     compute_mileage_baseline, mileage_zscore, mileage_alert_status, baseline_summary_rows,
@@ -160,6 +161,23 @@ def _show_insight(prompt: str, key: str = ""):
             except Exception as e:
                 st.error(f"❌ {provider} error: {e}")
 
+
+
+def _compute_bus_final_payment(bus_number: str, total_income: float, total_actual_km: float) -> float:
+    """Vehicle Records ke 'Payment Summary' jaisa hi calculation — is bus ke
+    saved payment config (Standard ya IPKM Slab) ke hisaab se, is period ke
+    Total Income aur Total Actual KM se Final Payment nikalta hai."""
+    cfg = get_vehicle_payment_config(bus_number)
+    PERIOD_TAX = 11700
+    if cfg["method"] == "standard":
+        raw_payment = total_income - (total_actual_km * cfg["rate"]) - PERIOD_TAX
+    else:
+        ipkm = (total_income - PERIOD_TAX) / total_actual_km if total_actual_km > 0 else 0
+        if ipkm < cfg["ipkm_threshold"]:
+            raw_payment = (ipkm - cfg["ipkm_deduction"]) * total_actual_km
+        else:
+            raw_payment = (cfg["ipkm_threshold"] - cfg["ipkm_deduction"]) * total_actual_km
+    return raw_payment - (raw_payment * 0.01) - cfg["final_deduction"]
 
 
 def _plotly_dark(fig):
@@ -426,7 +444,14 @@ def quick_overview(bus_list: list):
         bus_rates[bus] = rate_data["rate"]
     summary["Diesel_Rate"]     = summary["Bus"].map(bus_rates)
     summary["Est_Diesel_Cost"] = (summary["Diesel"] * summary["Diesel_Rate"]).round(0)
-    summary["Net"]             = summary["Income"] - summary["Est_Diesel_Cost"]
+
+    # ✅ Payment ab raw "Income" se nahi — har bus ke saved Payment Config
+    # (Standard/IPKM Slab + 1% tax + final fixed deduction) se calculate hota
+    # hai, isi period ke Total Income aur Total Actual KM ka use karke.
+    summary["Payment"] = summary.apply(
+        lambda r: round(_compute_bus_final_payment(r["Bus"], r["Income"], r["Actual_KM"]), 0), axis=1
+    )
+    summary["Net"] = summary["Payment"] - summary["Est_Diesel_Cost"]
 
     # ── Summary Cards ──
     card_cols = st.columns(len(summary))
@@ -847,35 +872,35 @@ Max 2 bullets per section. Mention driver names specifically.
                     st.caption(f"Total fleet forecast: ~{total_forecast_litres:.0f} L (~₹{total_forecast_litres * DIESEL_RATE_PER_LITRE:,.0f}) agle 15 din ke liye")
 
             if has_income:
-                st.markdown("**💰 Income — Bus wise**")
+                st.markdown("**💰 Payment — Bus wise**")
                 fig = go.Figure(go.Bar(
-                    x=summary["Bus"].tolist(), y=summary["Income"],
+                    x=summary["Bus"].tolist(), y=summary["Payment"],
                     marker_color=[bus_color_map.get(b, "#14A085") for b in summary["Bus"]],
-                    text=summary["Income"].astype(int), textposition="outside",
+                    text=summary["Payment"].astype(int), textposition="outside",
                     texttemplate="₹%{text:,}",
                 ))
-                max_i = summary["Income"].max()
+                max_i = summary["Payment"].max()
                 fig.update_layout(
-                    showlegend=False, yaxis_title="Income (₹)",
+                    showlegend=False, yaxis_title="Payment (₹)",
                     xaxis=dict(type="category"),
                     yaxis=dict(range=[0, max_i * 1.2], gridcolor="rgba(255,255,255,0.08)"),
                 )
                 _render_chart(_plotly_dark(fig), key="qo_chart_income_bus")
 
             if has_diesel and has_income:
-                st.markdown("**💰 Income vs ⛽ Est. Diesel Cost:**")
+                st.markdown("**💰 Payment vs ⛽ Est. Diesel Cost:**")
                 fig = go.Figure()
                 fig.add_trace(go.Bar(
-                    name="Income", x=summary["Bus"].tolist(), y=summary["Income"],
+                    name="Payment", x=summary["Bus"].tolist(), y=summary["Payment"],
                     marker_color="#14A085",
-                    text=summary["Income"].astype(int), textposition="outside",
+                    text=summary["Payment"].astype(int), textposition="outside",
                 ))
                 fig.add_trace(go.Bar(
                     name="Est Diesel Cost", x=summary["Bus"].tolist(), y=summary["Est_Diesel_Cost"],
                     marker_color="#FF5252",
                     text=summary["Est_Diesel_Cost"].astype(int), textposition="outside",
                 ))
-                max_v = max(summary["Income"].max(), summary["Est_Diesel_Cost"].max())
+                max_v = max(summary["Payment"].max(), summary["Est_Diesel_Cost"].max())
                 fig.update_layout(
                     barmode="group", yaxis_title="₹",
                     xaxis=dict(type="category"),
@@ -884,11 +909,11 @@ Max 2 bullets per section. Mention driver names specifically.
                 )
                 _render_chart(_plotly_dark(fig), key="qo_chart_income_vs_diesel")
                 _show_insight(f"""
-Bus financial data: {summary[['Bus','Income','Est_Diesel_Cost','Net']].to_dict('records')}
+Bus financial data: {summary[['Bus','Payment','Est_Diesel_Cost','Net']].to_dict('records')}
 
 Analyze profitability and respond in this exact format:
 🟢 Strengths
-• [most profitable bus — name, income, net profit]
+• [most profitable bus — name, payment, net profit]
 
 🟠 Opportunities
 • [bus with high diesel cost eating into profit — name it]
@@ -1115,9 +1140,9 @@ Max 2 bullets per section. Name conductors specifically.
             st.caption("Koi income anomaly nahi mila is period me.")
 
     with tab9:
-        total_income   = df["income"].sum()
+        total_payment  = summary["Payment"].sum()
         total_est_cost = summary["Est_Diesel_Cost"].sum()
-        net_profit     = total_income - total_est_cost
+        net_profit     = total_payment - total_est_cost
         total_alerts   = (df["alert_status"] == "🚨 Red flag").sum()
 
         best_conductor_row = (
@@ -1127,7 +1152,7 @@ Max 2 bullets per section. Name conductors specifically.
         )
 
         s1, s2, s3, s4 = st.columns(4)
-        s1.metric("💰 Income",             f"₹{total_income:,.0f}")
+        s1.metric("💰 Payment",            f"₹{total_payment:,.0f}")
         s2.metric("⛽ Est. Diesel Cost",   f"₹{total_est_cost:,.0f}")
         s3.metric("📈 Net (est.)",         f"₹{net_profit:,.0f}")
         s4.metric("🚨 Alerts this period", int(total_alerts))
@@ -1143,29 +1168,29 @@ Max 2 bullets per section. Name conductors specifically.
             """, unsafe_allow_html=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
-        st.markdown("**Bus wise net profit (actual diesel rate):**")
-        display_summary = summary[["Bus", "Income", "Diesel", "Diesel_Rate", "Est_Diesel_Cost", "Net"]].copy()
-        display_summary.columns = ["Bus", "Income", "Diesel (L)", "Rate (₹/L)", "Est. Diesel Cost", "Net"]
+        st.markdown("**Bus wise net profit (Payment ke hisaab se):**")
+        display_summary = summary[["Bus", "Payment", "Diesel", "Diesel_Rate", "Est_Diesel_Cost", "Net"]].copy()
+        display_summary.columns = ["Bus", "Payment", "Diesel (L)", "Rate (₹/L)", "Est. Diesel Cost", "Net"]
         st.dataframe(display_summary, width='stretch', hide_index=True)
 
         _show_insight(f"""
 Period: {period_label}
 Bus details (use these exact numbers only):
 {display_summary.to_dict('records')}
-Total Income: Rs{total_income:,.0f}
+Total Payment: Rs{total_payment:,.0f}
 Total Diesel Cost: Rs{total_est_cost:,.0f}
 Net Profit: Rs{net_profit:,.0f}
 Mileage Alerts: {int(total_alerts)}
 
 FIRST check each bus for data issues and tag them inline — include ALL buses in analysis:
-- Diesel = 0 but Income > 0 → tag as [diesel entry missing]
+- Diesel = 0 but Payment > 0 → tag as [diesel entry missing]
 - Diesel = 0 but KM > 0 → tag as [data error: bus cannot run without fuel]
-- Income = 0 but Diesel > 0 → tag as [revenue missing]
-- Net > Income → tag as [calculation error]
+- Payment = 0 but Diesel > 0 → tag as [revenue missing]
+- Net > Payment → tag as [calculation error]
 
 Respond in this exact format:
 ⚠️ Data Quality Issues
-• [bus name + exact issue, e.g. Bus 7389 [diesel entry missing] Income=Rs3,08,141 Diesel=0]
+• [bus name + exact issue, e.g. Bus 7389 [diesel entry missing] Payment=Rs3,08,141 Diesel=0]
 
 🟢 Strengths (all buses, tag flagged ones)
 • [highest net profit bus — exact name and net amount]
