@@ -785,6 +785,27 @@ def get_income_records_raw(bus_numbers: list) -> list:
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
+def get_conductor_income_records_raw(bus_numbers: list) -> list:
+    """Conductor income-trend (src/ml/conductor_income_trend.py) aur
+    festival-aware conductor ranking (src/ml/festival_aware_income.py) ke
+    liye — per-record conductor + date + income + actual_km."""
+    if not bus_numbers:
+        return []
+    return supabase.table("vehicle_records").select("bus_number, date, conductor_name, income, actual_km") \
+        .in_("bus_number", bus_numbers).gt("actual_km", 0).order("date").execute().data or []
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_dated_income_records_raw(bus_numbers: list) -> list:
+    """Income forecasting (src/ml/income_forecast.py) aur festival-aware
+    baseline (src/ml/festival_aware_income.py) ke liye — per-day bus income."""
+    if not bus_numbers:
+        return []
+    return supabase.table("vehicle_records").select("bus_number, date, income, actual_km") \
+        .in_("bus_number", bus_numbers).gt("income", 0).order("date").execute().data or []
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_dated_diesel_records_raw(bus_numbers: list) -> list:
     if not bus_numbers:
         return []
