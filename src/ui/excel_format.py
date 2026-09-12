@@ -913,7 +913,9 @@ def editable_grid(bus_number: str):
         total_row = build_total_row(display_df, numeric_cols, label_col="Driver Name")
         _render_html_table(pd.DataFrame(columns=total_row.columns), total_row=total_row.iloc[0].to_dict())
 
-        # ── 💰 Payment Summary — 2 methods, per-vehicle chosen + saved ──
+        # ── 💰 Payment Summary — 2 methods, per-vehicle chosen + saved.
+        # Dono methods ke result me se 1% tax + fixed deduction minus hoke
+        # Final Payment banta hai. ──
         st.markdown("#### 💰 Payment Summary")
         cfg_key = f"payment_cfg_{bus_number}"
         if cfg_key not in st.session_state:
@@ -935,16 +937,9 @@ def editable_grid(bus_number: str):
                     "Rate per Actual KM (₹)", min_value=0.0, step=0.5, format="%.2f",
                     value=float(cfg["rate"]), key=f"payment_rate_input_{bus_number}",
                 )
-            with pc2:
-                st.markdown("<br>", unsafe_allow_html=True)
-                if st.button("💾 Save", key=f"save_payment_cfg_{bus_number}", width='stretch'):
-                    save_vehicle_payment_config(bus_number, payment_rate, "standard",
-                                                 cfg["ipkm_threshold"], cfg["ipkm_deduction"], cfg["ipkm_high_rate"])
-                    st.session_state[cfg_key] = get_vehicle_payment_config(bus_number)
-                    st.success("✅ Saved!")
-                    st.rerun()
+            threshold, deduction = cfg["ipkm_threshold"], cfg["ipkm_deduction"]
         else:
-            ic1, ic2, ic3, ic4 = st.columns([1, 1, 1, 1])
+            ic1, ic2 = st.columns(2)
             with ic1:
                 threshold = st.number_input(
                     "IPKM Threshold (amount1)", min_value=0.0, step=0.1, format="%.2f",
@@ -955,18 +950,23 @@ def editable_grid(bus_number: str):
                     "Deduction (amount2)", min_value=0.0, step=0.1, format="%.2f",
                     value=float(cfg["ipkm_deduction"]), key=f"ipkm_deduction_{bus_number}",
                 )
-            with ic3:
-                high_rate = st.number_input(
-                    "High Rate (amount3)", min_value=0.0, step=0.1, format="%.2f",
-                    value=float(cfg["ipkm_high_rate"]), key=f"ipkm_high_rate_{bus_number}",
-                )
-            with ic4:
-                st.markdown("<br>", unsafe_allow_html=True)
-                if st.button("💾 Save", key=f"save_payment_cfg_{bus_number}", width='stretch'):
-                    save_vehicle_payment_config(bus_number, cfg["rate"], "ipkm_slab", threshold, deduction, high_rate)
-                    st.session_state[cfg_key] = get_vehicle_payment_config(bus_number)
-                    st.success("✅ Saved!")
-                    st.rerun()
+            payment_rate = cfg["rate"]
+
+        # ── Final step — dono methods ke liye common (1% + fixed amount) ──
+        fd1, fd2 = st.columns(2)
+        with fd1:
+            final_deduction = st.number_input(
+                "Final Fixed Deduction (₹) — payment banne ke baad minus hoga",
+                min_value=0.0, step=50.0, format="%.2f",
+                value=float(cfg["final_deduction"]), key=f"final_deduction_{bus_number}",
+            )
+        with fd2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("💾 Save Payment Config", key=f"save_payment_cfg_{bus_number}", width='stretch'):
+                save_vehicle_payment_config(bus_number, payment_rate, method, threshold, deduction, final_deduction)
+                st.session_state[cfg_key] = get_vehicle_payment_config(bus_number)
+                st.success("✅ Saved!")
+                st.rerun()
 
         total_income    = pd.to_numeric(display_df["Income"], errors="coerce").fillna(0).sum()
         total_actual_km = pd.to_numeric(display_df["Actual KM"], errors="coerce").fillna(0).sum()
@@ -974,23 +974,34 @@ def editable_grid(bus_number: str):
 
         if method == "standard":
             km_cost = total_actual_km * payment_rate
-            payment = total_income - km_cost - PERIOD_TAX
+            raw_payment = total_income - km_cost - PERIOD_TAX
             mc1, mc2, mc3, mc4 = st.columns(4)
             mc1.metric("Total Income", f"₹{total_income:,.0f}")
             mc2.metric("KM Cost", f"₹{km_cost:,.0f}", help=f"{total_actual_km:,.0f} km × ₹{payment_rate:.2f}")
             mc3.metric("Tax (fixed)", f"₹{PERIOD_TAX:,.0f}")
-            mc4.metric("💵 Payment", f"₹{payment:,.0f}")
+            mc4.metric("Payment (before final cut)", f"₹{raw_payment:,.0f}")
         else:
             ipkm = (total_income - PERIOD_TAX) / total_actual_km if total_actual_km > 0 else 0
             if ipkm < threshold:
-                payment = (ipkm - deduction) * total_actual_km
+                raw_payment = (ipkm - deduction) * total_actual_km
+                slab_used = "Below threshold"
             else:
-                payment = high_rate * total_actual_km
+                # ✅ At/above threshold — High Rate hataya, ab (Threshold − Deduction) × KM
+                raw_payment = (threshold - deduction) * total_actual_km
+                slab_used = "At/Above threshold"
             mc1, mc2, mc3, mc4 = st.columns(4)
             mc1.metric("Total Income", f"₹{total_income:,.0f}")
             mc2.metric("IPKM", f"₹{ipkm:.2f}", help="(Total Income − Tax) / Total Actual KM")
-            mc3.metric("Slab Used", "Below threshold" if ipkm < threshold else "At/Above threshold")
-            mc4.metric("💵 Payment", f"₹{payment:,.0f}")
+            mc3.metric("Slab Used", slab_used)
+            mc4.metric("Payment (before final cut)", f"₹{raw_payment:,.0f}")
+
+        # ── Final Payment = raw_payment − 1% tax − final_deduction (dono methods ke liye common) ──
+        one_pct_tax    = raw_payment * 0.01
+        final_payment  = raw_payment - one_pct_tax - final_deduction
+        fp1, fp2, fp3 = st.columns(3)
+        fp1.metric("1% Tax", f"₹{one_pct_tax:,.0f}")
+        fp2.metric("Final Fixed Deduction", f"₹{final_deduction:,.0f}")
+        fp3.metric("💵 Final Payment", f"₹{final_payment:,.0f}")
 
         pdf_bytes = _generate_pdf(display_df, total_row, bus_number, month, half)
         st.download_button("📥 Download PDF", data=pdf_bytes,
