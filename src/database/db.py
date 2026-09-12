@@ -48,8 +48,10 @@ def save_scheduled_km(bus_number: str, scheduled_km: int) -> None:
 
 def get_vehicle_payment_config(bus_number: str) -> dict:
     """Payment calculation config — 'standard' (Income - KM×rate - tax) ya
-    'ipkm_slab' (kuch vehicles ke liye alag formula: IPKM = Income/KM; agar
-    IPKM < threshold to (IPKM - deduction)×KM, warna high_rate×KM)."""
+    'ipkm_slab' (IPKM = (Income-tax)/KM; agar IPKM < threshold to
+    (IPKM-deduction)×KM, warna (threshold-deduction)×KM). Dono methods ke
+    final result me se 1% tax + final_deduction minus hoke Final Payment
+    banta hai."""
     res = supabase_admin.table("vehicle_payment_rate").select("*").eq("bus_number", bus_number).execute()
     if res.data:
         r = res.data[0]
@@ -57,17 +59,17 @@ def get_vehicle_payment_config(bus_number: str) -> dict:
             "rate": float(r.get("rate") or 0), "method": r.get("method") or "standard",
             "ipkm_threshold": float(r.get("ipkm_threshold") or 0),
             "ipkm_deduction": float(r.get("ipkm_deduction") or 0),
-            "ipkm_high_rate": float(r.get("ipkm_high_rate") or 0),
+            "final_deduction": float(r.get("final_deduction") or 0),
         }
-    return {"rate": 0.0, "method": "standard", "ipkm_threshold": 0.0, "ipkm_deduction": 0.0, "ipkm_high_rate": 0.0}
+    return {"rate": 0.0, "method": "standard", "ipkm_threshold": 0.0, "ipkm_deduction": 0.0, "final_deduction": 0.0}
 
 
 def save_vehicle_payment_config(bus_number: str, rate: float, method: str,
-                                 ipkm_threshold: float, ipkm_deduction: float, ipkm_high_rate: float) -> None:
+                                 ipkm_threshold: float, ipkm_deduction: float, final_deduction: float) -> None:
     supabase_admin.table("vehicle_payment_rate").upsert({
         "bus_number": bus_number, "rate": float(rate), "method": method,
         "ipkm_threshold": float(ipkm_threshold), "ipkm_deduction": float(ipkm_deduction),
-        "ipkm_high_rate": float(ipkm_high_rate),
+        "final_deduction": float(final_deduction),
     }, on_conflict="bus_number").execute()
 
 
