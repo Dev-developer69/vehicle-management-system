@@ -171,13 +171,15 @@ def _compute_bus_final_payment(bus_number: str, total_income: float, total_actua
     PERIOD_TAX = 11700
     if cfg["method"] == "standard":
         raw_payment = total_income - (total_actual_km * cfg["rate"]) - PERIOD_TAX
+        tax_pct = 0.01
     else:
         ipkm = (total_income - PERIOD_TAX) / total_actual_km if total_actual_km > 0 else 0
         if ipkm < cfg["ipkm_threshold"]:
             raw_payment = (ipkm - cfg["ipkm_deduction"]) * total_actual_km
         else:
             raw_payment = (cfg["ipkm_threshold"] - cfg["ipkm_deduction"]) * total_actual_km
-    return raw_payment - (raw_payment * 0.01) - cfg["final_deduction"]
+        tax_pct = 0.02  # ✅ IPKM Slab wale vehicles ke liye 2% tax (Standard = 1%)
+    return raw_payment - (raw_payment * tax_pct) - cfg["final_deduction"]
 
 
 def _plotly_dark(fig):
