@@ -11,6 +11,7 @@ from src.database.db import (
     get_diesel_rate_payment, get_km_combines, get_diesel_records_raw,
     get_income_records_raw, get_dated_diesel_records_raw, get_maintenance_records,
     get_vehicle_payment_config, get_fuel_fills,
+    get_conductor_income_records_raw, get_dated_income_records_raw,
 )
 from src.ml.mileage_anomaly import (
     compute_mileage_baseline, mileage_zscore, mileage_alert_status, baseline_summary_rows,
@@ -23,6 +24,14 @@ from src.ml.income_anomaly import (
 from src.ml.diesel_forecast import forecast_diesel, forecast_summary_rows
 from src.ml.multivariate_anomaly import detect_multivariate_anomalies
 from src.ml.health_score import compute_fleet_health
+from src.ml.income_forecast import forecast_income, income_forecast_summary_rows
+from src.ml.conductor_income_trend import compute_conductor_income_trends, conductor_income_trend_rows
+from src.ml.profitability_segmentation import segment_bus_profitability
+from src.ml.festival_calendar import get_upcoming_festivals, is_festival_window
+from src.ml.festival_aware_income import (
+    compute_income_baseline_festival_aware, income_alert_status_festival_aware,
+    estimate_festival_income_multiplier, conductor_festival_performance,
+)
 from src.ui.excel_format import shift_period_back, _get_date_range
 
 VEHICLE_MAP = {
@@ -50,16 +59,28 @@ SYSTEM_PROMPT = (
     "Diesel > 0 but Actual KM = 0 means add note Fuel recorded but vehicle did not operate. "
     "Net > Income means add note Calculation error verify. "
     "Show these as a Data Quality section first, then include ALL buses in performance analysis with warning tags. "
-    "STEP 2 PERFORMANCE ANALYSIS include all buses tag inconsistent ones: "
-    "Analyze all records. For buses with data issues, include them but add a warning tag like "
-    "verify diesel data or revenue missing next to their name in brackets. "
+    "STEP 2 PERFORMANCE ANALYSIS — BANNED PATTERN: "
+    "Never write an insight that just names the highest or lowest raw number in the data "
+    "(e.g. 'Bus X has highest payment Rs Y') — that is visible on the table already and is NOT an insight, "
+    "it will be REJECTED. Every bullet must do at least one of: "
+    "(a) compare a bus's ratio (diesel cost as %% of payment, income per km, net margin %%) against the FLEET AVERAGE "
+    "of that same ratio and state the deviation, "
+    "(b) connect two different signals together to explain WHY something is happening — e.g. a low mileage z-score "
+    "combined with a high diesel cost, or a declining income trend combined with a specific conductor/driver, "
+    "(c) compare this period's number against the previous period for the same bus if previous-period data is given, "
+    "(d) flag a bus that looks fine on totals but has a bad ratio (e.g. high payment but even higher diesel-cost ratio "
+    "than the fleet average, meaning the size of the number is hiding a margin problem). "
+    "If two buses have similar totals but different ratios, that gap IS the insight — surface it. "
+    "STEP 3: include all buses, tag inconsistent ones with a warning tag like [verify diesel data] or [revenue missing]. "
     "ABSOLUTE RULES: "
     "1. Use ONLY the exact numbers from the data never round estimate or invent. "
     "2. Copy rupee and KM values exactly as given. "
     "3. Plain text only no markdown no bold no asterisks. "
     "4. Follow the exact output format in the prompt. "
-    "5. Max 2 bullets per section each under 20 words. "
-    "6. A diesel bus CANNOT run without diesel always flag Diesel=0 with KM>0 or Income>0 as data error."
+    "5. Max 2 bullets per section each under 25 words. "
+    "6. A diesel bus CANNOT run without diesel always flag Diesel=0 with KM>0 or Income>0 as data error. "
+    "7. Every performance bullet (Strengths/Opportunities/Critical) must include a ratio, deviation, or comparison — "
+    "never a single standalone total."
 )
 
 
@@ -333,6 +354,18 @@ def quick_overview(bus_list: list):
         <span style='font-size:0.85rem;color:#aaa;margin-left:8px;'>{period_label}</span>
     </div>
     """, unsafe_allow_html=True)
+
+    # ── 🎉 Upcoming Festival Banner — ek hi jagah, har tab me repeat nahi ──
+    upcoming = get_upcoming_festivals(days_ahead=20)
+    if upcoming:
+        next_fest = upcoming[0]
+        st.markdown(f"""
+        <div style='background:linear-gradient(90deg,#FFB347,#FF8C42);border-radius:10px;
+                    padding:10px 16px;margin-bottom:10px;color:#1a1a1a;font-weight:600;'>
+            🎉 {next_fest['name']} in {next_fest['days_away']} din ({next_fest['date'].strftime('%d %b')})
+            — income surge expect karo, staffing/schedule pehle se plan kar lo.
+        </div>
+        """, unsafe_allow_html=True)
 
     cache_key = f"overview_{start}_{end}"
 
@@ -905,6 +938,34 @@ Max 2 bullets per section. Mention driver names specifically.
                 )
                 _render_chart(_plotly_dark(fig), key="qo_chart_income_bus")
 
+                # ── Income forecast — agle 15 din ka expected revenue ──
+                income_forecast = forecast_income(
+                    get_dated_income_records_raw(list(df["bus_number"].unique())),
+                    forecast_days=15,
+                )
+                if income_forecast:
+                    st.markdown("**🔮 Agle 15 Din Ka Income Forecast:**")
+                    _diesel_forecast_for_income = diesel_forecast if 'diesel_forecast' in locals() else {}
+                    st.dataframe(
+                        pd.DataFrame(income_forecast_summary_rows(income_forecast, _diesel_forecast_for_income, DIESEL_PRICE_PER_L)),
+                        width='stretch', hide_index=True,
+                    )
+                    # Agar forecast window (agle 15 din) mein koi festival aata hai,
+                    # multiplier se ek adjusted heads-up bhi dikha do
+                    fest_soon = get_upcoming_festivals(days_ahead=15)
+                    if fest_soon:
+                        multipliers = estimate_festival_income_multiplier(
+                            get_dated_income_records_raw(list(df["bus_number"].unique()))
+                        )
+                        avg_mult = (sum(m["multiplier"] for m in multipliers.values()) / len(multipliers)) if multipliers else 1.3
+                        total_forecast = sum(f["forecast_income"] for f in income_forecast.values())
+                        boosted = total_forecast * avg_mult
+                        st.info(
+                            f"🎉 {fest_soon[0]['name']} isi window mein aa raha hai — historically income "
+                            f"~{avg_mult:.1f}x tak badhta hai. Adjusted estimate: ~₹{boosted:,.0f} "
+                            f"(plain trend forecast: ₹{total_forecast:,.0f})"
+                        )
+
             if has_diesel and has_income:
                 st.markdown("**💰 Payment vs ⛽ Est. Diesel Cost:**")
                 fig = go.Figure()
@@ -1125,6 +1186,29 @@ Max 2 bullets per section. Name conductors specifically.
 """)
             st.dataframe(ipk_conductor, width='stretch', hide_index=True)
 
+        # ── Conductor income trend — apne hi past se compare, declining conductors upar ──
+        conductor_raw = [
+            {**r, "conductor": (r.get("conductor_name") or "").strip()}
+            for r in get_conductor_income_records_raw(list(df["bus_number"].unique()))
+            if (r.get("conductor_name") or "").strip().lower() not in ("", "none", "no", "test")
+        ]
+        conductor_trends = compute_conductor_income_trends(conductor_raw)
+        if conductor_trends:
+            st.markdown("**📈 Conductor Income Trend (apne hi past se compare)**")
+            trend_rows = conductor_income_trend_rows(conductor_trends)
+            declining = [r for r in trend_rows if r["Trend"] == "📉 Declining"]
+            if declining:
+                names = ", ".join(r["Conductor"].title() for r in declining)
+                st.warning(f"⚠️ Income/km girta ja raha hai: {names} — inko check karo.")
+            st.dataframe(pd.DataFrame(trend_rows), width='stretch', hide_index=True)
+
+        # ── Festival-day conductor performance — sirf festival window records par ──
+        fest_perf = conductor_festival_performance(conductor_raw)
+        if fest_perf:
+            with st.expander("🎉 Festival Days — Conductor Performance"):
+                st.caption("Sirf festival window ke records — bheed ko sabse achhe se kaun cash karta hai")
+                st.dataframe(pd.DataFrame(fest_perf), width='stretch', hide_index=True)
+
         # ── Income anomaly detection (baseline pehle se compute ho chuka hai upar) ──
         day_income = df[df["actual_km"] > 0][
             ["date_str", "bus_number", "driver_name", "actual_km", "income", "income_per_km"]
@@ -1187,43 +1271,94 @@ Max 2 bullets per section. Name conductors specifically.
 
         st.markdown("<br>", unsafe_allow_html=True)
         st.markdown("**Bus wise net profit (Payment ke hisaab se):**")
+
+        # ── Bus profitability segmentation — High Profit / Moderate / Loss-making ──
+        bus_perf = summary.copy()
+        bus_perf["Income_per_KM"]       = (bus_perf["Payment"] / bus_perf["Actual_KM"].replace(0, float("nan"))).round(2)
+        bus_perf["Diesel_Cost_per_KM"]  = (bus_perf["Est_Diesel_Cost"] / bus_perf["Actual_KM"].replace(0, float("nan"))).round(2)
+        bus_perf["Net_Profit"]          = bus_perf["Net"]
+        bus_perf = segment_bus_profitability(
+            bus_perf[["Bus", "Income_per_KM", "Diesel_Cost_per_KM", "Net_Profit"]].fillna(0)
+        )
         display_summary = summary[["Bus", "Payment", "Diesel", "Diesel_Rate", "Est_Diesel_Cost", "Net"]].copy()
-        display_summary.columns = ["Bus", "Payment", "Diesel (L)", "Rate (₹/L)", "Est. Diesel Cost", "Net"]
+        display_summary = display_summary.merge(bus_perf[["Bus", "Segment"]], on="Bus", how="left")
+        display_summary.columns = ["Bus", "Payment", "Diesel (L)", "Rate (₹/L)", "Est. Diesel Cost", "Net", "Segment"]
         st.dataframe(display_summary, width='stretch', hide_index=True)
+
+        # ── Fleet-benchmark features — ye wahi cheez hai jo LLM ko "insight"
+        #    dene layak banati hai, sirf raw totals dekh ke nahi ──
+        insight_df = summary.copy()
+        insight_df["Diesel_Cost_Pct_of_Payment"] = (insight_df["Est_Diesel_Cost"] / insight_df["Payment"].replace(0, float("nan")) * 100).round(1)
+        insight_df["Net_Margin_Pct"]              = (insight_df["Net"] / insight_df["Payment"].replace(0, float("nan")) * 100).round(1)
+        insight_df["Payment_per_KM"]               = (insight_df["Payment"] / insight_df["Actual_KM"].replace(0, float("nan"))).round(2)
+
+        fleet_avg = {
+            "Diesel_Cost_Pct_of_Payment": round(insight_df["Diesel_Cost_Pct_of_Payment"].mean(skipna=True), 1),
+            "Net_Margin_Pct":              round(insight_df["Net_Margin_Pct"].mean(skipna=True), 1),
+            "Payment_per_KM":              round(insight_df["Payment_per_KM"].mean(skipna=True), 2),
+        }
+        insight_df["Diesel_Pct_vs_Fleet_Avg"] = (insight_df["Diesel_Cost_Pct_of_Payment"] - fleet_avg["Diesel_Cost_Pct_of_Payment"]).round(1)
+        insight_df["Margin_vs_Fleet_Avg"]     = (insight_df["Net_Margin_Pct"] - fleet_avg["Net_Margin_Pct"]).round(1)
+
+        # ── ML signals already computed upar (tab7/tab8) ko yahin reuse karo —
+        #    inhi se "WHY" nikalta hai, sirf totals se nahi ──
+        mileage_z_summary = df.groupby("bus_number")["mileage_zscore"].mean().round(2).to_dict()
+        income_z_summary  = df.groupby("bus_number")["income_zscore"].mean().round(2).to_dict()
+        alerts_by_bus      = df[df["alert_status"] == "🚨 Red flag"].groupby("bus_number").size().to_dict()
+        health_by_bus       = {bus: h["score"] for bus, h in fleet_health.items()} if 'fleet_health' in locals() else {}
+
+        insight_records = []
+        for _, row in insight_df.iterrows():
+            bus = row["Bus"]
+            insight_records.append({
+                "Bus": bus,
+                "Payment": row["Payment"], "Net": row["Net"],
+                "Diesel_Cost_Pct_of_Payment": row["Diesel_Cost_Pct_of_Payment"],
+                "vs_fleet_avg_diesel_pct": row["Diesel_Pct_vs_Fleet_Avg"],
+                "Net_Margin_Pct": row["Net_Margin_Pct"],
+                "vs_fleet_avg_margin": row["Margin_vs_Fleet_Avg"],
+                "Payment_per_KM": row["Payment_per_KM"],
+                "avg_mileage_zscore": mileage_z_summary.get(bus),
+                "avg_income_zscore": income_z_summary.get(bus),
+                "red_flag_alerts": int(alerts_by_bus.get(bus, 0)),
+                "health_score": health_by_bus.get(bus),
+            })
 
         _show_insight(f"""
 Period: {period_label}
-Bus details (use these exact numbers only):
-{display_summary.to_dict('records')}
+Fleet averages this period: Diesel cost is {fleet_avg['Diesel_Cost_Pct_of_Payment']}%% of payment on average, Net margin is {fleet_avg['Net_Margin_Pct']}%% on average, Payment per KM averages Rs{fleet_avg['Payment_per_KM']}.
+
+Per-bus data with deviation from fleet average (use these exact numbers only):
+{insight_records}
 Total Payment: Rs{total_payment:,.0f}
 Total Diesel Cost: Rs{total_est_cost:,.0f}
 Net Profit: Rs{net_profit:,.0f}
 Mileage Alerts: {int(total_alerts)}
 
 FIRST check each bus for data issues and tag them inline — include ALL buses in analysis:
-- Diesel = 0 but Payment > 0 → tag as [diesel entry missing]
-- Diesel = 0 but KM > 0 → tag as [data error: bus cannot run without fuel]
-- Payment = 0 but Diesel > 0 → tag as [revenue missing]
-- Net > Payment → tag as [calculation error]
+- Diesel = 0 but Payment > 0 -> tag as [diesel entry missing]
+- Diesel = 0 but KM > 0 -> tag as [data error: bus cannot run without fuel]
+- Payment = 0 but Diesel > 0 -> tag as [revenue missing]
+- Net > Payment -> tag as [calculation error]
 
 Respond in this exact format:
 ⚠️ Data Quality Issues
-• [bus name + exact issue, e.g. Bus 7389 [diesel entry missing] Payment=Rs3,08,141 Diesel=0]
+• [bus name + exact issue]
 
 🟢 Strengths (all buses, tag flagged ones)
-• [highest net profit bus — exact name and net amount]
+• [bus whose ratio beats fleet average by the widest margin — name the ratio and the gap, not just the total]
 
 🟠 Opportunities (all buses, tag flagged ones)
-• [bus with high diesel cost — exact name and amounts]
+• [bus with a hidden margin problem — decent payment but diesel-cost-pct or margin worse than fleet average — name the gap]
 
 🔴 Critical Issues (all buses, tag flagged ones)
-• [bus with negative net — exact name and amount]
+• [bus where a low mileage/income z-score or red-flag alert count explains WHY the net number looks bad — connect the signals]
 
 💡 Recommendations
-• [one specific action — data fix or operational improvement]
+• [one specific action tied to the exact ratio/signal named above, not a generic tip]
 
 📈 Overall Status: Excellent / Good / Average / Poor
-Use only exact rupee values from data above. Max 2 bullets per section.
+Every bullet must reference a ratio, a deviation from fleet average, or a connection between two signals. Restating a raw total alone is not acceptable.
 """)
 
     if st.button("🔄 Refresh Overview", key="refresh_overview"):
