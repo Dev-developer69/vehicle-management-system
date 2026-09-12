@@ -20,7 +20,7 @@ from src.database.db import (
     save_fuel_fill, get_fuel_fills, update_fuel_fill, delete_fuel_fill,
     clear_fuel_fills_for_date, get_existing_fuel_fill_dates, replace_fuel_fill_for_date,
     migrate_diesel_to_fuel_fills, get_unmigrated_diesel_dates,
-    get_vehicle_payment_rate, save_vehicle_payment_rate,
+    get_vehicle_payment_config, save_vehicle_payment_config,
 )
 
 # ──────────────────────────────────────────────
@@ -913,37 +913,84 @@ def editable_grid(bus_number: str):
         total_row = build_total_row(display_df, numeric_cols, label_col="Driver Name")
         _render_html_table(pd.DataFrame(columns=total_row.columns), total_row=total_row.iloc[0].to_dict())
 
-        # ── 💰 Payment Summary — Income - (Actual KM × per-vehicle rate) - fixed period tax ──
+        # ── 💰 Payment Summary — 2 methods, per-vehicle chosen + saved ──
         st.markdown("#### 💰 Payment Summary")
-        rate_key = f"payment_rate_{bus_number}"
-        if rate_key not in st.session_state:
-            st.session_state[rate_key] = get_vehicle_payment_rate(bus_number)
-        pc1, pc2 = st.columns([2, 1])
-        with pc1:
-            payment_rate = st.number_input(
-                "Rate per Actual KM (₹) — is vehicle ke liye",
-                min_value=0.0, step=0.5, format="%.2f",
-                value=float(st.session_state[rate_key]), key=f"payment_rate_input_{bus_number}",
-            )
-        with pc2:
-            st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("💾 Save Rate", key=f"save_payment_rate_{bus_number}", width='stretch'):
-                save_vehicle_payment_rate(bus_number, payment_rate)
-                st.session_state[rate_key] = payment_rate
-                st.success("✅ Rate saved!")
-                st.rerun()
+        cfg_key = f"payment_cfg_{bus_number}"
+        if cfg_key not in st.session_state:
+            st.session_state[cfg_key] = get_vehicle_payment_config(bus_number)
+        cfg = st.session_state[cfg_key]
 
-        total_income     = pd.to_numeric(display_df["Income"], errors="coerce").fillna(0).sum()
-        total_actual_km  = pd.to_numeric(display_df["Actual KM"], errors="coerce").fillna(0).sum()
-        PERIOD_TAX       = 11700  # ✅ fixed, har period (chahe 15 din ho ya kam/zyada) ke liye ek hi baar
-        km_cost          = total_actual_km * payment_rate
-        payment          = total_income - km_cost - PERIOD_TAX
+        method_label = st.radio(
+            "Payment Method (is vehicle ke liye)",
+            ["Standard (Income − KM×Rate − Tax)", "IPKM Slab (kuch vehicles ke liye)"],
+            index=0 if cfg["method"] == "standard" else 1,
+            key=f"payment_method_{bus_number}", horizontal=True,
+        )
+        method = "standard" if "Standard" in method_label else "ipkm_slab"
 
-        mc1, mc2, mc3, mc4 = st.columns(4)
-        mc1.metric("Total Income", f"₹{total_income:,.0f}")
-        mc2.metric("KM Cost", f"₹{km_cost:,.0f}", help=f"{total_actual_km:,.0f} km × ₹{payment_rate:.2f}")
-        mc3.metric("Tax (fixed)", f"₹{PERIOD_TAX:,.0f}")
-        mc4.metric("💵 Payment", f"₹{payment:,.0f}")
+        if method == "standard":
+            pc1, pc2 = st.columns([2, 1])
+            with pc1:
+                payment_rate = st.number_input(
+                    "Rate per Actual KM (₹)", min_value=0.0, step=0.5, format="%.2f",
+                    value=float(cfg["rate"]), key=f"payment_rate_input_{bus_number}",
+                )
+            with pc2:
+                st.markdown("<br>", unsafe_allow_html=True)
+                if st.button("💾 Save", key=f"save_payment_cfg_{bus_number}", width='stretch'):
+                    save_vehicle_payment_config(bus_number, payment_rate, "standard",
+                                                 cfg["ipkm_threshold"], cfg["ipkm_deduction"], cfg["ipkm_high_rate"])
+                    st.session_state[cfg_key] = get_vehicle_payment_config(bus_number)
+                    st.success("✅ Saved!")
+                    st.rerun()
+        else:
+            ic1, ic2, ic3, ic4 = st.columns([1, 1, 1, 1])
+            with ic1:
+                threshold = st.number_input(
+                    "IPKM Threshold (amount1)", min_value=0.0, step=0.1, format="%.2f",
+                    value=float(cfg["ipkm_threshold"]), key=f"ipkm_threshold_{bus_number}",
+                )
+            with ic2:
+                deduction = st.number_input(
+                    "Deduction (amount2)", min_value=0.0, step=0.1, format="%.2f",
+                    value=float(cfg["ipkm_deduction"]), key=f"ipkm_deduction_{bus_number}",
+                )
+            with ic3:
+                high_rate = st.number_input(
+                    "High Rate (amount3)", min_value=0.0, step=0.1, format="%.2f",
+                    value=float(cfg["ipkm_high_rate"]), key=f"ipkm_high_rate_{bus_number}",
+                )
+            with ic4:
+                st.markdown("<br>", unsafe_allow_html=True)
+                if st.button("💾 Save", key=f"save_payment_cfg_{bus_number}", width='stretch'):
+                    save_vehicle_payment_config(bus_number, cfg["rate"], "ipkm_slab", threshold, deduction, high_rate)
+                    st.session_state[cfg_key] = get_vehicle_payment_config(bus_number)
+                    st.success("✅ Saved!")
+                    st.rerun()
+
+        total_income    = pd.to_numeric(display_df["Income"], errors="coerce").fillna(0).sum()
+        total_actual_km = pd.to_numeric(display_df["Actual KM"], errors="coerce").fillna(0).sum()
+        PERIOD_TAX      = 11700  # ✅ fixed, har period (chahe 15 din ho ya kam/zyada) ke liye ek hi baar
+
+        if method == "standard":
+            km_cost = total_actual_km * payment_rate
+            payment = total_income - km_cost - PERIOD_TAX
+            mc1, mc2, mc3, mc4 = st.columns(4)
+            mc1.metric("Total Income", f"₹{total_income:,.0f}")
+            mc2.metric("KM Cost", f"₹{km_cost:,.0f}", help=f"{total_actual_km:,.0f} km × ₹{payment_rate:.2f}")
+            mc3.metric("Tax (fixed)", f"₹{PERIOD_TAX:,.0f}")
+            mc4.metric("💵 Payment", f"₹{payment:,.0f}")
+        else:
+            ipkm = (total_income - PERIOD_TAX) / total_actual_km if total_actual_km > 0 else 0
+            if ipkm < threshold:
+                payment = (ipkm - deduction) * total_actual_km
+            else:
+                payment = high_rate * total_actual_km
+            mc1, mc2, mc3, mc4 = st.columns(4)
+            mc1.metric("Total Income", f"₹{total_income:,.0f}")
+            mc2.metric("IPKM", f"₹{ipkm:.2f}", help="(Total Income − Tax) / Total Actual KM")
+            mc3.metric("Slab Used", "Below threshold" if ipkm < threshold else "At/Above threshold")
+            mc4.metric("💵 Payment", f"₹{payment:,.0f}")
 
         pdf_bytes = _generate_pdf(display_df, total_row, bus_number, month, half)
         st.download_button("📥 Download PDF", data=pdf_bytes,
