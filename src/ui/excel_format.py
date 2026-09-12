@@ -981,11 +981,12 @@ def editable_grid(bus_number: str):
             mc3.metric("Tax (fixed)", f"₹{PERIOD_TAX:,.0f}")
             mc4.metric("Payment (before final cut)", f"₹{raw_payment:,.0f}")
         else:
-            ipkm = round((total_income - PERIOD_TAX) / total_actual_km, 2) if total_actual_km > 0 else 0
+            ipkm = (total_income - PERIOD_TAX) / total_actual_km if total_actual_km > 0 else 0
             if ipkm < threshold:
                 raw_payment = (ipkm - deduction) * total_actual_km
                 slab_used = "Below threshold"
             else:
+                # ✅ At/above threshold — High Rate hataya, ab (Threshold − Deduction) × KM
                 raw_payment = (threshold - deduction) * total_actual_km
                 slab_used = "At/Above threshold"
             mc1, mc2, mc3, mc4 = st.columns(4)
@@ -994,11 +995,13 @@ def editable_grid(bus_number: str):
             mc3.metric("Slab Used", slab_used)
             mc4.metric("Payment (before final cut)", f"₹{raw_payment:,.0f}")
 
-        # ── Final Payment = raw_payment − 1% tax − final_deduction (dono methods ke liye common) ──
-        one_pct_tax    = raw_payment * 0.01
-        final_payment  = raw_payment - one_pct_tax - final_deduction
+        # ── Final Payment = raw_payment − tax% − final_deduction.
+        # Tax % method ke hisaab se alag: IPKM Slab = 2%, Standard = 1% ──
+        tax_pct        = 0.02 if method == "ipkm_slab" else 0.01
+        tax_amount     = raw_payment * tax_pct
+        final_payment  = raw_payment - tax_amount - final_deduction
         fp1, fp2, fp3 = st.columns(3)
-        fp1.metric("1% Tax", f"₹{one_pct_tax:,.0f}")
+        fp1.metric(f"{int(tax_pct*100)}% Tax", f"₹{tax_amount:,.0f}")
         fp2.metric("Final Fixed Deduction", f"₹{final_deduction:,.0f}")
         fp3.metric("💵 Final Payment", f"₹{final_payment:,.0f}")
 
