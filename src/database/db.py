@@ -46,16 +46,29 @@ def save_scheduled_km(bus_number: str, scheduled_km: int) -> None:
         {"bus_number": bus_number, "scheduled_km": scheduled_km}, on_conflict="bus_number").execute()
 
 
-def get_vehicle_payment_rate(bus_number: str) -> float:
-    """Payment calculation ke liye per-vehicle rate (₹ per Actual KM) — Gross Income
-    replace karne wale Payment Summary feature ke liye."""
-    res = supabase_admin.table("vehicle_payment_rate").select("rate").eq("bus_number", bus_number).execute()
-    return float(res.data[0]["rate"] or 0) if res.data else 0.0
+def get_vehicle_payment_config(bus_number: str) -> dict:
+    """Payment calculation config — 'standard' (Income - KM×rate - tax) ya
+    'ipkm_slab' (kuch vehicles ke liye alag formula: IPKM = Income/KM; agar
+    IPKM < threshold to (IPKM - deduction)×KM, warna high_rate×KM)."""
+    res = supabase_admin.table("vehicle_payment_rate").select("*").eq("bus_number", bus_number).execute()
+    if res.data:
+        r = res.data[0]
+        return {
+            "rate": float(r.get("rate") or 0), "method": r.get("method") or "standard",
+            "ipkm_threshold": float(r.get("ipkm_threshold") or 0),
+            "ipkm_deduction": float(r.get("ipkm_deduction") or 0),
+            "ipkm_high_rate": float(r.get("ipkm_high_rate") or 0),
+        }
+    return {"rate": 0.0, "method": "standard", "ipkm_threshold": 0.0, "ipkm_deduction": 0.0, "ipkm_high_rate": 0.0}
 
 
-def save_vehicle_payment_rate(bus_number: str, rate: float) -> None:
-    supabase_admin.table("vehicle_payment_rate").upsert(
-        {"bus_number": bus_number, "rate": float(rate)}, on_conflict="bus_number").execute()
+def save_vehicle_payment_config(bus_number: str, rate: float, method: str,
+                                 ipkm_threshold: float, ipkm_deduction: float, ipkm_high_rate: float) -> None:
+    supabase_admin.table("vehicle_payment_rate").upsert({
+        "bus_number": bus_number, "rate": float(rate), "method": method,
+        "ipkm_threshold": float(ipkm_threshold), "ipkm_deduction": float(ipkm_deduction),
+        "ipkm_high_rate": float(ipkm_high_rate),
+    }, on_conflict="bus_number").execute()
 
 
 def get_km_combines(bus_number: str):
