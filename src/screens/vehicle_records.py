@@ -10,7 +10,7 @@ from src.database.config import supabase
 from src.database.db import (
     get_diesel_rate_payment, get_km_combines, get_diesel_records_raw,
     get_income_records_raw, get_dated_diesel_records_raw, get_maintenance_records,
-    get_vehicle_payment_config,
+    get_vehicle_payment_config, get_fuel_fills,
 )
 from src.ml.mileage_anomaly import (
     compute_mileage_baseline, mileage_zscore, mileage_alert_status, baseline_summary_rows,
@@ -442,8 +442,24 @@ def quick_overview(bus_list: list):
     for bus in summary["Bus"].tolist():
         rate_data = get_diesel_rate_payment(bus, sel_month, sel_period)
         bus_rates[bus] = rate_data["rate"]
-    summary["Diesel_Rate"]     = summary["Bus"].map(bus_rates)
-    summary["Est_Diesel_Cost"] = (summary["Diesel"] * summary["Diesel_Rate"]).round(0)
+    summary["Diesel_Rate"] = summary["Bus"].map(bus_rates)
+
+    # ✅ Diesel figures ab vehicle_records.diesel (legacy/synced field) se nahi —
+    # seedhe "Diesel/CNG View" wale fuel_fills table se (jahan asal refuel
+    # entries record hoti hain), taaki dono jagah exact same numbers dikhein.
+    fuel_diesel, fuel_cost = {}, {}
+    for bus in summary["Bus"].tolist():
+        fills = get_fuel_fills(bus, str(start), str(end))
+        fuel_diesel[bus] = float(fills["Quantity"].sum()) if not fills.empty else 0.0
+        fuel_cost[bus]   = float(fills["Amount"].sum())   if not fills.empty else 0.0
+    summary["Diesel"]          = summary["Bus"].map(fuel_diesel).fillna(0.0)
+    summary["Est_Diesel_Cost"] = summary["Bus"].map(fuel_cost).fillna(0.0).round(0)
+    # ✅ Effective rate = actual total cost / actual total litres (fuel_fills se) —
+    # sirf diesel data na hone par fallback default rate (diesel_details) dikhao
+    summary["Diesel_Rate"] = summary.apply(
+        lambda r: round(r["Est_Diesel_Cost"] / r["Diesel"], 2) if r["Diesel"] > 0 else bus_rates.get(r["Bus"], 0),
+        axis=1,
+    )
 
     # ✅ Payment ab raw "Income" se nahi — har bus ke saved Payment Config
     # (Standard/IPKM Slab + 1% tax + final fixed deduction) se calculate hota
@@ -826,7 +842,7 @@ Max 2 bullets per section. Mention driver names specifically.
 """)
 
     with tab6:
-        has_diesel = df["diesel"].sum() > 0
+        has_diesel = summary["Diesel"].sum() > 0
         has_income = df["income"].sum() > 0
 
         if not has_diesel and not has_income:
