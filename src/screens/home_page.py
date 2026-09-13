@@ -48,6 +48,12 @@ def home_page():
             if st.button("🔧 Maintenance Manager", type='primary', key='btn_maintenance', width='stretch'):
                 st.session_state['login_state'] = 'maintenance'
                 st.rerun()
+
+        # ✅ Bus Report — admin/manager ko hamesha dikhega
+        if is_admin_or_manager():
+            if st.button("🚌 Bus Report", type='primary', key='btn_bus_report', width='stretch'):
+                st.session_state['login_state'] = 'bus_report'
+                st.rerun()
                 
     st.markdown("""
         <div style='position:fixed;bottom:20px;width:100%;text-align:center;color:white;font-size:0.9rem;'>
