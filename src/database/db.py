@@ -73,6 +73,31 @@ def save_vehicle_payment_config(bus_number: str, rate: float, method: str,
     }, on_conflict="bus_number").execute()
 
 
+_COMPLIANCE_FIELDS = [
+    "owner_name", "route_name", "capacity",
+    "insurance_validity", "fitness_validity", "pollution_validity",
+    "road_tax_validity", "registration_date",
+]
+
+
+def get_vehicle_compliance(bus_number: str) -> dict:
+    """Bus Report page ke liye — owner/route/capacity + Insurance/Fitness/
+    Pollution/Road Tax validity dates (purane Excel sheet jaisa hi data)."""
+    res = supabase.table("vehicle_compliance").select("*").eq("bus_number", bus_number).execute()
+    if res.data:
+        r = res.data[0]
+        return {f: r.get(f) for f in _COMPLIANCE_FIELDS}
+    return {f: None for f in _COMPLIANCE_FIELDS}
+
+
+def save_vehicle_compliance(bus_number: str, **fields) -> None:
+    payload = {"bus_number": bus_number}
+    for f in _COMPLIANCE_FIELDS:
+        if f in fields:
+            payload[f] = fields[f]
+    supabase.table("vehicle_compliance").upsert(payload, on_conflict="bus_number").execute()
+
+
 def get_km_combines(bus_number: str):
     """Har group: {'id':.., 'dates':[...]}"""
     res = supabase.table("vehicle_km_combines").select("id, dates").eq("bus_number", bus_number).execute()
