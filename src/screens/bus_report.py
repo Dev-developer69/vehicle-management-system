@@ -129,9 +129,20 @@ def bus_report_view():
     report_key = f"br_report_{bus_number}_{from_date}_{to_date}"
     if load or report_key not in st.session_state:
         vr = get_vehicle_records(bus_number)
+        # ─────────── 🔍 TEMPORARY DEBUG — hata dena baad me ───────────
+        st.write(f"🔍 DEBUG: bus_number = {bus_number!r}")
+        st.write(f"🔍 DEBUG: raw vr rows fetched (no date filter yet): {len(vr)}")
+        if not vr.empty:
+            st.write(f"🔍 DEBUG: sample raw 'Date' values (dtype={vr['Date'].dtype}): {vr['Date'].head(5).tolist()}")
+        st.write(f"🔍 DEBUG: filtering between from_date={from_date!r} and to_date={to_date!r}")
+        # ────────────────────────────────────────────────────────────
         if not vr.empty:
             vr["Date"] = pd.to_datetime(vr["Date"])
             vr = vr[(vr["Date"] >= pd.Timestamp(from_date)) & (vr["Date"] <= pd.Timestamp(to_date))]
+
+        # ─────────── 🔍 TEMPORARY DEBUG ───────────
+        st.write(f"🔍 DEBUG: vr rows after date filter: {len(vr)}")
+        # ────────────────────────────────────────────
 
         fills = get_fuel_fills(bus_number, from_date, to_date)
 
