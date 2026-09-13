@@ -54,7 +54,7 @@ def home_page():
             if st.button("🚌 Bus Report", type='primary', key='btn_bus_report', width='stretch'):
                 st.session_state['login_state'] = 'bus_report'
                 st.rerun()
-                
+
     st.markdown("""
         <div style='position:fixed;bottom:20px;width:100%;text-align:center;color:white;font-size:0.9rem;'>
             <p>Created with ❤️ by Dev-developer69</p>
