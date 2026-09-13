@@ -63,14 +63,14 @@ SYSTEM_PROMPT = (
     "Never write an insight that just names the highest or lowest raw number in the data "
     "(e.g. 'Bus X has highest payment Rs Y') — that is visible on the table already and is NOT an insight, "
     "it will be REJECTED. Every bullet must do at least one of: "
-    "(a) compare a bus's ratio (diesel cost as %% of payment, income per km, net margin %%) against the FLEET AVERAGE "
-    "of that same ratio and state the deviation, "
+    "(a) compare a bus's or a person's ratio (a per-km figure, a percentage, a deviation) against the FLEET AVERAGE "
+    "or PEER AVERAGE of that same ratio and state the gap, "
     "(b) connect two different signals together to explain WHY something is happening — e.g. a low mileage z-score "
-    "combined with a high diesel cost, or a declining income trend combined with a specific conductor/driver, "
+    "combined with a high diesel cost, or a high KM total combined with a below-average per-km rate, "
     "(c) compare this period's number against the previous period for the same bus if previous-period data is given, "
-    "(d) flag a bus that looks fine on totals but has a bad ratio (e.g. high payment but even higher diesel-cost ratio "
-    "than the fleet average, meaning the size of the number is hiding a margin problem). "
-    "If two buses have similar totals but different ratios, that gap IS the insight — surface it. "
+    "(d) flag a bus or person that looks fine on totals but has a bad ratio (e.g. high total but a worse-than-average "
+    "per-unit rate, meaning the size of the number is hiding a real problem). "
+    "If two entities have similar totals but different ratios, that gap IS the insight — surface it. "
     "STEP 3: include all buses, tag inconsistent ones with a warning tag like [verify diesel data] or [revenue missing]. "
     "ABSOLUTE RULES: "
     "1. Use ONLY the exact numbers from the data never round estimate or invent. "
@@ -641,25 +641,45 @@ def quick_overview(bus_list: list):
             plot_bgcolor="rgba(0,0,0,0)",
         )
         _render_chart(fig, key="qo_chart_daily_trend")
-        
+
+        # ── Consistency stats — coefficient of variation (std/mean) taaki
+        #    "kaun consistent hai" sirf eyeballing se nahi, number se pata chale ──
+        km_trend_stats = {}
+        for bus_col in pivot.columns:
+            vals = pivot[bus_col].dropna()
+            if vals.empty:
+                continue
+            mean_km = float(vals.mean())
+            std_km  = float(vals.std() or 0)
+            km_trend_stats[str(bus_col)] = {
+                "avg_km": round(mean_km, 1),
+                "cv_pct": round(std_km / mean_km * 100, 1) if mean_km > 0 else None,
+                "zero_km_days": int((vals == 0).sum()),
+                "days_recorded": int(len(vals)),
+            }
+        cv_values = [v["cv_pct"] for v in km_trend_stats.values() if v["cv_pct"] is not None]
+        fleet_avg_cv = round(sum(cv_values) / len(cv_values), 1) if cv_values else None
+
         _show_insight(f"""
 Period: {period_label}
-Daily Actual KM per bus: {pivot.to_dict()}
+Per-bus daily KM stats (cv_pct = coefficient of variation — std/mean as %, lower means more consistent day-to-day running): {km_trend_stats}
+Fleet average CV: {fleet_avg_cv}%
 
 Analyze this daily KM trend and respond in this exact format:
 🟢 Strengths
-• [which bus is most consistent and why]
+• [bus whose cv_pct is furthest BELOW the fleet average CV — name the bus and both numbers]
 
 🟠 Opportunities
-• [buses with irregular or declining trend]
+• [bus whose cv_pct is above fleet average, meaning irregular day-to-day running — name the exact gap]
 
 🔴 Critical Issues
-• [buses with 0 KM days or sudden drops — name them]
+• [bus with zero_km_days > 0, or cv_pct more than double the fleet average — name it and the number]
 
 💡 Recommendations
-• [specific actions: route redistribution, maintenance check, etc.]
+• [specific action tied to the exact bus and number named above]
 
 📈 Overall Status: Excellent / Good / Average / Poor
+Every bullet must reference a specific number (cv_pct, zero_km_days, or the fleet-average comparison). Do not just call a line 'consistent' without citing the number.
 Keep each bullet to 1 line. Max 2 bullets per section.
 """)
 
@@ -683,25 +703,34 @@ Keep each bullet to 1 line. Max 2 bullets per section.
             bargap=0.25, bargroupgap=0.05,
         )
         _render_chart(_plotly_dark(fig), key="qo_chart_sched_vs_actual")
+
+        # ── Schedule-adherence gap % vs fleet average ──
+        sched_gap = summary[["Bus", "Scheduled_KM", "Actual_KM"]].copy()
+        sched_gap["Gap_Pct"] = (
+            (sched_gap["Scheduled_KM"] - sched_gap["Actual_KM"]) / sched_gap["Scheduled_KM"].replace(0, float("nan")) * 100
+        ).round(1)
+        fleet_avg_gap = round(sched_gap["Gap_Pct"].mean(skipna=True), 1)
+        sched_gap["Gap_vs_Fleet_Avg"] = (sched_gap["Gap_Pct"] - fleet_avg_gap).round(1)
+
         _show_insight(f"""
-Scheduled KM: {summary.set_index('Bus')['Scheduled_KM'].to_dict()}
-Actual KM: {summary.set_index('Bus')['Actual_KM'].to_dict()}
+Per-bus schedule gap (Gap_Pct = % of scheduled KM missed; positive = under-target, negative = over-target): {sched_gap.to_dict('records')}
+Fleet average gap: {fleet_avg_gap}%
 
 Analyze schedule adherence and respond in this exact format:
 🟢 Strengths
-• [bus meeting or exceeding schedule — name it]
+• [bus whose Gap_vs_Fleet_Avg is most negative (beats fleet average by the widest margin) — name it and both numbers]
 
 🟠 Opportunities
-• [bus consistently below schedule — name it and gap %]
+• [bus whose Gap_Pct is worse than fleet average — name it and how many percentage points above average]
 
 🔴 Critical Issues
-• [bus with largest gap or missed schedule — name it]
+• [bus with the largest absolute Gap_Pct — name it and the exact number]
 
 💡 Recommendations
-• [specific fix: route change, driver reassignment, etc.]
+• [specific fix tied to the exact bus and gap number above]
 
 📈 Overall Status: Excellent / Good / Average / Poor
-Max 2 bullets per section. Be specific with numbers.
+Every bullet must cite the Gap_Pct number and the fleet average, not just say 'meeting schedule'. Max 2 bullets per section.
 """)
 
     with tab3:
@@ -785,26 +814,35 @@ Max 2 bullets per section. Be specific with numbers.
                     <span style='color:#FF5252;'>Worst: {int(row["Worst_KM_Day"])} km</span>
                 </div>
                 """, unsafe_allow_html=True)
+
+        # ── Efficiency vs fleet average, and volatility (best-worst spread as % of own avg) ──
+        eff_stats = summary[["Bus", "Avg_Efficiency", "Best_KM_Day", "Worst_KM_Day"]].copy()
+        fleet_avg_eff = round(eff_stats["Avg_Efficiency"].mean(), 1)
+        eff_stats["Eff_vs_Fleet_Avg"] = (eff_stats["Avg_Efficiency"] - fleet_avg_eff).round(1)
+        eff_stats["Spread_Pct_of_Avg"] = (
+            (eff_stats["Best_KM_Day"] - eff_stats["Worst_KM_Day"]) / eff_stats["Avg_Efficiency"].replace(0, float("nan"))
+        ).round(1)
+
         _show_insight(f"""
-    Avg KM Efficiency per bus: {eff_pivot.mean().to_dict()}
-    Best/Worst day per bus: {summary[['Bus','Best_KM_Day','Worst_KM_Day']].to_dict('records')}
-    
-    Analyze efficiency and respond in this exact format:
-    🟢 Strengths
-    - [highest efficiency bus — name and % avg]
-    
-    🟠 Opportunities
-    - [bus with large best/worst gap — name it]
-    
-    🔴 Critical Issues
-    - [bus below 80% efficiency — name it, possible cause]
-    
-    💡 Recommendations
-    - [maintenance check, load balancing, or route review]
-    
-    📈 Overall Status: Excellent / Good / Average / Poor
-    Max 2 bullets per section. Plain text only.
-    """)
+Per-bus efficiency data with fleet-average deviation: {eff_stats.to_dict('records')}
+Fleet average efficiency: {fleet_avg_eff}%
+
+Analyze efficiency and respond in this exact format:
+🟢 Strengths
+- [bus whose Eff_vs_Fleet_Avg is most positive — name it and the exact deviation]
+
+🟠 Opportunities
+- [bus with a large Best_KM_Day vs Worst_KM_Day spread relative to its own average — name it and the numbers]
+
+🔴 Critical Issues
+- [bus whose Eff_vs_Fleet_Avg is most negative or whose Avg_Efficiency is below 80% — name it, exact number, possible cause]
+
+💡 Recommendations
+- [maintenance check, load balancing, or route review tied to the exact bus/number above]
+
+📈 Overall Status: Excellent / Good / Average / Poor
+Every bullet must cite the exact deviation-from-fleet-average number. Max 2 bullets per section. Plain text only.
+""")
 
     with tab4:
         donut_cols = st.columns(len(bus_list))
@@ -856,24 +894,37 @@ Max 2 bullets per section. Be specific with numbers.
             yaxis=dict(range=[0, max_val * 1.2], gridcolor="rgba(255,255,255,0.08)"),
         )
         _render_chart(_plotly_dark(fig), key="qo_chart_driver_perf")
+
+        # ── Driver ratios vs all-drivers average — Category (cluster) tells WHAT,
+        #    these deviation numbers tell WHY ──
+        driver_insight = driver_perf.copy()
+        driver_insight["Income_per_KM"] = (driver_insight["Income"] / driver_insight["Total_KM"].replace(0, float("nan"))).round(2)
+        fleet_avg_driver = {
+            "Avg_Efficiency": round(driver_insight["Avg_Efficiency"].mean(), 1),
+            "Income_per_KM":  round(driver_insight["Income_per_KM"].mean(skipna=True), 2),
+        }
+        driver_insight["Efficiency_vs_Avg"]    = (driver_insight["Avg_Efficiency"] - fleet_avg_driver["Avg_Efficiency"]).round(1)
+        driver_insight["Income_per_KM_vs_Avg"] = (driver_insight["Income_per_KM"] - fleet_avg_driver["Income_per_KM"]).round(2)
+
         _show_insight(f"""
-Driver performance data: {driver_perf[['Driver','Total_KM','Days','Avg_Efficiency']].to_dict('records')}
+Driver performance with deviation from all-drivers average: {driver_insight[['Driver','Total_KM','Days','Avg_Efficiency','Efficiency_vs_Avg','Income_per_KM','Income_per_KM_vs_Avg','Category']].to_dict('records')}
+All-drivers average efficiency: {fleet_avg_driver['Avg_Efficiency']}%, average income/km: Rs{fleet_avg_driver['Income_per_KM']}
 
 Analyze driver performance and respond in this exact format:
 🟢 Strengths
-• [top driver name, total KM, efficiency %]
+• [driver whose Efficiency_vs_Avg or Income_per_KM_vs_Avg is most positive — name driver and the exact deviation]
 
 🟠 Opportunities
-• [driver with low utilization or inconsistency — name them]
+• [driver with high Total_KM but Income_per_KM_vs_Avg negative — high volume but below-average earning per km — name it]
 
 🔴 Critical Issues
-• [driver with 0 KM or very low efficiency — name them]
+• [driver with 0 KM, or both deviations strongly negative — name them and the numbers]
 
 💡 Recommendations
-• [training, route reassignment, or recognition suggestion]
+• [training, route reassignment, or recognition tied to the exact driver/number above]
 
 📈 Overall Status: Excellent / Good / Average / Poor
-Max 2 bullets per section. Mention driver names specifically.
+Every bullet must cite the deviation number, not just call someone 'top' or 'low'. Max 2 bullets per section. Mention driver names specifically.
 """)
 
     with tab6:
@@ -987,24 +1038,35 @@ Max 2 bullets per section. Mention driver names specifically.
                     bargap=0.25, bargroupgap=0.05,
                 )
                 _render_chart(_plotly_dark(fig), key="qo_chart_income_vs_diesel")
+
+                # ── Diesel cost as % of payment vs fleet average — margin-health ratio,
+                #    isse "high payment lekin high cost bhi" wala hidden problem dikhta hai ──
+                fin_stats = summary[["Bus", "Payment", "Est_Diesel_Cost", "Net"]].copy()
+                fin_stats["Diesel_Pct_of_Payment"] = (
+                    fin_stats["Est_Diesel_Cost"] / fin_stats["Payment"].replace(0, float("nan")) * 100
+                ).round(1)
+                fleet_avg_diesel_pct = round(fin_stats["Diesel_Pct_of_Payment"].mean(skipna=True), 1)
+                fin_stats["Diesel_Pct_vs_Avg"] = (fin_stats["Diesel_Pct_of_Payment"] - fleet_avg_diesel_pct).round(1)
+
                 _show_insight(f"""
-Bus financial data: {summary[['Bus','Payment','Est_Diesel_Cost','Net']].to_dict('records')}
+Bus financial data with diesel-cost ratio vs fleet average: {fin_stats.to_dict('records')}
+Fleet average diesel cost as % of payment: {fleet_avg_diesel_pct}%
 
 Analyze profitability and respond in this exact format:
 🟢 Strengths
-• [most profitable bus — name, payment, net profit]
+• [bus whose Diesel_Pct_vs_Avg is most negative (best margin) — name it, its Diesel_Pct_of_Payment, and the gap]
 
 🟠 Opportunities
-• [bus with high diesel cost eating into profit — name it]
+• [bus with Diesel_Pct_of_Payment above fleet average — name the exact percentage points above average]
 
 🔴 Critical Issues
-• [bus with negative or zero net profit — name it]
+• [bus with negative or zero Net, or Diesel_Pct_of_Payment more than 1.5x fleet average — name it and the number]
 
 💡 Recommendations
-• [diesel reduction strategy or route optimization]
+• [diesel reduction strategy tied to the exact bus and percentage above]
 
 📈 Overall Status: Excellent / Good / Average / Poor
-Max 2 bullets per section. Use rupee amounts.
+Every bullet must cite the Diesel_Pct_of_Payment number and its gap from fleet average. Max 2 bullets per section.
 """)
 
     with tab7:
@@ -1110,27 +1172,50 @@ Max 2 bullets per section. Use rupee amounts.
             st.caption("Koi combined anomaly nahi mila (ya kaafi records nahi hain kisi bus ke paas abhi ML ke liye).")
 
         st.dataframe(alert_df, width='stretch', hide_index=True)
+
+        # ── Per-bus alert rate (%) and mileage vs fleet-wide average mileage —
+        #    ye batata hai "kitna problematic hai" (rate), sirf count nahi ──
+        alert_rate_by_bus = {}
+        for bus in alert_df["Bus"].unique():
+            bus_rows = alert_df[alert_df["Bus"] == bus]
+            flagged = bus_rows["Status"].isin(["🚨 Red flag", "⚠️ Check"]).sum()
+            total = len(bus_rows)
+            alert_rate_by_bus[bus] = {
+                "alert_rate_pct":   round(flagged / total * 100, 1) if total else 0,
+                "avg_mileage":      mileage_baseline.get(bus, {}).get("mean"),
+                "total_diesel_days": total,
+            }
+        fleet_avg_mileage = round(
+            sum(b["mean"] for b in mileage_baseline.values() if b.get("mean")) / len(mileage_baseline), 2
+        ) if mileage_baseline else None
+        for bus, s in alert_rate_by_bus.items():
+            s["mileage_vs_fleet_avg"] = (
+                round(s["avg_mileage"] - fleet_avg_mileage, 2) if s["avg_mileage"] and fleet_avg_mileage else None
+            )
+
         _show_insight(f"""
 Anomaly detection: per-bus ML baseline (mean ± std deviation), z-score <= -1.5 flags Check, <= -2.5 flags Red flag. Naye bus fallback reference: {FALLBACK_MIN_MILEAGE} km/L tak {MIN_HISTORY_FOR_ML} records na ho jaayein.
+Per-bus alert rate and mileage vs fleet average: {alert_rate_by_bus}
+Fleet average mileage: {fleet_avg_mileage} km/L
 Red flags (diesel taken, 0 KM): {len(red_flags)}
 Low mileage days: {len(checks)}
 Alert details: {alert_df[['Bus','Driver','Diesel KM','Diesel (L)','Mileage (KM/L)','Status']].head(5).to_dict('records')}
 
 Analyze fuel alerts and respond in this exact format:
 🟢 Strengths
-• [days with normal mileage — count and avg]
+• [bus with lowest alert_rate_pct and mileage_vs_fleet_avg positive — name it and the numbers]
 
 🟠 Opportunities
-• [buses with recurring low mileage — name them]
+• [bus with alert_rate_pct above zero or mileage below fleet average — name the exact gap]
 
 🔴 Critical Issues
-• [red flag buses — diesel taken but 0 KM — name driver and bus]
+• [red flag buses — diesel taken but 0 KM — name driver, bus, and alert_rate_pct]
 
 💡 Recommendations
-• [maintenance priority, driver investigation, or fuel audit]
+• [maintenance priority, driver investigation, or fuel audit tied to the exact bus/number above]
 
 📈 Overall Status: Excellent / Good / Average / Poor
-Max 2 bullets per section. Name specific buses and drivers.
+Every bullet must cite alert_rate_pct or mileage_vs_fleet_avg, not just describe a bus as having issues. Max 2 bullets per section. Name specific buses and drivers.
 """)
 
     with tab8:
@@ -1165,24 +1250,32 @@ Max 2 bullets per section. Name specific buses and drivers.
                 yaxis=dict(range=[0, max_v * 1.2], gridcolor="rgba(255,255,255,0.08)"),
             )
             _render_chart(_plotly_dark(fig), key="qo_chart_income_per_km")
+
+            # ── Conductor income/km deviation vs all-conductors average — ye
+            #    fare-leakage wala hidden pattern nikaalta hai (high KM, low IPK) ──
+            fleet_avg_conductor_ipk = round(ipk_conductor["Income_per_KM"].mean(), 2)
+            conductor_insight = ipk_conductor.copy()
+            conductor_insight["IPK_vs_Fleet_Avg"] = (conductor_insight["Income_per_KM"] - fleet_avg_conductor_ipk).round(2)
+
             _show_insight(f"""
-Conductor revenue data: {ipk_conductor[['Conductor','Income_per_KM','Actual_KM']].to_dict('records')}
+Conductor revenue data with deviation from all-conductors average: {conductor_insight[['Conductor','Income_per_KM','IPK_vs_Fleet_Avg','Actual_KM']].to_dict('records')}
+All-conductors average income/km: Rs{fleet_avg_conductor_ipk}
 
 Analyze conductor revenue efficiency and respond in this exact format:
 🟢 Strengths
-• [top conductor name, income/km, total KM]
+• [conductor whose IPK_vs_Fleet_Avg is most positive — name conductor and the exact deviation]
 
 🟠 Opportunities
-• [conductor with high KM but low income/km — possible fare leakage]
+• [conductor with high Actual_KM but IPK_vs_Fleet_Avg negative — high volume but below-average revenue per km, possible fare leakage]
 
 🔴 Critical Issues
-• [conductor with lowest income/km — name them, possible cause]
+• [conductor with the most negative IPK_vs_Fleet_Avg — name them and the exact number]
 
 💡 Recommendations
-• [revenue audit, route change, or recognition]
+• [revenue audit, route change, or recognition tied to the exact conductor/number above]
 
 📈 Overall Status: Excellent / Good / Average / Poor
-Max 2 bullets per section. Name conductors specifically.
+Every bullet must cite IPK_vs_Fleet_Avg, not just call someone 'top' or 'lowest'. Max 2 bullets per section. Name conductors specifically.
 """)
             st.dataframe(ipk_conductor, width='stretch', hide_index=True)
 
@@ -1326,7 +1419,7 @@ Max 2 bullets per section. Name conductors specifically.
 
         _show_insight(f"""
 Period: {period_label}
-Fleet averages this period: Diesel cost is {fleet_avg['Diesel_Cost_Pct_of_Payment']}%% of payment on average, Net margin is {fleet_avg['Net_Margin_Pct']}%% on average, Payment per KM averages Rs{fleet_avg['Payment_per_KM']}.
+Fleet averages this period: Diesel cost is {fleet_avg['Diesel_Cost_Pct_of_Payment']}% of payment on average, Net margin is {fleet_avg['Net_Margin_Pct']}% on average, Payment per KM averages Rs{fleet_avg['Payment_per_KM']}.
 
 Per-bus data with deviation from fleet average (use these exact numbers only):
 {insight_records}
