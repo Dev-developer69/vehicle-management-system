@@ -23,6 +23,7 @@ from src.vehicle_records.vehicle_50 import page_2350, expense_2350
 from src.vehicle_records.vehicle_at7389 import page_AT7389, expense_AT7389
 from src.screens.products_manager import products_page
 from src.screens.chat_assistant import chat_assistant_dialog
+from src.screens.bus_report import bus_report_view
 from src.database.auth import (
     login_page, is_logged_in, get_current_role,
     get_accessible_vehicles, is_admin_or_manager,
@@ -195,6 +196,11 @@ def main():
         case 'maintenance':
             if get_maintenance_access():
                 maintenance_page()
+            else:
+                st.error("❌ Access denied..")
+        case 'bus_report':
+            if is_admin_or_manager():
+                bus_report_view()
             else:
                 st.error("❌ Access denied..")
         case None:
