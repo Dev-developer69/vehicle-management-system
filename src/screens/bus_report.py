@@ -17,7 +17,7 @@ def _page_style():
     st.markdown("""
         <style>
             [data-testid="stAppViewContainer"] {
-                background: #1A1030 !important;
+                background: #0D1B1B !important;
             }
             [data-testid="stHeader"],
             [data-testid="stToolbar"],
@@ -87,7 +87,15 @@ def _metric_card(label: str, value: str, sublabel: str = ""):
 
 def bus_report_view():
     _page_style()
-    st.markdown("### 🚌 Bus Report")
+
+    top_l, top_r = st.columns([5, 1])
+    with top_l:
+        st.markdown("### 🚌 Bus Report")
+    with top_r:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("🏠 Home", key="br_home_btn", width='stretch'):
+            st.session_state['login_state'] = None
+            st.rerun()
 
     accessible = get_accessible_vehicles()
     if not accessible:
@@ -191,6 +199,10 @@ def bus_report_view():
     data = st.session_state[report_key]
     vr, fills, exp, sal, maint = data["vr"], data["fills"], data["exp"], data["sal"], data["maint"]
 
+    if vr.empty:
+        st.info(f"📭 {bus_number} ke liye {date(2000, br_month, 1).strftime('%B')} ({br_period}) me koi record nahi mila.")
+        return
+
     # ── Duty summary ──
     present_days    = len(vr[vr["Status"] == "Present"]) if not vr.empty else 0
     leave_days      = len(vr[vr["Status"] == "On Leave"]) if not vr.empty else 0
@@ -216,7 +228,16 @@ def bus_report_view():
     diesel_days       = int(fills["Date"].nunique())   if not fills.empty else 0
     total_diesel_km   = pd.to_numeric(vr["Diesel KM"], errors="coerce").fillna(0).sum() if not vr.empty else 0.0
 
-    avg_via_diesel_km = round(total_diesel_km / total_diesel, 2) if total_diesel > 0 else 0.0
+    # ✅ "Diesel KM basis" avg — sirf un dates ka diesel use karo jin dates
+    # ke liye Diesel KM actually record hua hai, poore period ka total diesel nahi.
+    diesel_km_rows  = vr[pd.to_numeric(vr["Diesel KM"], errors="coerce").fillna(0) > 0] if not vr.empty else vr
+    diesel_km_dates = set(diesel_km_rows["Date"].dt.strftime("%Y-%m-%d")) if not diesel_km_rows.empty else set()
+    diesel_for_km_calc = (
+        float(fills[fills["Date"].isin(diesel_km_dates)]["Quantity"].sum())
+        if not fills.empty and diesel_km_dates else 0.0
+    )
+
+    avg_via_diesel_km = round(total_diesel_km / diesel_for_km_calc, 2) if diesel_for_km_calc > 0 else 0.0
     avg_via_actual_km = round(total_actual_km / total_diesel, 2) if total_diesel > 0 else 0.0
 
     st.markdown(f"#### ⛽ {fuel}")
