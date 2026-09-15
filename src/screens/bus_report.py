@@ -17,7 +17,7 @@ def _page_style():
     st.markdown("""
         <style>
             [data-testid="stAppViewContainer"] {
-                background: #0F1424 !important;
+                background: #1A1030 !important;
             }
             [data-testid="stHeader"],
             [data-testid="stToolbar"],
