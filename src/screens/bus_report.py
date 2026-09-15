@@ -11,6 +11,29 @@ from src.database.db import (
 from src.ui.excel_format import _get_date_range, fuel_label, _render_html_table
 
 
+def _page_style():
+    """Bus Report page ka background color + Streamlit ka default header/toolbar
+    hide (login_page jaisa hi pattern)."""
+    st.markdown("""
+        <style>
+            [data-testid="stAppViewContainer"] {
+                background: #0F1424 !important;
+            }
+            [data-testid="stHeader"],
+            [data-testid="stToolbar"],
+            [data-testid="stDecoration"],
+            #MainMenu {
+                display: none !important;
+                height: 0 !important;
+                visibility: hidden !important;
+            }
+            .block-container {
+                padding-top: 1.5rem !important;
+            }
+        </style>
+    """, unsafe_allow_html=True)
+
+
 def _compute_final_payment(bus_number: str, total_income: float, total_actual_km: float):
     """Vehicle Records ke 'Payment Summary' jaisa hi calculation — Standard
     ya IPKM Slab method, saved config ke hisaab se. Returns (raw_payment,
@@ -63,6 +86,7 @@ def _metric_card(label: str, value: str, sublabel: str = ""):
 
 
 def bus_report_view():
+    _page_style()
     st.markdown("### 🚌 Bus Report")
 
     accessible = get_accessible_vehicles()
