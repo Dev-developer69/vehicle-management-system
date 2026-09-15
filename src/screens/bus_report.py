@@ -5,7 +5,7 @@ from datetime import date
 from src.database.auth import get_accessible_vehicles
 from src.database.db import (
     get_vehicle_records, get_fuel_fills, get_vehicle_expenses, get_driver_salary,
-    get_maintenance_records, get_vehicle_payment_config,
+    get_maintenance_records, get_vehicle_payment_config, get_driver_rate,
     get_vehicle_compliance, save_vehicle_compliance,
 )
 from src.ui.excel_format import _get_date_range, fuel_label, _render_html_table
@@ -45,6 +45,21 @@ def _validity_status(label: str, val_date):
         st.warning(f"⚠️ {label} {days_left} din me expire ho rahi hai ({d})")
     else:
         st.success(f"✅ {label} valid ({d} tak)")
+
+
+def _metric_card(label: str, value: str, sublabel: str = ""):
+    """App-wide gradient-card style (Quick Overview ke Summary Cards jaisa
+    hi) — plain st.metric ke bajaye consistent look ke liye."""
+    sub_html = f"<div style='color:#d0f5ee;font-size:0.7rem;margin-top:3px;'>{sublabel}</div>" if sublabel else ""
+    st.markdown(f"""
+    <div style='background:linear-gradient(135deg,#14A085,#0d2626);border-radius:12px;
+                padding:14px;text-align:center;border:1px solid rgba(255,255,255,0.15);
+                min-height:88px;'>
+        <div style='color:#d0f5ee;font-size:0.78rem;'>{label}</div>
+        <div style='color:white;font-size:1.25rem;font-weight:700;margin-top:4px;'>{value}</div>
+        {sub_html}
+    </div>
+    """, unsafe_allow_html=True)
 
 
 def bus_report_view():
@@ -129,20 +144,9 @@ def bus_report_view():
     report_key = f"br_report_{bus_number}_{from_date}_{to_date}"
     if load or report_key not in st.session_state:
         vr = get_vehicle_records(bus_number)
-        # ─────────── 🔍 TEMPORARY DEBUG — hata dena baad me ───────────
-        st.write(f"🔍 DEBUG: bus_number = {bus_number!r}")
-        st.write(f"🔍 DEBUG: raw vr rows fetched (no date filter yet): {len(vr)}")
-        if not vr.empty:
-            st.write(f"🔍 DEBUG: sample raw 'Date' values (dtype={vr['Date'].dtype}): {vr['Date'].head(5).tolist()}")
-        st.write(f"🔍 DEBUG: filtering between from_date={from_date!r} and to_date={to_date!r}")
-        # ────────────────────────────────────────────────────────────
         if not vr.empty:
             vr["Date"] = pd.to_datetime(vr["Date"])
             vr = vr[(vr["Date"] >= pd.Timestamp(from_date)) & (vr["Date"] <= pd.Timestamp(to_date))]
-
-        # ─────────── 🔍 TEMPORARY DEBUG ───────────
-        st.write(f"🔍 DEBUG: vr rows after date filter: {len(vr)}")
-        # ────────────────────────────────────────────
 
         fills = get_fuel_fills(bus_number, from_date, to_date)
 
@@ -173,50 +177,94 @@ def bus_report_view():
 
     st.markdown(f"#### 📊 {bus_number} — {date(2000, br_month, 1).strftime('%B')} ({br_period}) Summary")
     s1, s2, s3, s4 = st.columns(4)
-    s1.metric("📅 Present Days", present_days)
-    s2.metric("🏖️ On Leave", leave_days)
-    s3.metric("🛣️ Actual KM", f"{total_actual_km:,.0f}")
-    s4.metric("🎯 Efficiency", f"{efficiency}%")
+    with s1: _metric_card("📅 Present Days", str(present_days))
+    with s2: _metric_card("🏖️ On Leave", str(leave_days))
+    with s3: _metric_card("🛣️ Actual KM", f"{total_actual_km:,.0f}")
+    with s4: _metric_card("🎯 Efficiency", f"{efficiency}%")
 
-    # ── Diesel/CNG ──
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── Diesel/CNG — ab "kitne din ka" suffix ke saath, aur Mileage ki jagah
+    # DO alag averages (Diesel KM basis aur Actual KM basis, dono) ──
     fuel              = fuel_label(bus_number)
     total_diesel      = float(fills["Quantity"].sum()) if not fills.empty else 0.0
     total_diesel_cost = float(fills["Amount"].sum())   if not fills.empty else 0.0
+    diesel_days       = int(fills["Date"].nunique())   if not fills.empty else 0
     total_diesel_km   = pd.to_numeric(vr["Diesel KM"], errors="coerce").fillna(0).sum() if not vr.empty else 0.0
-    mileage           = round(total_diesel_km / total_diesel, 2) if total_diesel > 0 else 0.0
+
+    avg_via_diesel_km = round(total_diesel_km / total_diesel, 2) if total_diesel > 0 else 0.0
+    avg_via_actual_km = round(total_actual_km / total_diesel, 2) if total_diesel > 0 else 0.0
 
     st.markdown(f"#### ⛽ {fuel}")
-    d1, d2, d3 = st.columns(3)
-    d1.metric(f"Total {fuel}", f"{total_diesel:.2f} L")
-    d2.metric("Total Cost", f"₹{total_diesel_cost:,.0f}")
-    d3.metric("Mileage", f"{mileage:.2f} km/L")
+    d1, d2, d3, d4 = st.columns(4)
+    with d1:
+        _metric_card(f"Total {fuel}", f"{total_diesel:.2f} L", sublabel=f"{diesel_days} din")
+    with d2:
+        _metric_card("Total Cost", f"₹{total_diesel_cost:,.0f}")
+    with d3:
+        _metric_card("Avg (Diesel KM basis)", f"{avg_via_diesel_km:.2f} km/L")
+    with d4:
+        _metric_card("Avg (Actual KM basis)", f"{avg_via_actual_km:.2f} km/L")
 
-    # ── Payment ──
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── Payment — ab "Total Income" headline nahi, seedha Payment dikhta hai ──
     raw_payment, final_payment, tax_pct = _compute_final_payment(bus_number, total_income, total_actual_km)
     st.markdown("#### 💰 Payment")
-    p1, p2, p3 = st.columns(3)
-    p1.metric("Total Income", f"₹{total_income:,.0f}")
-    p2.metric("Raw Payment", f"₹{raw_payment:,.0f}")
-    p3.metric("Final Payment", f"₹{final_payment:,.0f}", help=f"{int(tax_pct*100)}% tax + fixed deduction pehle hi minus")
+    p1, p2 = st.columns(2)
+    with p1:
+        _metric_card("Payment", f"₹{raw_payment:,.0f}", sublabel="tax/deduction se pehle")
+    with p2:
+        _metric_card("Final Payment", f"₹{final_payment:,.0f}", sublabel=f"{int(tax_pct*100)}% tax + fixed deduction minus")
 
-    # ── Expenses & Driver Salary ──
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── Expenses & Driver Salary — Paid ke saath EXPECTED salary bhi (duties
+    # × per-duty rate se), taaki "kitna bachaya" pata chale ──
     total_expenses = pd.to_numeric(exp["Amount"], errors="coerce").fillna(0).sum() if not exp.empty else 0.0
     total_salary   = pd.to_numeric(sal["Salary"], errors="coerce").fillna(0).sum() if not sal.empty else 0.0
 
-    st.markdown("#### 🧾 Expenses & Driver Salary")
-    e1, e2 = st.columns(2)
-    e1.metric("Vehicle Expenses", f"₹{total_expenses:,.0f}")
-    e2.metric("Driver Salary Paid", f"₹{total_salary:,.0f}")
+    expected_salary = 0.0
+    if not vr.empty:
+        duty_df = vr[vr["Status"] != "On Leave"].copy()
+        duty_df = duty_df[
+            duty_df["Driver Name"].notna()
+            & (duty_df["Driver Name"].astype(str).str.strip().str.lower() != "none")
+        ]
+        if not duty_df.empty:
+            duties_by_driver = duty_df.groupby(duty_df["Driver Name"].astype(str).str.strip())["Date"].nunique().to_dict()
+            for driver_name, duties in duties_by_driver.items():
+                rate = get_driver_rate(bus_number, driver_name)
+                expected_salary += duties * rate
 
-    # ── Overall Net — Final Payment me se diesel cost, expenses, aur driver
-    # salary bhi minus karke ek poora "sab kuch mila ke" bottom-line dikhata
-    # hai (Quick Overview ke simple "Net" — Payment−Diesel — se zyada complete) ──
-    overall_net = final_payment - total_diesel_cost - total_expenses - total_salary
+    salary_savings = expected_salary - total_salary
+
+    st.markdown("#### 🧾 Expenses & Driver Salary")
+    e1, e2, e3 = st.columns(3)
+    with e1:
+        _metric_card("Vehicle Expenses", f"₹{total_expenses:,.0f}")
+    with e2:
+        _metric_card("Driver Salary Paid", f"₹{total_salary:,.0f}")
+    with e3:
+        _metric_card("Expected Driver Salary", f"₹{expected_salary:,.0f}", sublabel="duties × per-duty rate se")
+
+    st.markdown(f"""
+    <div style='background:{"#1B5E20" if salary_savings >= 0 else "#4a1010"};border-radius:10px;
+                padding:12px 20px;margin-top:10px;display:flex;justify-content:space-between;align-items:center;'>
+        <span style='color:#eee;font-size:0.9rem;'>💰 Salary Savings/Bachat (Expected − Paid)</span>
+        <span style='color:{"#69F0AE" if salary_savings >= 0 else "#FF5252"};font-size:1.2rem;font-weight:700;'>₹{salary_savings:,.0f}</span>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── Final Bachat — Final Payment me se diesel cost, expenses, aur
+    # EXPECTED driver salary (accrual basis, sirf paid nahi) minus karke ek
+    # poora "sab kuch mila ke" bottom-line ──
+    final_bachat = final_payment - total_diesel_cost - total_expenses - expected_salary
     st.markdown(f"""
     <div style='background:linear-gradient(90deg,#14A085,#7B8CFF);border-radius:12px;
-                padding:20px;text-align:center;margin-top:12px;'>
-        <span style='color:#fff;font-size:0.9rem;'>Overall Net (Final Payment − Diesel − Expenses − Driver Salary)</span><br>
-        <span style='color:#FFD700;font-size:1.8rem;font-weight:800;'>₹{overall_net:,.0f}</span>
+                padding:20px;text-align:center;margin-top:16px;'>
+        <span style='color:#fff;font-size:0.9rem;'>Final Bachat (Final Payment − Diesel − Expenses − Expected Driver Salary)</span><br>
+        <span style='color:#FFD700;font-size:1.8rem;font-weight:800;'>₹{final_bachat:,.0f}</span>
     </div>
     """, unsafe_allow_html=True)
 
