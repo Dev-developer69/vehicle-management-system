@@ -266,6 +266,7 @@ def compute_role_duty_credits(vr: pd.DataFrame, splits_df: pd.DataFrame, role: s
     if vr.empty:
         return credits
 
+    _JUNK_NAMES = ("none", "", "no", "test")
     duty_df = vr[vr["Status"] != "On Leave"]
     for _, row in duty_df.iterrows():
         date_str = str(row["Date"])
@@ -273,11 +274,11 @@ def compute_role_duty_credits(vr: pd.DataFrame, splits_df: pd.DataFrame, role: s
             people = split_by_date[date_str]
             total_km = sum(km for _, km in people) or 1  # div/0 se bachao
             for name, km in people:
-                if name and name.lower() not in ("none", ""):
+                if name and name.lower() not in _JUNK_NAMES:
                     credits[name] = credits.get(name, 0.0) + (km / total_km)
         else:
             name = str(row.get(name_col) or "").strip()
-            if name and name.lower() not in ("none", ""):
+            if name and name.lower() not in _JUNK_NAMES:
                 credits[name] = credits.get(name, 0.0) + 1.0
     return credits
 
@@ -477,8 +478,14 @@ def get_salary_check(from_date: str = None, to_date: str = None, bus_numbers: li
 
     df = pd.DataFrame(res.data)
     df = df[df.get("status", "Present") != "On Leave"]
-    df = df[df["driver_name"].notna()]
-    df = df[~df["driver_name"].str.strip().str.lower().isin(["no", "test", "none", ""])]
+    # ✅ Yahan driver_name field ke basis pe rows ko drop NAHI karte (jaise
+    # pehle "no"/"test"/"none" wale turant discard ho jaate the) — kyunki
+    # split-duty wale din ka raw Driver Name field abhi bhi default "None"
+    # ho sakta hai (agar sirf Split Duty section use kiya ho, main grid ka
+    # field edit na kiya ho). Aisi row discard hone se us din ka split
+    # credit hi dono logon ko miss ho jaata tha. Junk-name filtering ab
+    # neeche compute_role_duty_credits ke andar hoti hai — jo sirf
+    # non-split dates par hi driver_name field dekhta hai. ──
 
     # ── Split-duty aware duty count — normal dates 1.0 duty, split-duty
     # dates KM ke fraction ke hisaab se (bus-wise, kyunki split bus+date
