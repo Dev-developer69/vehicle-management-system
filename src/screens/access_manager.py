@@ -52,6 +52,7 @@ def _add_user(email: str, password: str, role: str):
         "suppliers_view":     False,
         "requirements_view":  False,
         "maintenance_access": False,
+        "bus_report_access":  False,
     }, on_conflict="user_id").execute()
     return user_id
 
@@ -94,6 +95,15 @@ def _get_maintenance_access(user_id: str) -> bool:
 
 def _set_maintenance_access(user_id: str, value: bool):
     supabase.table("user_roles").update({"maintenance_access": value}).eq("user_id", user_id).execute()
+
+
+def _get_bus_report_access(user_id: str) -> bool:
+    res = supabase.table("user_roles").select("bus_report_access").eq("user_id", user_id).execute()
+    return bool(res.data[0].get("bus_report_access", False)) if res.data else False
+
+
+def _set_bus_report_access(user_id: str, value: bool):
+    supabase.table("user_roles").update({"bus_report_access": value}).eq("user_id", user_id).execute()
 
 
 # ══════════════════════════════════════════════
@@ -228,6 +238,16 @@ def access_manager_page():
                     key=f"ma2_{u['user_id']}",
                 )
 
+                st.markdown("---")
+
+                # ── Bus Report Access ──
+                st.markdown("**🚌 Bus Report Access**")
+                ba = st.checkbox(
+                    "Bus Report khol sakte hain",
+                    value=_get_bus_report_access(u["user_id"]),
+                    key=f"ba2_{u['user_id']}",
+                )
+
                 st.markdown("<br>", unsafe_allow_html=True)
                 if st.button("💾 Save All", key=f"save_va_{u['user_id']}", 
                             type="primary", width='stretch'):
@@ -249,6 +269,9 @@ def access_manager_page():
 
                     # Maintenance access save
                     _set_maintenance_access(u["user_id"], ma)
+
+                    # Bus report access save
+                    _set_bus_report_access(u["user_id"], ba)
 
                     st.success("✅ Access updated!")
                     st.rerun()
