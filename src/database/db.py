@@ -642,7 +642,38 @@ def get_driver_report(driver_name: str, from_date: str, to_date: str) -> dict:
     res = supabase.table("vehicle_records") \
         .select("driver_name, bus_number, date, status, actual_km, scheduled_km, diesel, diesel_km, income") \
         .gte("date", from_date).lte("date", to_date).execute()
-    my_rows = [r for r in (res.data or []) if (r.get("driver_name") or "").strip().lower() == driver_key]
+    all_rows = res.data or []
+
+    # ── Split-duty aware involvement check — sirf 'driver_name field ==
+    # exact naam' se match nahi karta, kyunki split-duty wale din raw
+    # driver_name field me combined/manual text ho sakta hai. Har bus ke
+    # us date-range ke splits pehle se fetch kar lo, phir check karo ki
+    # driver_key naam field se match karta hai YA kisi date ke split-entry
+    # ka Driver 1/2 hai. ──
+    bus_dates_in_range = {}
+    for r in all_rows:
+        bus_dates_in_range.setdefault(r["bus_number"], set()).add(r["date"])
+    splits_by_bus = {
+        bus: get_duty_splits(bus, list(dates)) for bus, dates in bus_dates_in_range.items()
+    }
+
+    def _row_involves_driver(r) -> bool:
+        if (r.get("driver_name") or "").strip().lower() == driver_key:
+            return True
+        splits = splits_by_bus.get(r["bus_number"], pd.DataFrame())
+        if splits.empty:
+            return False
+        match = splits[splits["Date"].astype(str) == str(r["date"])]
+        if match.empty:
+            return False
+        row0 = match.iloc[0]
+        names = {
+            str(row0.get("Driver 1") or "").strip().lower(),
+            str(row0.get("Driver 2") or "").strip().lower(),
+        }
+        return driver_key in names
+
+    my_rows = [r for r in all_rows if _row_involves_driver(r)]
 
     empty = {
         "duties_by_bus": {}, "total_duties": 0, "buses": [], "total_actual_km": 0, "total_scheduled_km": 0,
@@ -664,8 +695,7 @@ def get_driver_report(driver_name: str, from_date: str, to_date: str) -> dict:
     # specific hota hai) — normal dates 1.0, split dates KM-fraction ──
     duties_by_bus = {}
     for bus, bus_df in df.groupby("bus_number"):
-        dates_involved = bus_df["date"].unique().tolist()
-        splits = get_duty_splits(bus, dates_involved)
+        splits = splits_by_bus.get(bus, pd.DataFrame())
         vr_like = bus_df.rename(columns={"driver_name": "Driver Name", "date": "Date"}).copy()
         vr_like["Status"] = "Present"
         credits = compute_role_duty_credits(vr_like, splits, "driver")
