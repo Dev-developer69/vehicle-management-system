@@ -136,9 +136,9 @@ def _filter_by_range(df, start, end, date_col="Date"):
 
 
 def _p_suffix(p1_val, p2_val, fmt):
-    """'1-15: X  •  16-31: Y' jaisa suffix banata hai — poora month (01-31)
-    select hone par har card me dono halves ka breakdown dikhane ke liye."""
-    return f"1-15: {fmt(p1_val)}  •  16-31: {fmt(p2_val)}"
+    """Dono halves (1-15 aur 16-31) ki values sirf number/unit ke saath
+    dikhata hai — bina 'periodname:' label ke, jaise '12 days · 0 days'."""
+    return f"{fmt(p1_val)}  ·  {fmt(p2_val)}"
 
 
 def _validity_status(label: str, val_date):
@@ -327,8 +327,8 @@ def bus_report_view():
         split_txt = _p_suffix(p1_metrics[key], p2_metrics[key], fmt)
         return f"{base_sublabel}  ·  {split_txt}" if base_sublabel else split_txt
 
-    fmt_int   = lambda v: f"{v:.0f}"
-    fmt_km    = lambda v: f"{v:,.0f}"
+    fmt_int   = lambda v: f"{v:.0f} days"
+    fmt_km    = lambda v: f"{v:,.0f} km"
     fmt_pct   = lambda v: f"{v}%"
     fmt_l     = lambda v: f"{v:.2f} L"
     fmt_rs    = lambda v: f"₹{v:,.0f}"
