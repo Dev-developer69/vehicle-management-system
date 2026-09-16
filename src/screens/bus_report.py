@@ -301,7 +301,7 @@ def bus_report_view():
     st.markdown("---")
 
     # ── Period ka data fetch (cached) ──
-    report_key = f"br_report_{bus_number}_{from_date}_{to_date}"
+    report_key = f"br_report_v2_{bus_number}_{from_date}_{to_date}"
     if load or report_key not in st.session_state:
         vr = _get_vehicle_records_for_period(bus_number, year, br_month, br_period)
 
@@ -332,9 +332,9 @@ def bus_report_view():
         st.session_state[report_key] = {"vr": vr, "fills": fills, "exp": exp, "sal": sal, "maint": maint, "maint_all": maint_all}
 
     data = st.session_state[report_key]
-    vr, fills, exp, sal, maint, maint_all = (
-        data["vr"], data["fills"], data["exp"], data["sal"], data["maint"], data["maint_all"]
-    )
+    vr, fills, exp, sal = data["vr"], data["fills"], data["exp"], data["sal"]
+    maint = data.get("maint", pd.DataFrame())
+    maint_all = data.get("maint_all", maint)
 
     if vr.empty:
         st.info(f"📭 {bus_number} ke liye {date(2000, br_month, 1).strftime('%B')} ({br_period}) me koi record nahi mila.")
