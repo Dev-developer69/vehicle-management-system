@@ -197,6 +197,92 @@ def get_diesel_summary(bus_number: str, from_date: str, to_date: str) -> pd.Data
 
 
 # ══════════════════════════════════════════════
+# SPLIT DUTY — ek din, 2 drivers/conductors ke beech KM ke hisaab se
+# duty credit baantna (driver aur conductor independently split ho sakte
+# hain — zaroori nahi dono ek saath split ho)
+# ══════════════════════════════════════════════
+
+def get_duty_splits(bus_number: str, dates: list = None) -> pd.DataFrame:
+    """Split-duty entries laata hai. `dates` diya to sirf unhi dates ke
+    liye (Bus Report jaisi period-scoped queries ke liye), warna sab."""
+    query = supabase.table("vehicle_duty_splits").select("*").eq("bus_number", bus_number)
+    if dates:
+        query = query.in_("date", dates)
+    res = query.execute()
+    cols = ["id", "Date", "Driver 1", "Driver 1 KM", "Driver 2", "Driver 2 KM",
+            "Conductor 1", "Conductor 1 KM", "Conductor 2", "Conductor 2 KM"]
+    return _to_df(res.data or [], {
+        "date": "Date",
+        "driver_1": "Driver 1", "driver_1_km": "Driver 1 KM",
+        "driver_2": "Driver 2", "driver_2_km": "Driver 2 KM",
+        "conductor_1": "Conductor 1", "conductor_1_km": "Conductor 1 KM",
+        "conductor_2": "Conductor 2", "conductor_2_km": "Conductor 2 KM",
+    }, cols)
+
+
+def save_duty_split(bus_number: str, date_str: str,
+                     driver_1: str = "", driver_1_km: float = 0,
+                     driver_2: str = "", driver_2_km: float = 0,
+                     conductor_1: str = "", conductor_1_km: float = 0,
+                     conductor_2: str = "", conductor_2_km: float = 0) -> None:
+    """Ek din ke split-duty ko upsert karta hai. Driver split aur Conductor
+    split dono independent hain — sirf driver ka bhar sakte ho, ya sirf
+    conductor ka, ya dono (jaisa jis din jo situation ho)."""
+    supabase.table("vehicle_duty_splits").upsert({
+        "bus_number": bus_number, "date": date_str,
+        "driver_1": (driver_1 or "").strip(), "driver_1_km": float(driver_1_km or 0),
+        "driver_2": (driver_2 or "").strip(), "driver_2_km": float(driver_2_km or 0),
+        "conductor_1": (conductor_1 or "").strip(), "conductor_1_km": float(conductor_1_km or 0),
+        "conductor_2": (conductor_2 or "").strip(), "conductor_2_km": float(conductor_2_km or 0),
+    }, on_conflict="bus_number,date").execute()
+
+
+def delete_duty_split(bus_number: str, date_str: str) -> None:
+    supabase.table("vehicle_duty_splits").delete().eq("bus_number", bus_number).eq("date", date_str).execute()
+
+
+def compute_role_duty_credits(vr: pd.DataFrame, splits_df: pd.DataFrame, role: str) -> dict:
+    """Ek role ('driver' ya 'conductor') ke liye har naam ka total duty
+    credit nikalta hai:
+      - agar us date ka split-entry hai (dono naam + KM bhare hue) → dono
+        logon ko unka_km / total_km ka fractional credit
+      - warna → us date ke normal Driver/Conductor Name field wale insaan
+        ko poora 1.0 duty credit (jaisa split ke bina hamesha se hota tha)
+    Returns {name: total_duty_credit}."""
+    name_col = "Driver Name" if role == "driver" else "Conductor Name"
+    prefix   = "Driver" if role == "driver" else "Conductor"
+    p1_col, p1km_col = f"{prefix} 1", f"{prefix} 1 KM"
+    p2_col, p2km_col = f"{prefix} 2", f"{prefix} 2 KM"
+
+    split_by_date = {}
+    if not splits_df.empty:
+        for _, r in splits_df.iterrows():
+            p1, p1km = str(r.get(p1_col) or "").strip(), float(r.get(p1km_col) or 0)
+            p2, p2km = str(r.get(p2_col) or "").strip(), float(r.get(p2km_col) or 0)
+            if p1 and p2 and (p1km + p2km) > 0:
+                split_by_date[str(r["Date"])] = [(p1, p1km), (p2, p2km)]
+
+    credits = {}
+    if vr.empty:
+        return credits
+
+    duty_df = vr[vr["Status"] != "On Leave"]
+    for _, row in duty_df.iterrows():
+        date_str = str(row["Date"])
+        if date_str in split_by_date:
+            people = split_by_date[date_str]
+            total_km = sum(km for _, km in people) or 1  # div/0 se bachao
+            for name, km in people:
+                if name and name.lower() not in ("none", ""):
+                    credits[name] = credits.get(name, 0.0) + (km / total_km)
+        else:
+            name = str(row.get(name_col) or "").strip()
+            if name and name.lower() not in ("none", ""):
+                credits[name] = credits.get(name, 0.0) + 1.0
+    return credits
+
+
+# ══════════════════════════════════════════════
 # DIESEL RATE + PAYMENT (universal), PER-ROW RATE
 # ══════════════════════════════════════════════
 
@@ -380,7 +466,7 @@ def get_driver_salary(bus_number: str = "") -> pd.DataFrame:
 
 
 def get_salary_check(from_date: str = None, to_date: str = None, bus_numbers: list = None) -> pd.DataFrame:
-    query = supabase.table("vehicle_records").select("driver_name, bus_number, date")
+    query = supabase.table("vehicle_records").select("driver_name, bus_number, date, status")
     if from_date: query = query.gte("date", from_date)
     if to_date: query = query.lte("date", to_date)
     if bus_numbers: query = query.in_("bus_number", bus_numbers)
@@ -390,12 +476,28 @@ def get_salary_check(from_date: str = None, to_date: str = None, bus_numbers: li
         return empty
 
     df = pd.DataFrame(res.data)
+    df = df[df.get("status", "Present") != "On Leave"]
     df = df[df["driver_name"].notna()]
     df = df[~df["driver_name"].str.strip().str.lower().isin(["no", "test", "none", ""])]
 
-    grouped = df.groupby([df["driver_name"].str.strip().str.lower(), "bus_number"]).agg(
-        driver_name=("driver_name", "first"), bus_number=("bus_number", "first"), duties=("date", "nunique"),
-    ).reset_index(drop=True)
+    # ── Split-duty aware duty count — normal dates 1.0 duty, split-duty
+    # dates KM ke fraction ke hisaab se (bus-wise, kyunki split bus+date
+    # specific hota hai) ──
+    dates_involved = df["date"].unique().tolist()
+    bus_list = bus_numbers if bus_numbers else df["bus_number"].dropna().unique().tolist()
+    splits_by_bus = {b: get_duty_splits(b, dates_involved) for b in bus_list}
+
+    duty_rows = []
+    for bus, bus_df in df.groupby("bus_number"):
+        vr_like = bus_df.rename(columns={"driver_name": "Driver Name", "date": "Date"}).copy()
+        vr_like["Status"] = "Present"
+        credits = compute_role_duty_credits(vr_like, splits_by_bus.get(bus, pd.DataFrame()), "driver")
+        for name, duties in credits.items():
+            duty_rows.append({"driver_name": name, "bus_number": bus, "duties": duties})
+
+    if not duty_rows:
+        return empty
+    grouped = pd.DataFrame(duty_rows)
     grouped["key"] = grouped["driver_name"].str.strip().str.lower() + "_" + grouped["bus_number"].fillna("")
 
     # ── Salary given ──
@@ -427,6 +529,7 @@ def get_salary_check(from_date: str = None, to_date: str = None, bus_numbers: li
 
     grouped["salary_due"] = grouped["duties"] * grouped["rate"]
     grouped["remaining"]  = grouped["salary_due"] - grouped["salary"]
+    grouped["duties"]     = grouped["duties"].round(2)
     grouped = grouped[["driver_name", "bus_number", "duties", "salary_due", "salary", "remaining"]]
     grouped.columns = ["Driver Name", "Bus Number", "Duties", "Salary Due", "Salary Given", "Remaining"]
     grouped.insert(0, "Sr No", range(1, len(grouped) + 1))
@@ -557,7 +660,17 @@ def get_driver_report(driver_name: str, from_date: str, to_date: str) -> dict:
     if df.empty:
         return empty
 
-    duties_by_bus = df.groupby("bus_number")["date"].nunique().to_dict()
+    # ── Split-duty aware duty credit (bus-wise, kyunki split bus+date
+    # specific hota hai) — normal dates 1.0, split dates KM-fraction ──
+    duties_by_bus = {}
+    for bus, bus_df in df.groupby("bus_number"):
+        dates_involved = bus_df["date"].unique().tolist()
+        splits = get_duty_splits(bus, dates_involved)
+        vr_like = bus_df.rename(columns={"driver_name": "Driver Name", "date": "Date"}).copy()
+        vr_like["Status"] = "Present"
+        credits = compute_role_duty_credits(vr_like, splits, "driver")
+        duties_by_bus[bus] = credits.get(driver_name.strip(), 0.0)
+
     diesel_rows = df[df["diesel"] > 0]
     total_diesel, total_diesel_km = diesel_rows["diesel"].sum(), diesel_rows["diesel_km"].sum()
 
@@ -568,8 +681,9 @@ def get_driver_report(driver_name: str, from_date: str, to_date: str) -> dict:
     daily_log = df[["date", "bus_number", "status", "actual_km", "diesel", "income"]].sort_values("date", ascending=False).copy()
     daily_log.columns = ["Date", "Bus", "Status", "Actual KM", "Diesel", "Income"]
 
+    total_duties = round(sum(duties_by_bus.values()), 2)
     return {
-        "duties_by_bus": duties_by_bus, "total_duties": df["date"].nunique(), "buses": sorted(duties_by_bus.keys()),
+        "duties_by_bus": duties_by_bus, "total_duties": total_duties, "buses": sorted(duties_by_bus.keys()),
         "total_actual_km": df["actual_km"].sum(), "total_scheduled_km": df["scheduled_km"].sum(),
         "total_diesel": total_diesel, "total_diesel_km": total_diesel_km,
         "avg_mileage": round(total_diesel_km / total_diesel, 2) if total_diesel > 0 else 0.0,
