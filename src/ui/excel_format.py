@@ -1,952 +1,1554 @@
-import json
-from datetime import datetime, timedelta, timezone
-
-import pandas as pd
+import calendar
 import streamlit as st
-from src.database.config import supabase, supabase_admin
+import pandas as pd
+from datetime import date
+from fpdf import FPDF
+
+from src.screens.products_manager import _extract_data_from_image
+from src.database.db import (
+    save_vehicle_records, save_driver_salary, save_vehicle_expenses,
+    get_vehicle_records, get_driver_salary, get_vehicle_expenses,
+    get_salary_check, get_scheduled_km, get_diesel_summary,
+    get_km_combines, save_km_combine, delete_km_combine,
+    update_vehicle_expense, delete_vehicle_expense,
+    update_driver_salary, delete_driver_salary,delete_vehicle_record,
+    get_diesel_rate_payment, save_diesel_rate_payment,
+    get_diesel_row_rates, save_diesel_row_rate,
+    get_suppliers, save_supplier, delete_supplier, get_supplier_products,
+    get_products, save_product, delete_product,
+    get_requirements, save_requirement, fulfill_requirement, delete_requirement,
+    save_fuel_fill, get_fuel_fills, update_fuel_fill, delete_fuel_fill,
+    clear_fuel_fills_for_date, get_existing_fuel_fill_dates, replace_fuel_fill_for_date,
+    migrate_diesel_to_fuel_fills, get_unmigrated_diesel_dates,
+    get_vehicle_payment_config, save_vehicle_payment_config,
+    get_duty_splits, save_duty_split, delete_duty_split,
+)
+
+# ──────────────────────────────────────────────
+# HELPER: Diesel vs CNG label (AT7389 is CNG)
+# ──────────────────────────────────────────────
+def fuel_label(bus_number: str) -> str:
+    return "CNG" if bus_number == "AT7389" else "Diesel"
 
 
-# ══════════════════════════════════════════════
-# SHARED HELPERS
-# ══════════════════════════════════════════════
-
-def _to_df(rows, rename: dict, cols: list) -> pd.DataFrame:
-    """Supabase rows -> renamed/ordered DataFrame; empty rows par bhi sahi columns ke saath khali df deta hai."""
-    if not rows:
-        return pd.DataFrame(columns=cols)
-    df = pd.DataFrame(rows).rename(columns=rename)
+# ──────────────────────────────────────────────
+# HELPER: Vibrant, eye-catching HTML table — teal→purple gradient header,
+# soft glow border, glowing gradient TOTAL row (Driver Report jaisi hi style,
+# app-wide consistent look ke liye). st.dataframe ke bajaye yahi use karo.
+# ──────────────────────────────────────────────
+def _render_html_table(df: pd.DataFrame, total_row: dict = None):
+    cols = list(df.columns)
+    html = [
+        "<div style='overflow-x:auto;border-radius:14px;"
+        "border:1px solid rgba(123,140,255,0.35);"
+        "box-shadow:0 4px 24px rgba(20,160,133,0.15), 0 0 0 1px rgba(255,255,255,0.03) inset;'>"
+        "<table style='width:100%;border-collapse:collapse;color:#f0f0f0;font-size:0.88rem;'>"
+    ]
+    html.append("<thead><tr>")
     for c in cols:
-        if c not in df.columns:
-            df[c] = None
-    return df[cols]
-
-
-def _safe_int(val):
-    if val is None or (isinstance(val, float) and pd.isna(val)):
-        return None
-    try:
-        if isinstance(val, str) and val.strip() == "":
-            return None
-        return int(float(val))
-    except (ValueError, TypeError):
-        return None
-
-
-# ══════════════════════════════════════════════
-# VEHICLE RECORDS
-# ══════════════════════════════════════════════
-
-def get_scheduled_km(bus_number: str) -> int:
-    res = supabase.table("vehicle_scheduled_km").select("scheduled_km").eq("bus_number", bus_number).execute()
-    return int(res.data[0]["scheduled_km"] or 466) if res.data else 466
-
-
-def save_scheduled_km(bus_number: str, scheduled_km: int) -> None:
-    supabase_admin.table("vehicle_scheduled_km").upsert(
-        {"bus_number": bus_number, "scheduled_km": scheduled_km}, on_conflict="bus_number").execute()
-
-
-def get_vehicle_payment_config(bus_number: str) -> dict:
-    """Payment calculation config — 'standard' (Income - KM×rate - tax) ya
-    'ipkm_slab' (IPKM = (Income-tax)/KM; agar IPKM < threshold to
-    (IPKM-deduction)×KM, warna (threshold-deduction)×KM). Dono methods ke
-    final result me se 1% tax + final_deduction minus hoke Final Payment
-    banta hai."""
-    res = supabase_admin.table("vehicle_payment_rate").select("*").eq("bus_number", bus_number).execute()
-    if res.data:
-        r = res.data[0]
-        return {
-            "rate": float(r.get("rate") or 0), "method": r.get("method") or "standard",
-            "ipkm_threshold": float(r.get("ipkm_threshold") or 0),
-            "ipkm_deduction": float(r.get("ipkm_deduction") or 0),
-            "final_deduction": float(r.get("final_deduction") or 0),
-        }
-    return {"rate": 0.0, "method": "standard", "ipkm_threshold": 0.0, "ipkm_deduction": 0.0, "final_deduction": 0.0}
-
-
-def save_vehicle_payment_config(bus_number: str, rate: float, method: str,
-                                 ipkm_threshold: float, ipkm_deduction: float, final_deduction: float) -> None:
-    supabase_admin.table("vehicle_payment_rate").upsert({
-        "bus_number": bus_number, "rate": float(rate), "method": method,
-        "ipkm_threshold": float(ipkm_threshold), "ipkm_deduction": float(ipkm_deduction),
-        "final_deduction": float(final_deduction),
-    }, on_conflict="bus_number").execute()
-
-
-_COMPLIANCE_FIELDS = [
-    "owner_name", "route_name", "capacity",
-    "insurance_validity", "fitness_validity", "pollution_validity",
-    "road_tax_validity", "registration_date",
-]
-
-
-def get_vehicle_compliance(bus_number: str) -> dict:
-    """Bus Report page ke liye — owner/route/capacity + Insurance/Fitness/
-    Pollution/Road Tax validity dates (purane Excel sheet jaisa hi data)."""
-    res = supabase.table("vehicle_compliance").select("*").eq("bus_number", bus_number).execute()
-    if res.data:
-        r = res.data[0]
-        return {f: r.get(f) for f in _COMPLIANCE_FIELDS}
-    return {f: None for f in _COMPLIANCE_FIELDS}
-
-
-def save_vehicle_compliance(bus_number: str, **fields) -> None:
-    payload = {"bus_number": bus_number}
-    for f in _COMPLIANCE_FIELDS:
-        if f in fields:
-            payload[f] = fields[f]
-    supabase.table("vehicle_compliance").upsert(payload, on_conflict="bus_number").execute()
-
-
-def get_km_combines(bus_number: str):
-    """Har group: {'id':.., 'dates':[...]}"""
-    res = supabase.table("vehicle_km_combines").select("id, dates").eq("bus_number", bus_number).execute()
-    groups = []
-    for r in (res.data or []):
-        try:
-            dates = json.loads(r["dates"])
-        except (TypeError, ValueError):
-            dates = []
-        if dates:
-            groups.append({"id": r["id"], "dates": dates})
-    return groups
-
-
-def save_km_combine(bus_number: str, dates: list) -> None:
-    supabase_admin.table("vehicle_km_combines").insert(
-        {"bus_number": bus_number, "dates": json.dumps(sorted(dates))}).execute()
-
-
-def delete_km_combine(bus_number: str, group_id) -> None:
-    supabase_admin.table("vehicle_km_combines").delete().eq("bus_number", bus_number).eq("id", group_id).execute()
-
-
-def delete_vehicle_record(bus_number: str, date_str: str) -> None:
-    supabase.table("vehicle_records").delete().eq("bus_number", bus_number).eq("date", date_str).execute()
-
-
-def save_vehicle_records(bus_number: str, df: pd.DataFrame) -> None:
-    from src.database.auth import get_current_role
-    user = st.session_state.get("user")
-    current_email, current_role = (user.email if user else "unknown"), get_current_role()
-
-    def keep(new_val, old_val, empty_vals):
-        return new_val if new_val not in empty_vals else old_val
-
-    for _, row in df.iterrows():
-        date_str = str(row["Date"])
-        on_leave = str(row.get("Status", "Present")).strip() == "On Leave"
-        existing = supabase.table("vehicle_records").select("*").eq("bus_number", bus_number).eq("date", date_str).execute()
-
-        new_data = {
-            "bus_number": bus_number, "date": date_str, "status": "On Leave" if on_leave else "Present",
-            "driver_name": row.get("Driver Name"), "conductor_name": row.get("Conductor Name"),
-            "scheduled_km": 0 if on_leave else _safe_int(row.get("Scheduled KM")),
-            "actual_km":    0 if on_leave else _safe_int(row.get("Actual KM")),
-            "diesel":       None if on_leave else (float(row.get("Diesel")) if pd.notna(row.get("Diesel")) else None),
-            "diesel_km":    None if on_leave else _safe_int(row.get("Diesel KM")),
-            "income":       None if on_leave else _safe_int(row.get("Income")),
-            "gross_income": None if on_leave else _safe_int(row.get("Gross Income")),
-            "updated_by": current_email, "updated_by_role": current_role,
-            "remark": str(row.get("Remark") or ""), "next_period": bool(row.get("Next", False)),
-        }
-
-        if existing.data:
-            old = existing.data[0]
-            merged = {
-                "bus_number": bus_number, "date": date_str, "status": new_data["status"],
-                "updated_by": current_email, "updated_by_role": current_role,
-                "remark": new_data["remark"] or old.get("remark", ""), "next_period": new_data["next_period"],
-                "driver_name":    keep(new_data["driver_name"],    old.get("driver_name"),    [None, "", "None", "none"]),
-                "conductor_name": keep(new_data["conductor_name"], old.get("conductor_name"), [None, "", "None", "none"]),
-                "scheduled_km": new_data["scheduled_km"] if on_leave else keep(new_data["scheduled_km"], old.get("scheduled_km"), [None]),
-                "actual_km":    new_data["actual_km"]    if on_leave else keep(new_data["actual_km"],    old.get("actual_km"),    [None]),
-                "diesel":       keep(new_data["diesel"],       old.get("diesel"),       [None]),
-                "diesel_km":    keep(new_data["diesel_km"],    old.get("diesel_km"),    [None]),
-                "income":       keep(new_data["income"],       old.get("income"),       [None]),
-                "gross_income": keep(new_data["gross_income"], old.get("gross_income"), [None]),
-            }
-            supabase.table("vehicle_records").update(merged).eq("bus_number", bus_number).eq("date", date_str).execute()
-        else:
-            supabase.table("vehicle_records").insert(new_data).execute()
-
-
-def get_vehicle_records(bus_number: str) -> pd.DataFrame:
-    res = supabase.table("vehicle_records").select("*").eq("bus_number", bus_number).order("date", desc=True).execute()
-    cols = ["Date", "Status", "Driver Name", "Conductor Name", "Scheduled KM", "Actual KM",
-            "Diesel", "Diesel KM", "Income", "Gross Income", "Remark", "Next"]
-    df = _to_df(res.data or [], {
-        "date": "Date", "status": "Status", "driver_name": "Driver Name", "conductor_name": "Conductor Name",
-        "scheduled_km": "Scheduled KM", "actual_km": "Actual KM", "diesel": "Diesel", "diesel_km": "Diesel KM",
-        "income": "Income", "gross_income": "Gross Income", "remark": "Remark", "next_period": "Next",
-    }, cols)
-    for col, default in [("Status", "Present"), ("Remark", ""), ("Next", False), ("Diesel KM", 0), ("Gross Income", 0)]:
-        df[col] = df[col].fillna(default) if col in df.columns and not df.empty else df[col]
-    return df
-
-
-def get_diesel_summary(bus_number: str, from_date: str, to_date: str) -> pd.DataFrame:
-    res = supabase.table("vehicle_records").select("date, diesel, status") \
-        .eq("bus_number", bus_number).gte("date", from_date).lte("date", to_date).order("date").execute()
-    if not res.data:
-        return pd.DataFrame(columns=["Date", "Diesel"])
-    df = pd.DataFrame(res.data)
-    df = df[df["status"] != "On Leave"].rename(columns={"date": "Date", "diesel": "Diesel"})
-    df["Diesel"] = pd.to_numeric(df["Diesel"], errors="coerce").fillna(0)
-    return df[["Date", "Diesel"]]
-
-
-# ══════════════════════════════════════════════
-# SPLIT DUTY — ek din, 2 drivers/conductors ke beech KM ke hisaab se
-# duty credit baantna (driver aur conductor independently split ho sakte
-# hain — zaroori nahi dono ek saath split ho)
-# ══════════════════════════════════════════════
-
-def get_duty_splits(bus_number: str, dates: list = None) -> pd.DataFrame:
-    """Split-duty entries laata hai. `dates` diya to sirf unhi dates ke
-    liye (Bus Report jaisi period-scoped queries ke liye), warna sab."""
-    query = supabase.table("vehicle_duty_splits").select("*").eq("bus_number", bus_number)
-    if dates:
-        query = query.in_("date", dates)
-    res = query.execute()
-    cols = ["id", "Date", "Driver 1", "Driver 1 KM", "Driver 2", "Driver 2 KM",
-            "Conductor 1", "Conductor 1 KM", "Conductor 2", "Conductor 2 KM"]
-    return _to_df(res.data or [], {
-        "date": "Date",
-        "driver_1": "Driver 1", "driver_1_km": "Driver 1 KM",
-        "driver_2": "Driver 2", "driver_2_km": "Driver 2 KM",
-        "conductor_1": "Conductor 1", "conductor_1_km": "Conductor 1 KM",
-        "conductor_2": "Conductor 2", "conductor_2_km": "Conductor 2 KM",
-    }, cols)
-
-
-def save_duty_split(bus_number: str, date_str: str,
-                     driver_1: str = "", driver_1_km: float = 0,
-                     driver_2: str = "", driver_2_km: float = 0,
-                     conductor_1: str = "", conductor_1_km: float = 0,
-                     conductor_2: str = "", conductor_2_km: float = 0) -> None:
-    """Ek din ke split-duty ko upsert karta hai. Driver split aur Conductor
-    split dono independent hain — sirf driver ka bhar sakte ho, ya sirf
-    conductor ka, ya dono (jaisa jis din jo situation ho)."""
-    supabase.table("vehicle_duty_splits").upsert({
-        "bus_number": bus_number, "date": date_str,
-        "driver_1": (driver_1 or "").strip(), "driver_1_km": float(driver_1_km or 0),
-        "driver_2": (driver_2 or "").strip(), "driver_2_km": float(driver_2_km or 0),
-        "conductor_1": (conductor_1 or "").strip(), "conductor_1_km": float(conductor_1_km or 0),
-        "conductor_2": (conductor_2 or "").strip(), "conductor_2_km": float(conductor_2_km or 0),
-    }, on_conflict="bus_number,date").execute()
-
-
-def delete_duty_split(bus_number: str, date_str: str) -> None:
-    supabase.table("vehicle_duty_splits").delete().eq("bus_number", bus_number).eq("date", date_str).execute()
-
-
-def compute_role_duty_credits(vr: pd.DataFrame, splits_df: pd.DataFrame, role: str) -> dict:
-    """Ek role ('driver' ya 'conductor') ke liye har naam ka total duty
-    credit nikalta hai:
-      - agar us date ka split-entry hai (dono naam + KM bhare hue) → dono
-        logon ko unka_km / total_km ka fractional credit
-      - warna → us date ke normal Driver/Conductor Name field wale insaan
-        ko poora 1.0 duty credit (jaisa split ke bina hamesha se hota tha)
-    Returns {name: total_duty_credit}."""
-    name_col = "Driver Name" if role == "driver" else "Conductor Name"
-    prefix   = "Driver" if role == "driver" else "Conductor"
-    p1_col, p1km_col = f"{prefix} 1", f"{prefix} 1 KM"
-    p2_col, p2km_col = f"{prefix} 2", f"{prefix} 2 KM"
-
-    split_by_date = {}
-    if not splits_df.empty:
-        for _, r in splits_df.iterrows():
-            p1, p1km = str(r.get(p1_col) or "").strip(), float(r.get(p1km_col) or 0)
-            p2, p2km = str(r.get(p2_col) or "").strip(), float(r.get(p2km_col) or 0)
-            if p1 and p2 and (p1km + p2km) > 0:
-                split_by_date[str(r["Date"])] = [(p1, p1km), (p2, p2km)]
-
-    credits = {}
-    if vr.empty:
-        return credits
-
-    duty_df = vr[vr["Status"] != "On Leave"]
-    for _, row in duty_df.iterrows():
-        date_str = str(row["Date"])
-        if date_str in split_by_date:
-            people = split_by_date[date_str]
-            total_km = sum(km for _, km in people) or 1  # div/0 se bachao
-            for name, km in people:
-                if name and name.lower() not in ("none", ""):
-                    credits[name] = credits.get(name, 0.0) + (km / total_km)
-        else:
-            name = str(row.get(name_col) or "").strip()
-            if name and name.lower() not in ("none", ""):
-                credits[name] = credits.get(name, 0.0) + 1.0
-    return credits
-
-
-# ══════════════════════════════════════════════
-# DIESEL RATE + PAYMENT (universal), PER-ROW RATE
-# ══════════════════════════════════════════════
-
-def get_diesel_rate_payment(bus_number: str, month: int, period: str) -> dict:
-    res = supabase_admin.table("diesel_details").select("rate, paid_amount, payment_done") \
-        .eq("bus_number", bus_number).eq("month", month).eq("period", period).execute()
-    if res.data:
-        r = res.data[0]
-        return {"rate": float(r["rate"] or 95.69), "paid_amount": float(r["paid_amount"] or 0), "payment_done": bool(r["payment_done"])}
-    return {"rate": 95.69, "paid_amount": 0.0, "payment_done": False}
-
-
-def save_diesel_rate_payment(bus_number: str, month: int, period: str, rate: float, paid_amount: float, payment_done: bool) -> None:
-    supabase_admin.table("diesel_details").upsert({
-        "bus_number": bus_number, "month": month, "period": period,
-        "rate": rate, "paid_amount": paid_amount, "payment_done": payment_done,
-    }, on_conflict="bus_number,month,period").execute()
-
-
-def get_diesel_row_rates(bus_number: str, dates: list) -> dict:
-    if not dates:
-        return {}
-    res = supabase_admin.table("diesel_row_rates").select("date, rate").eq("bus_number", bus_number).in_("date", dates).execute()
-    return {row["date"]: float(row["rate"]) for row in res.data} if res.data else {}
-
-
-def save_diesel_row_rate(bus_number: str, row_date: str, rate: float) -> None:
-    supabase_admin.table("diesel_row_rates").upsert(
-        {"bus_number": bus_number, "date": row_date, "rate": rate}, on_conflict="bus_number,date").execute()
-
-
-# ══════════════════════════════════════════════
-# FUEL FILLS (CNG/Diesel — multiple entries per date allowed)
-# ══════════════════════════════════════════════
-
-def _sync_vehicle_record_diesel(bus_number: str, date_str: str) -> None:
-    """Us din ka fuel_fills total nikal ke vehicle_records.diesel (agar row exist kare) me sync karta hai."""
-    fills = supabase.table("fuel_fills").select("quantity").eq("bus_number", bus_number).eq("date", date_str).execute()
-    total_qty = sum(float(r["quantity"] or 0) for r in (fills.data or []))
-    existing = supabase.table("vehicle_records").select("id").eq("bus_number", bus_number).eq("date", date_str).execute()
-    if existing.data:
-        supabase.table("vehicle_records").update({"diesel": total_qty}).eq("bus_number", bus_number).eq("date", date_str).execute()
-
-
-def save_fuel_fill(bus_number: str, fill_date: str, quantity: float, rate: float) -> None:
-    """Naya fill insert (same date pe dobara call = alag row, overwrite nahi)."""
-    supabase.table("fuel_fills").insert(
-        {"bus_number": bus_number, "date": fill_date, "quantity": float(quantity), "rate": float(rate)}).execute()
-    _sync_vehicle_record_diesel(bus_number, fill_date)
-
-
-def get_fuel_fills(bus_number: str, from_date: str, to_date: str) -> pd.DataFrame:
-    res = supabase.table("fuel_fills").select("*").eq("bus_number", bus_number) \
-        .gte("date", from_date).lte("date", to_date).order("date").order("created_at").execute()
-    return _to_df(res.data or [], {"date": "Date", "quantity": "Quantity", "rate": "Rate", "amount": "Amount"},
-                  ["id", "Date", "Quantity", "Rate", "Amount"])
-
-
-def update_fuel_fill(bus_number: str, fill_id, updates: dict) -> None:
-    existing = supabase.table("fuel_fills").select("date").eq("id", fill_id).execute()
-    old_date = existing.data[0]["date"] if existing.data else None
-    rename = {"Date": "date", "Quantity": "quantity", "Rate": "rate"}
-    db_updates = {rename.get(k, k): v for k, v in updates.items() if k in rename}
-    if db_updates:
-        supabase.table("fuel_fills").update(db_updates).eq("id", fill_id).execute()
-    if old_date:
-        _sync_vehicle_record_diesel(bus_number, old_date)
-    new_date = db_updates.get("date")
-    if new_date and new_date != old_date:
-        _sync_vehicle_record_diesel(bus_number, new_date)
-
-
-def delete_fuel_fill(bus_number: str, fill_id) -> None:
-    existing = supabase.table("fuel_fills").select("date").eq("id", fill_id).execute()
-    fill_date = existing.data[0]["date"] if existing.data else None
-    supabase.table("fuel_fills").delete().eq("id", fill_id).execute()
-    if fill_date:
-        _sync_vehicle_record_diesel(bus_number, fill_date)
-
-
-def clear_fuel_fills_for_date(bus_number: str, date_str: str) -> int:
-    """Explicit '0' fill par — us date ki saari entries reset/delete karta hai."""
-    existing = supabase.table("fuel_fills").select("id").eq("bus_number", bus_number).eq("date", date_str).execute()
-    rows = existing.data or []
-    if not rows:
-        return 0
-    supabase.table("fuel_fills").delete().eq("bus_number", bus_number).eq("date", date_str).execute()
-    _sync_vehicle_record_diesel(bus_number, date_str)
-    return len(rows)
-
-
-def get_existing_fuel_fill_dates(bus_number: str, dates: list) -> set:
-    if not dates:
-        return set()
-    res = supabase.table("fuel_fills").select("date").eq("bus_number", bus_number).in_("date", dates).execute()
-    return {r["date"] for r in (res.data or [])}
-
-
-def replace_fuel_fill_for_date(bus_number: str, date_str: str, quantity: float, rate: float) -> None:
-    """'Yes, Update' — purani saari entries hata ke ek nayi (total) daal deta hai."""
-    supabase.table("fuel_fills").delete().eq("bus_number", bus_number).eq("date", date_str).execute()
-    supabase.table("fuel_fills").insert(
-        {"bus_number": bus_number, "date": date_str, "quantity": float(quantity), "rate": float(rate)}).execute()
-    _sync_vehicle_record_diesel(bus_number, date_str)
-
-
-def get_unmigrated_diesel_dates(bus_number: str) -> list:
-    """Dates jinka vehicle_records.diesel bhara hai par fuel_fills me abhi entry nahi hai."""
-    records = supabase.table("vehicle_records").select("date, diesel").eq("bus_number", bus_number).gt("diesel", 0).execute()
-    rows = records.data or []
-    if not rows:
-        return []
-    dates = [r["date"] for r in rows]
-    existing = supabase.table("fuel_fills").select("date").eq("bus_number", bus_number).in_("date", dates).execute()
-    already = {r["date"] for r in (existing.data or [])}
-    return [r["date"] for r in rows if r["date"] not in already]
-
-
-def migrate_diesel_to_fuel_fills(bus_number: str) -> int:
-    """Legacy vehicle_records.diesel -> fuel_fills copy (per-date, duplicate-safe, dobara chalane par bhi safe)."""
-    records = supabase.table("vehicle_records").select("date, diesel").eq("bus_number", bus_number).gt("diesel", 0).execute()
-    rows = records.data or []
-    if not rows:
-        return 0
-    dates = [r["date"] for r in rows]
-    existing = supabase.table("fuel_fills").select("date").eq("bus_number", bus_number).in_("date", dates).execute()
-    already = {r["date"] for r in (existing.data or [])}
-    inserted = 0
-    for r in rows:
-        if r["date"] in already:
+        html.append(
+            f"<th style='padding:12px 10px;text-align:left;white-space:nowrap;"
+            f"background:linear-gradient(90deg,#14A085,#7B8CFF);color:#fff;"
+            f"font-weight:700;letter-spacing:0.3px;'>{c}</th>"
+        )
+    html.append("</tr></thead><tbody>")
+
+    for i, r in enumerate(df.to_dict("records")):
+        row_bg = "#182838" if i % 2 == 0 else "#1E2B3D"
+        html.append("<tr>")
+        for c in cols:
+            val = r.get(c, "")
+            val = "" if pd.isna(val) else val
+            html.append(
+                f"<td style='border-bottom:1px solid rgba(123,140,255,0.12);padding:10px;"
+                f"white-space:nowrap;background:{row_bg};color:#eee;'>{val}</td>"
+            )
+        html.append("</tr>")
+
+    if total_row:
+        html.append("<tr style='background:linear-gradient(90deg,rgba(20,160,133,0.35),rgba(123,140,255,0.35));'>")
+        for c in cols:
+            val = total_row.get(c, "")
+            html.append(
+                f"<td style='padding:12px 10px;white-space:nowrap;"
+                f"color:#FFD700;font-weight:800;font-size:0.95rem;"
+                f"text-shadow:0 0 8px rgba(255,215,0,0.35);'>{val}</td>"
+            )
+        html.append("</tr>")
+
+    html.append("</tbody></table></div>")
+    st.markdown("".join(html), unsafe_allow_html=True)
+
+
+def _render_km_merged_table(display_df: pd.DataFrame, groups: list):
+    """Renders display_df as an HTML table where Scheduled KM / Actual KM /
+    Income cells for each group of 2+ dates are visually
+    merged (rowspan) into a single SUMMED value, Excel-style — every other
+    column stays per-row/unchanged. Multiple non-overlapping groups (of any
+    size) supported at once.
+    Original row order (jaisa display_df me hai, e.g. descending date) ko
+    zyada se zyada preserve karta hai — group ke members already adjacent
+    hote hain to kuch nahi hilta, warna sirf unhi rows ko ek saath la kar
+    minimum movement karta hai.
+    Agar kisi purani/duplicate group ki wajah se dates OVERLAP karte hain
+    (ek hi date do groups me ho), to baad wali overlapping group ko skip
+    kar deta hai — taaki table half-broken na dikhe."""
+    MERGE_COLS = ["Scheduled KM", "Actual KM", "Income"]
+    rows = display_df.to_dict("records")
+
+    rowspan_at = {}   # idx -> merge info, is row se rowspan shuru hoga
+    skip_at    = set()  # baaki group-member rows ke indices (merge cells yaha skip honge)
+    claimed_dates = set()  # ab tak jitni dates kisi group me use ho chuki hain
+    group_breakdowns = []  # ✅ mobile-friendly breakdown (hover tooltip ki jagah tap se bhi dikhega)
+
+    for group in groups:
+        dates = group["dates"] if isinstance(group, dict) else group
+        if any(d in claimed_dates for d in dates):
+            continue  # overlapping/duplicate group — skip karo, warna table broken dikhegi
+        idxs = [i for i, r in enumerate(rows) if r["Date"] in dates]
+        if len(idxs) != len(dates) or len(idxs) < 2:
             continue
-        qty = float(r["diesel"] or 0)
-        if qty <= 0:
-            continue
-        rate = get_diesel_row_rates(bus_number, [r["date"]]).get(r["date"]) or 95.69
-        supabase.table("fuel_fills").insert(
-            {"bus_number": bus_number, "date": r["date"], "quantity": qty, "rate": rate}).execute()
-        inserted += 1
-    return inserted
+        idxs.sort()
+        insert_at = idxs[0]
 
+        # Group ke saare members ko ek contiguous block me la do (unka aapas
+        # ka relative order preserve karte hue), taaki rowspan lag sake.
+        extracted = [rows[i] for i in idxs]
+        for i in sorted(idxs, reverse=True):
+            rows.pop(i)
+        rows[insert_at:insert_at] = extracted
+        claimed_dates.update(dates)
 
-# ══════════════════════════════════════════════
-# DRIVER SALARY
-# ══════════════════════════════════════════════
+        date_vals = [r["Date"] for r in extracted]
+        col_vals  = {c: [pd.to_numeric(r.get(c), errors="coerce") for r in extracted] for c in MERGE_COLS}
+        col_sums  = {c: sum(v for v in col_vals[c] if pd.notna(v)) for c in MERGE_COLS}
 
-def save_driver_salary(df: pd.DataFrame, bus_number: str = "") -> None:
-    user = st.session_state.get("user")
-    updated_by = user.email if user else "unknown"
-    records = []
-    for _, row in df.iterrows():
-        try:
-            salary_val = float(str(row["Salary"]).replace(",", "").strip() or 0)
-        except (ValueError, TypeError):
-            salary_val = 0.0
-        txn_val = str(row.get("Transaction") or "").strip().lower()
-        txn_val = txn_val if txn_val in ("cash", "online") else "cash"
-        records.append({
-            "driver_name": str(row["Driver Name"]).strip(), "date": str(row["Date"]),
-            "salary": salary_val, "transaction": txn_val, "bus_number": bus_number,
-            "updated_by": updated_by, "updated_at": datetime.now(timezone.utc).isoformat(),
+        lines = [
+            f"{d} — Sch {sch:.0f} / Actual {act:.0f} / Income {inc:,.0f}"
+            for d, sch, act, inc in zip(
+                date_vals, col_vals["Scheduled KM"], col_vals["Actual KM"], col_vals["Income"]
+            )
+        ]
+        lines.append(
+            f"Total — Sch {col_sums['Scheduled KM']:.0f} / Actual {col_sums['Actual KM']:.0f} "
+            f"/ Income {col_sums['Income']:,.0f}"
+        )
+        tooltip = "\n".join(lines)
+
+        rowspan_at[insert_at] = {"sums": col_sums, "span": len(extracted), "tooltip": tooltip}
+        group_breakdowns.append({
+            "label": " + ".join(date_vals),
+            "rows": [
+                {"Date": d, "Scheduled KM": sch, "Actual KM": act, "Income": inc}
+                for d, sch, act, inc in zip(
+                    date_vals, col_vals["Scheduled KM"], col_vals["Actual KM"], col_vals["Income"]
+                )
+            ],
+            "total": {"Date": "TOTAL", **col_sums},
         })
-    if not records:
-        return
-    try:
-        supabase.table("driver_salary").insert(records).execute()
-    except Exception as e:
-        log_error("save_driver_salary", str(e), bus_number=bus_number, extra_data=str(records))
-        st.error("⚠️ Save failed — error logged.")
+        for i in range(insert_at + 1, insert_at + len(extracted)):
+            skip_at.add(i)
+
+    cols = list(display_df.columns)
+    html = [
+        "<div style='overflow-x:auto;border-radius:14px;"
+        "border:1px solid rgba(123,140,255,0.35);"
+        "box-shadow:0 4px 24px rgba(20,160,133,0.15), 0 0 0 1px rgba(255,255,255,0.03) inset;'>"
+        "<table style='width:100%;border-collapse:collapse;color:#f0f0f0;font-size:0.88rem;'>"
+    ]
+    html.append("<thead><tr>")
+    for c in cols:
+        html.append(
+            f"<th style='padding:12px 10px;text-align:left;white-space:nowrap;"
+            f"background:linear-gradient(90deg,#14A085,#7B8CFF);color:#fff;"
+            f"font-weight:700;letter-spacing:0.3px;'>{c}</th>"
+        )
+    html.append("</tr></thead><tbody>")
+
+    for i, r in enumerate(rows):
+        row_bg = "#182838" if i % 2 == 0 else "#1E2B3D"
+        html.append("<tr>")
+        for c in cols:
+            if c in MERGE_COLS and i in rowspan_at:
+                info = rowspan_at[i]
+                val = info["sums"][c]
+                html.append(
+                    f"<td rowspan='{info['span']}' title=\"{info['tooltip']}\" style='border-bottom:1px solid rgba(123,140,255,0.12);padding:10px;text-align:center;"
+                    f"vertical-align:middle;background:{row_bg};color:#eee;cursor:help;'>{val:,.0f}</td>"
+                )
+            elif c in MERGE_COLS and i in skip_at:
+                continue  # rowspan se cover ho gaya
+            else:
+                cell_val = r.get(c, "")
+                cell_val = "" if pd.isna(cell_val) else cell_val
+                html.append(f"<td style='border-bottom:1px solid rgba(123,140,255,0.12);padding:10px;white-space:nowrap;background:{row_bg};color:#eee;'>{cell_val}</td>")
+        html.append("</tr>")
+
+    html.append("</tbody></table></div>")
+    st.markdown("".join(html), unsafe_allow_html=True)
+    groups_text = ", ".join(" + ".join(g["dates"] if isinstance(g, dict) else g) for g in groups)
+    st.caption(f"🔗 Combined: {groups_text}")
+
+    # ── ✅ Mobile-friendly breakdown — HTML 'title' hover tooltip phone pe
+    # kaam nahi karta (koi hover event nahi hota touch devices pe), isliye
+    # yahan ek tap-able expander me wahi breakdown dikhaya hai (desktop pe
+    # bhi kaam karega, hover ke alawa). ──
+    if group_breakdowns:
+        with st.expander("📱 Combined KM/Income breakdown (tap to view)"):
+            for gb in group_breakdowns:
+                st.markdown(f"**🔗 {gb['label']}**")
+                _render_html_table(pd.DataFrame(gb["rows"] + [gb["total"]]))
 
 
-def get_driver_salary(bus_number: str = "") -> pd.DataFrame:
-    query = supabase.table("driver_salary").select("*").order("date", desc=True)
-    if bus_number:
-        query = query.eq("bus_number", bus_number)
-    df = _to_df(query.execute().data or [],
-                {"date": "Date", "driver_name": "Driver Name", "salary": "Salary", "transaction": "Transaction", "updated_by": "Updated By"},
-                ["id", "Date", "Driver Name", "Salary", "Transaction", "Updated By"])
-    if not df.empty:
-        df["Updated By"] = df["Updated By"].fillna("")
+# ──────────────────────────────────────────────
+# HELPER: Editor widget state → DataFrame
+# ──────────────────────────────────────────────
+def _apply_editor_state(original_df: pd.DataFrame, editor_state: dict) -> pd.DataFrame:
+    if not editor_state:
+        return original_df.copy()
+    df = original_df.copy()
+    for row_idx, changes in editor_state.get("edited_rows", {}).items():
+        for col, val in changes.items():
+            if row_idx < len(df):
+                df.at[row_idx, col] = val
+    added = editor_state.get("added_rows", [])
+    if added:
+        new_rows = pd.DataFrame(added)
+        for col in df.columns:
+            if col not in new_rows.columns:
+                new_rows[col] = None
+        df = pd.concat([df, new_rows[df.columns]], ignore_index=True)
+    deleted = sorted(editor_state.get("deleted_rows", []), reverse=True)
+    for row_idx in deleted:
+        if row_idx < len(df):
+            df = df.drop(index=row_idx).reset_index(drop=True)
     return df
 
 
-def get_salary_check(from_date: str = None, to_date: str = None, bus_numbers: list = None) -> pd.DataFrame:
-    query = supabase.table("vehicle_records").select("driver_name, bus_number, date, status")
-    if from_date: query = query.gte("date", from_date)
-    if to_date: query = query.lte("date", to_date)
-    if bus_numbers: query = query.in_("bus_number", bus_numbers)
-    res = query.execute()
-    empty = pd.DataFrame(columns=["Sr No", "Driver Name", "Bus Number", "Duties", "Salary Due", "Salary Given", "Remaining"])
-    if not res.data:
-        return empty
-
-    df = pd.DataFrame(res.data)
-    df = df[df.get("status", "Present") != "On Leave"]
-    df = df[df["driver_name"].notna()]
-    df = df[~df["driver_name"].str.strip().str.lower().isin(["no", "test", "none", ""])]
-
-    # ── Split-duty aware duty count — normal dates 1.0 duty, split-duty
-    # dates KM ke fraction ke hisaab se (bus-wise, kyunki split bus+date
-    # specific hota hai) ──
-    dates_involved = df["date"].unique().tolist()
-    bus_list = bus_numbers if bus_numbers else df["bus_number"].dropna().unique().tolist()
-    splits_by_bus = {b: get_duty_splits(b, dates_involved) for b in bus_list}
-
-    duty_rows = []
-    for bus, bus_df in df.groupby("bus_number"):
-        vr_like = bus_df.rename(columns={"driver_name": "Driver Name", "date": "Date"}).copy()
-        vr_like["Status"] = "Present"
-        credits = compute_role_duty_credits(vr_like, splits_by_bus.get(bus, pd.DataFrame()), "driver")
-        for name, duties in credits.items():
-            duty_rows.append({"driver_name": name, "bus_number": bus, "duties": duties})
-
-    if not duty_rows:
-        return empty
-    grouped = pd.DataFrame(duty_rows)
-    grouped["key"] = grouped["driver_name"].str.strip().str.lower() + "_" + grouped["bus_number"].fillna("")
-
-    # ── Salary given ──
-    sal_query = supabase.table("driver_salary").select("driver_name, salary, bus_number, date")
-    if from_date: sal_query = sal_query.gte("date", from_date)
-    if to_date: sal_query = sal_query.lte("date", to_date)
-    if bus_numbers: sal_query = sal_query.in_("bus_number", bus_numbers)
-    sal_res = sal_query.execute()
-    sal_df = pd.DataFrame(sal_res.data) if sal_res.data else pd.DataFrame(columns=["driver_name", "salary", "bus_number", "date"])
-    if not sal_df.empty:
-        sal_df["key"] = sal_df["driver_name"].str.strip().str.lower() + "_" + sal_df["bus_number"].fillna("")
-        grouped = grouped.merge(sal_df.groupby("key")["salary"].sum().reset_index(), on="key", how="left")
-        grouped["salary"] = grouped["salary"].fillna(0)
-    else:
-        grouped["salary"] = 0
-
-    # ── Rate: specific-bus rate, warna 'ALL vehicles' fallback ──
-    rates_res = supabase.table("driver_salary_rates").select("driver_name, bus_number, rate").execute()
-    rates_df = pd.DataFrame(rates_res.data) if rates_res.data else pd.DataFrame(columns=["driver_name", "bus_number", "rate"])
-    if not rates_df.empty:
-        rates_df["driver_key"] = rates_df["driver_name"].str.strip().str.lower()
-        rates_df["key"] = rates_df["driver_key"] + "_" + rates_df["bus_number"].fillna("")
-        specific = rates_df[rates_df["bus_number"] != "ALL"].groupby("key")["rate"].first()
-        allrate  = rates_df[rates_df["bus_number"] == "ALL"].groupby("driver_key")["rate"].first()
-        grouped["driver_key"] = grouped["driver_name"].str.strip().str.lower()
-        grouped["rate"] = grouped["key"].map(specific).fillna(grouped["driver_key"].map(allrate)).fillna(0)
-    else:
-        grouped["rate"] = 0
-
-    grouped["salary_due"] = grouped["duties"] * grouped["rate"]
-    grouped["remaining"]  = grouped["salary_due"] - grouped["salary"]
-    grouped["duties"]     = grouped["duties"].round(2)
-    grouped = grouped[["driver_name", "bus_number", "duties", "salary_due", "salary", "remaining"]]
-    grouped.columns = ["Driver Name", "Bus Number", "Duties", "Salary Due", "Salary Given", "Remaining"]
-    grouped.insert(0, "Sr No", range(1, len(grouped) + 1))
-    return grouped
-
-
-# ══════════════════════════════════════════════
-# DRIVER SALARY RATE
-# ══════════════════════════════════════════════
-
-def get_driver_rate(bus_number: str, driver_name: str) -> float:
-    res = supabase.table("driver_salary_rates").select("rate").eq("bus_number", bus_number).eq("driver_name", driver_name).execute()
-    if res.data:
-        return float(res.data[0]["rate"] or 0)
-    if bus_number != "ALL":  # ✅ 'ALL vehicles' rate fallback
-        res_all = supabase.table("driver_salary_rates").select("rate").eq("bus_number", "ALL").eq("driver_name", driver_name).execute()
-        if res_all.data:
-            return float(res_all.data[0]["rate"] or 0)
-    return 0.0
-
-
-def save_driver_rate(bus_number: str, driver_name: str, rate: float, updated_by: str) -> None:
-    supabase.table("driver_salary_rates").upsert({
-        "bus_number": bus_number, "driver_name": driver_name.strip(), "rate": float(rate), "updated_by": updated_by,
-    }, on_conflict="bus_number,driver_name").execute()
-
-
-def get_all_driver_rates(bus_numbers: list = None) -> pd.DataFrame:
-    query = supabase.table("driver_salary_rates").select("*").order("driver_name")
-    if bus_numbers:
-        query = query.in_("bus_number", bus_numbers)
-    return _to_df(query.execute().data or [], {"bus_number": "Bus Number", "driver_name": "Driver Name", "rate": "Rate"},
-                  ["Bus Number", "Driver Name", "Rate"])
-
-
-def get_drivers_for_buses(bus_numbers: list = None) -> list:
-    query = supabase.table("vehicle_records").select("driver_name, bus_number")
-    if bus_numbers:
-        query = query.in_("bus_number", bus_numbers)
-    res = query.execute()
-    if not res.data:
-        return []
-    names = {r["driver_name"].strip() for r in res.data
-             if r.get("driver_name") and r["driver_name"].strip().lower() not in ("no", "test", "none", "")}
-    return sorted(names)
-
-
-def rename_driver(old_name: str, new_name: str) -> dict:
-    """Ek driver ka naam saari tables (vehicle_records, salary, rate, license) me merge karta hai — typo/duplicate fix ke liye."""
-    old_name, new_name = old_name.strip(), new_name.strip()
-    if not old_name or not new_name or old_name.lower() == new_name.lower():
-        return {"vehicle_records": 0, "driver_salary": 0, "driver_salary_rates": 0, "drivers": 0}
-
-    counts = {}
-    res = supabase.table("vehicle_records").select("bus_number, date").ilike("driver_name", old_name).execute()
-    counts["vehicle_records"] = len(res.data or [])
-    if counts["vehicle_records"]:
-        supabase.table("vehicle_records").update({"driver_name": new_name}).ilike("driver_name", old_name).execute()
-
-    res = supabase.table("driver_salary").select("id").ilike("driver_name", old_name).execute()
-    ids = [r["id"] for r in (res.data or [])]
-    if ids:
-        supabase.table("driver_salary").update({"driver_name": new_name}).in_("id", ids).execute()
-    counts["driver_salary"] = len(ids)
-
-    res = supabase.table("driver_salary_rates").select("bus_number").ilike("driver_name", old_name).execute()
-    updated = 0
-    for bus in [r["bus_number"] for r in (res.data or [])]:
-        existing = supabase.table("driver_salary_rates").select("driver_name").eq("driver_name", new_name).eq("bus_number", bus).execute()
-        if existing.data:
-            supabase.table("driver_salary_rates").delete().ilike("driver_name", old_name).eq("bus_number", bus).execute()
+# ──────────────────────────────────────────────
+# HELPER: Total row builder
+# ──────────────────────────────────────────────
+def build_total_row(df: pd.DataFrame, numeric_cols: list, label_col: str = "Driver Name"):
+    total = {}
+    for col in df.columns:
+        if col == label_col:
+            total[col] = "TOTAL"
+        elif col == "Avg":
+            valid = pd.to_numeric(df["Avg"], errors="coerce").dropna()
+            total[col] = round(float(valid.mean()), 2) if not valid.empty else 0.0
+        elif col in numeric_cols:
+            total[col] = round(float(pd.to_numeric(df[col], errors="coerce").sum()), 3)
         else:
-            supabase.table("driver_salary_rates").update({"driver_name": new_name}).ilike("driver_name", old_name).eq("bus_number", bus).execute()
-            updated += 1
-    counts["driver_salary_rates"] = updated
+            total[col] = ""
+    return pd.DataFrame({k: [v] for k, v in total.items()})
 
-    res = supabase.table("drivers").select("driver_name").ilike("driver_name", old_name).execute()
-    if res.data:
-        existing = supabase.table("drivers").select("driver_name").eq("driver_name", new_name).execute()
-        supabase.table("drivers").delete().ilike("driver_name", old_name).execute() if existing.data else \
-            supabase.table("drivers").update({"driver_name": new_name}).ilike("driver_name", old_name).execute()
-        counts["drivers"] = 1
+
+# ──────────────────────────────────────────────
+# HELPER: Date range filter
+# ──────────────────────────────────────────────
+def _get_date_range(year, month, period):
+    if period == "1-15":
+        return pd.Timestamp(year, month, 1), pd.Timestamp(year, month, 15)
+    elif period == "16-31":
+        last_day = calendar.monthrange(year, month)[1]
+        return pd.Timestamp(year, month, 16), pd.Timestamp(year, month, last_day)
     else:
-        counts["drivers"] = 0
-    return counts
+        last_day = calendar.monthrange(year, month)[1]
+        return pd.Timestamp(year, month, 1), pd.Timestamp(year, month, last_day)
 
 
-# ══════════════════════════════════════════════
-# DRIVER LICENSE INFO + FULL DRIVER REPORT
-# ══════════════════════════════════════════════
-
-def get_driver_license(driver_name: str) -> dict:
-    res = supabase.table("drivers").select("license_number, license_validity, phone").eq("driver_name", driver_name.strip()).execute()
-    if res.data:
-        r = res.data[0]
-        return {"license_number": r.get("license_number") or "", "license_validity": r.get("license_validity"), "phone": r.get("phone") or ""}
-    return {"license_number": "", "license_validity": None, "phone": ""}
-
-
-def save_driver_license(driver_name: str, license_number: str, license_validity, phone: str = "") -> None:
-    supabase.table("drivers").upsert({
-        "driver_name": driver_name.strip(), "license_number": license_number.strip(),
-        "license_validity": str(license_validity) if license_validity else None, "phone": phone.strip(),
-    }, on_conflict="driver_name").execute()
-
-
-def get_driver_report(driver_name: str, from_date: str, to_date: str) -> dict:
-    """Ek driver ka poora monthly report — buses, duties, diesel/mileage, income, salary due/given/remaining."""
-    driver_key = driver_name.strip().lower()
-    res = supabase.table("vehicle_records") \
-        .select("driver_name, bus_number, date, status, actual_km, scheduled_km, diesel, diesel_km, income") \
-        .gte("date", from_date).lte("date", to_date).execute()
-    my_rows = [r for r in (res.data or []) if (r.get("driver_name") or "").strip().lower() == driver_key]
-
-    empty = {
-        "duties_by_bus": {}, "total_duties": 0, "buses": [], "total_actual_km": 0, "total_scheduled_km": 0,
-        "total_diesel": 0.0, "total_diesel_km": 0, "avg_mileage": 0.0, "total_income": 0,
-        "salary_due": 0.0, "salary_given": 0.0, "remaining": 0.0,
-        "daily_log": pd.DataFrame(columns=["Date", "Bus", "Status", "Actual KM", "Diesel", "Income"]),
-    }
-    if not my_rows:
-        return empty
-
-    df = pd.DataFrame(my_rows)
-    df = df[df["status"] != "On Leave"]
-    for c in ["actual_km", "scheduled_km", "diesel", "diesel_km", "income"]:
-        df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
-    if df.empty:
-        return empty
-
-    # ── Split-duty aware duty credit (bus-wise, kyunki split bus+date
-    # specific hota hai) — normal dates 1.0, split dates KM-fraction ──
-    duties_by_bus = {}
-    for bus, bus_df in df.groupby("bus_number"):
-        dates_involved = bus_df["date"].unique().tolist()
-        splits = get_duty_splits(bus, dates_involved)
-        vr_like = bus_df.rename(columns={"driver_name": "Driver Name", "date": "Date"}).copy()
-        vr_like["Status"] = "Present"
-        credits = compute_role_duty_credits(vr_like, splits, "driver")
-        duties_by_bus[bus] = credits.get(driver_name.strip(), 0.0)
-
-    diesel_rows = df[df["diesel"] > 0]
-    total_diesel, total_diesel_km = diesel_rows["diesel"].sum(), diesel_rows["diesel_km"].sum()
-
-    salary_due = sum(duties * get_driver_rate(bus, driver_name) for bus, duties in duties_by_bus.items())
-    sal_res = supabase.table("driver_salary").select("driver_name, salary, date").gte("date", from_date).lte("date", to_date).execute()
-    salary_given = sum(float(r["salary"] or 0) for r in (sal_res.data or []) if (r.get("driver_name") or "").strip().lower() == driver_key)
-
-    daily_log = df[["date", "bus_number", "status", "actual_km", "diesel", "income"]].sort_values("date", ascending=False).copy()
-    daily_log.columns = ["Date", "Bus", "Status", "Actual KM", "Diesel", "Income"]
-
-    total_duties = round(sum(duties_by_bus.values()), 2)
-    return {
-        "duties_by_bus": duties_by_bus, "total_duties": total_duties, "buses": sorted(duties_by_bus.keys()),
-        "total_actual_km": df["actual_km"].sum(), "total_scheduled_km": df["scheduled_km"].sum(),
-        "total_diesel": total_diesel, "total_diesel_km": total_diesel_km,
-        "avg_mileage": round(total_diesel_km / total_diesel, 2) if total_diesel > 0 else 0.0,
-        "total_income": df["income"].sum(), "salary_due": salary_due, "salary_given": salary_given,
-        "remaining": salary_due - salary_given, "daily_log": daily_log,
-    }
-
-
-# ══════════════════════════════════════════════
-# VEHICLE EXPENSES
-# ══════════════════════════════════════════════
-
-def save_vehicle_expenses(bus_number: str, df: pd.DataFrame) -> None:
-    records = [{
-        "bus_number": bus_number, "date": str(row["Date"]), "category": row["Category"].strip(),
-        "amount": float(row["Amount"] or 0), "description": row["Description"] or "",
-    } for _, row in df.iterrows()]
-    supabase.table("vehicle_expenses").insert(records).execute()
-
-
-def get_vehicle_expenses(bus_number: str) -> pd.DataFrame:
-    res = supabase.table("vehicle_expenses").select("*").eq("bus_number", bus_number).order("date", desc=True).execute()
-    return _to_df(res.data or [], {"date": "Date", "category": "Category", "amount": "Amount", "description": "Description"},
-                  ["id", "Date", "Category", "Amount", "Description"])
-
-
-def update_vehicle_expense(expense_id: str, updates: dict) -> None:
-    rename = {"Date": "date", "Category": "category", "Amount": "amount", "Description": "description"}
-    supabase.table("vehicle_expenses").update({rename.get(k, k): v for k, v in updates.items()}).eq("id", expense_id).execute()
-
-
-def delete_vehicle_expense(expense_id: str) -> None:
-    supabase.table("vehicle_expenses").delete().eq("id", expense_id).execute()
-
-
-def log_error(function_name: str, error_message: str, bus_number: str = "", extra_data: str = "") -> None:
-    try:
-        supabase_admin.table("error_logs").insert({
-            "function_name": function_name, "bus_number": bus_number,
-            "error_message": str(error_message), "extra_data": extra_data,
-        }).execute()
-    except Exception:
-        pass
-
-
-def update_driver_salary(record_id: str, updates: dict) -> None:
-    rename = {"Date": "date", "Driver Name": "driver_name", "Salary": "salary", "Transaction": "transaction"}
-    supabase.table("driver_salary").update({rename.get(k, k): v for k, v in updates.items()}).eq("id", record_id).execute()
-
-
-def delete_driver_salary(record_id: str) -> None:
-    supabase.table("driver_salary").delete().eq("id", record_id).execute()
-
-
-# ══════════════════════════════════════════════
-# SUPPLIERS / PRODUCTS / REQUIREMENTS
-# ══════════════════════════════════════════════
-
-def get_suppliers() -> pd.DataFrame:
-    res = supabase_admin.table("suppliers").select("*").order("name").execute()
-    df = _to_df(res.data or [], {"name": "Name", "phone": "Phone", "address": "Address", "remark": "Remark"},
-                ["id", "Name", "Phone", "Address", "Remark"])
-    if not df.empty:
-        df["Remark"] = df["Remark"].fillna("")
-    return df
-
-
-def save_supplier(name: str, phone: str, address: str, remark: str = "") -> tuple:
-    name, phone = name.strip(), (phone.strip() if phone else "")
-    if not phone:
-        return False, "no_phone"
-    if supabase_admin.table("suppliers").select("id").ilike("name", name).execute().data:
-        return False, "duplicate"
-    supabase_admin.table("suppliers").insert({
-        "name": name, "phone": phone, "address": (address or "").strip(), "remark": (remark or "").strip(),
-    }).execute()
-    return True, ""
-
-
-def delete_supplier(supplier_id: str) -> None:
-    supabase_admin.table("suppliers").delete().eq("id", supplier_id).execute()
-
-
-def get_supplier_products(supplier_id: str) -> pd.DataFrame:
-    res = supabase_admin.table("products").select("*").eq("supplier_id", supplier_id).order("purchased_date", desc=True).execute()
-    return _to_df(res.data or [], {"name": "Name", "mrp": "MRP", "latest_price": "Latest Price",
-                                    "old_price": "Old Price", "purchased_date": "Purchased Date"},
-                  ["Name", "Latest Price", "Old Price", "MRP", "Purchased Date"])
-
-
-def get_products(search: str = "") -> pd.DataFrame:
-    res = supabase_admin.table("products").select("*, suppliers(name)").order("name").execute()
-    cols = ["id", "Name", "MRP", "Latest Price", "Old Price", "Quantity", "Remark", "Supplier", "Purchased Date"]
-    if not res.data:
-        return pd.DataFrame(columns=cols)
-    df = pd.DataFrame(res.data)
-    df["Supplier"] = df["suppliers"].apply(lambda x: x["name"] if isinstance(x, dict) else "")
-    df = df.rename(columns={"name": "Name", "mrp": "MRP", "latest_price": "Latest Price", "old_price": "Old Price",
-                             "purchased_date": "Purchased Date", "quantity": "Quantity", "remark": "Remark"})
-    df["Quantity"], df["Remark"] = df["Quantity"].fillna(""), df["Remark"].fillna("")
-    if search:
-        df = df[df["Name"].str.lower().str.contains(search.lower(), na=False)]
-    return df[cols]
-
-
-def save_product(name: str, latest_price: float, mrp: float, supplier_id: str, purchased_date: str,
-                  quantity: str = "", remark: str = "") -> None:
-    name = name.strip()
-    existing = supabase_admin.table("products").select("*").eq("name", name).execute()
-    if existing.data:
-        old = existing.data[0]
-        supabase_admin.table("products").update({
-            "old_price": old.get("latest_price"), "latest_price": latest_price,
-            "mrp": mrp if mrp else old.get("mrp"), "supplier_id": supplier_id if supplier_id else old.get("supplier_id"),
-            "purchased_date": purchased_date, "quantity": quantity or old.get("quantity", ""),
-            "remark": remark or old.get("remark", ""),
-        }).eq("name", name).execute()
+# ──────────────────────────────────────────────
+# HELPER: Previous period shift (for Next flag)
+# ──────────────────────────────────────────────
+def shift_period_back(year, month, period):
+    if period == "16-31":
+        return pd.Timestamp(year, month, 1), pd.Timestamp(year, month, 15)
     else:
-        supabase_admin.table("products").insert({
-            "name": name, "mrp": mrp, "latest_price": latest_price, "old_price": None,
-            "supplier_id": supplier_id or None, "purchased_date": purchased_date, "quantity": quantity, "remark": remark,
-        }).execute()
+        prev_month = month - 1 if month > 1 else 12
+        prev_year  = year if month > 1 else year - 1
+        last_day   = calendar.monthrange(prev_year, prev_month)[1]
+        return pd.Timestamp(prev_year, prev_month, 16), pd.Timestamp(prev_year, prev_month, last_day)
 
 
-def delete_product(product_id: str) -> None:
-    supabase_admin.table("products").delete().eq("id", product_id).execute()
+# ──────────────────────────────────────────────
+# HELPER: Generate PDF — Vehicle Records
+# ──────────────────────────────────────────────
+def _safe_pdf_text(val) -> str:
+    """FPDF core fonts (Helvetica) sirf Latin-1 support karte hain — unsupported chars replace karo"""
+    text = str(val)
+    return text.encode("latin-1", errors="replace").decode("latin-1")
 
 
-def get_requirements() -> pd.DataFrame:
-    week_ago = (datetime.utcnow() - timedelta(days=7)).isoformat()
-    supabase_admin.table("product_requirements").delete().eq("fulfilled", True).lt("created_at", week_ago).execute()
-    res = supabase_admin.table("product_requirements").select("*").order("created_at", desc=True).execute()
-    df = _to_df(res.data or [], {"product_name": "Product Name", "quantity": "Quantity", "remark": "Remark",
-                                  "fulfilled": "Fulfilled", "created_at": "Created"},
-                ["id", "Product Name", "Quantity", "Remark", "Fulfilled", "Created"])
-    if not df.empty:
-        df["Created"] = pd.to_datetime(df["Created"]).dt.strftime("%Y-%m-%d")
-    return df
+def _generate_pdf(df, total_row, bus_number, month, half):
+    pdf = FPDF(orientation="L", unit="mm", format="A4")
+    pdf.add_page()
+    pdf.set_auto_page_break(auto=True, margin=10)
+    pdf.set_font("Helvetica", "B", 14)
+    month_name = date(2000, month, 1).strftime("%B")
+    pdf.cell(0, 10, _safe_pdf_text(f"Vehicle Records - {bus_number}  |  {month_name} ({half})"), ln=True, align="C")
+    pdf.ln(3)
+    cols   = list(df.columns)
+    page_w = pdf.w - 2 * pdf.l_margin
+    col_w  = page_w / len(cols)
+    pdf.set_fill_color(52, 73, 94); pdf.set_text_color(255, 255, 255)
+    pdf.set_font("Helvetica", "B", 8)
+    for col in cols:
+        pdf.cell(col_w, 8, _safe_pdf_text(col), border=1, align="C", fill=True)
+    pdf.ln()
+    pdf.set_text_color(0, 0, 0); pdf.set_font("Helvetica", "", 8)
+    for i, row in df.iterrows():
+        fill = i % 2 == 0
+        pdf.set_fill_color(245, 245, 245) if fill else pdf.set_fill_color(255, 255, 255)
+        for col in cols:
+            pdf.cell(col_w, 7, _safe_pdf_text(row[col]) if pd.notna(row[col]) else "", border=1, align="C", fill=fill)
+        pdf.ln()
+    pdf.set_fill_color(230, 240, 255); pdf.set_font("Helvetica", "B", 8)
+    for col in cols:
+        pdf.cell(col_w, 8, _safe_pdf_text(total_row.iloc[0][col]), border=1, align="C", fill=True)
+    pdf.ln()
+    return bytes(pdf.output())
 
 
-def save_requirement(product_name: str, quantity: str, remark: str) -> None:
-    supabase_admin.table("product_requirements").insert({
-        "product_name": product_name.strip(), "quantity": quantity.strip(), "remark": remark.strip(), "fulfilled": False,
-    }).execute()
+def _generate_expenses_pdf(df, bus_number, month, period):
+    pdf = FPDF(orientation="L", unit="mm", format="A4")
+    pdf.add_page()
+    pdf.set_auto_page_break(auto=True, margin=10)
+    pdf.set_font("Helvetica", "B", 14)
+    month_name = date(2000, month, 1).strftime("%B")
+    pdf.cell(0, 10, _safe_pdf_text(f"Vehicle Expenses - {bus_number}  |  {month_name} ({period})"), ln=True, align="C")
+    pdf.ln(3)
+    cols   = list(df.columns)
+    page_w = pdf.w - 2 * pdf.l_margin
+    col_w  = page_w / len(cols)
+    pdf.set_fill_color(52, 73, 94); pdf.set_text_color(255, 255, 255)
+    pdf.set_font("Helvetica", "B", 9)
+    for col in cols:
+        pdf.cell(col_w, 8, _safe_pdf_text(col), border=1, align="C", fill=True)
+    pdf.ln()
+    pdf.set_text_color(0, 0, 0); pdf.set_font("Helvetica", "", 9)
+    for i, row in df.iterrows():
+        fill = i % 2 == 0
+        pdf.set_fill_color(245, 245, 245) if fill else pdf.set_fill_color(255, 255, 255)
+        for col in cols:
+            pdf.cell(col_w, 7, _safe_pdf_text(row[col]) if pd.notna(row[col]) else "", border=1, align="C", fill=fill)
+        pdf.ln()
+    total_amount = pd.to_numeric(df["Amount"], errors="coerce").sum()
+    pdf.set_fill_color(230, 240, 255); pdf.set_font("Helvetica", "B", 9)
+    for col in cols:
+        val = "TOTAL" if col == "Category" else (f"{total_amount:,.0f}" if col == "Amount" else "")
+        pdf.cell(col_w, 8, _safe_pdf_text(val), border=1, align="C", fill=True)
+    pdf.ln()
+    return bytes(pdf.output())
 
 
-def fulfill_requirement(req_id: str, product_name: str, latest_price: float, mrp: float, supplier_id: str, purchased_date: str) -> None:
-    save_product(product_name, latest_price, mrp, supplier_id, purchased_date)
-    supabase_admin.table("product_requirements").update({"fulfilled": True}).eq("id", req_id).execute()
+# ──────────────────────────────────────────────
+# HELPER: Split Duty — ek din, driver/conductor KM ke hisaab se 2 logon me
+# baant do (dono role independent — sirf driver split, sirf conductor
+# split, ya dono, jo bhi us din chahiye)
+# ──────────────────────────────────────────────
+def _split_duty_section(bus_number: str, date_options: list):
+    st.markdown("#### 👥 Split Duty (ek din, 2 log — KM ke hisaab se)")
+    st.caption(
+        "Jis din ek driver/conductor ne half aur doosre ne baaki half chalaya "
+        "ho, us din ke liye dono logon ka apna-apna KM daalo — duty credit "
+        "(salary ke liye) automatically unke KM ke fraction ke hisaab se "
+        "baant jayega. Sirf driver split karo, sirf conductor, ya dono — "
+        "jo bhi us din laagu ho."
+    )
 
-
-def delete_requirement(req_id: str) -> None:
-    supabase_admin.table("product_requirements").delete().eq("id", req_id).execute()
-
-
-# ══════════════════════════════════════════════
-# MAINTENANCE RECORDS
-# ══════════════════════════════════════════════
-
-def get_maintenance_records(bus_number: str) -> pd.DataFrame:
-    res = supabase.table("maintenance_records").select("*").eq("bus_number", bus_number).order("record_date", desc=True).execute()
-    df = _to_df(res.data or [], {
-        "record_date": "Date", "service_type": "Service Type", "garage_name": "Garage", "labour_cost": "Labour Cost",
-        "item_cost": "Item Cost", "cost": "Cost", "next_due_date": "Next Due Date", "next_due_km": "Next Due KM", "notes": "Notes",
-    }, ["id", "Date", "Service Type", "Garage", "Labour Cost", "Item Cost", "Cost", "Next Due Date", "Next Due KM", "Notes"])
-    for col, default in [("Next Due Date", None), ("Next Due KM", None), ("Notes", ""), ("Labour Cost", 0), ("Item Cost", 0)]:
-        if not df.empty:
-            df[col] = df[col].fillna(default)
-    return df
-
-
-def save_maintenance_record(bus_number: str, record_date, service_type: str, garage_name: str, labour_cost: float,
-                             item_cost: float, notes: str, next_due_date, next_due_km, user_email: str) -> None:
-    labour_cost, item_cost = float(labour_cost or 0), float(item_cost or 0)
-    total_cost = labour_cost + item_cost
-    res = supabase.table("maintenance_records").upsert({
-        "bus_number": bus_number, "record_date": str(record_date), "service_type": service_type.strip(),
-        "garage_name": (garage_name or "").strip(), "labour_cost": labour_cost, "item_cost": item_cost, "cost": total_cost,
-        "notes": (notes or "").strip(), "next_due_date": str(next_due_date) if next_due_date else None,
-        "next_due_km": int(next_due_km) if next_due_km else None, "updated_by": user_email,
-    }, on_conflict="bus_number,record_date,service_type").execute()
-    record_id = res.data[0]["id"] if res.data else None
-    if not record_id:
+    if not date_options:
+        st.caption("Koi date load nahi hui — pehle neeche 'Load' karo.")
         return
 
-    supabase.table("maintenance_records").update({"next_due_date": None, "next_due_km": None}) \
-        .eq("bus_number", bus_number).eq("service_type", service_type.strip()).lt("record_date", str(record_date)).execute()
+    split_date = st.selectbox("Date chuno", options=date_options, key=f"split_date_{bus_number}")
+    existing = get_duty_splits(bus_number, [split_date])
+    ex_row = existing.iloc[0].to_dict() if not existing.empty else {}
 
-    if total_cost > 0:
-        supabase.table("vehicle_expenses").upsert({
-            "bus_number": bus_number, "date": str(record_date), "category": f"Maintenance - {service_type.strip()}",
-            "amount": total_cost, "description": f"{(garage_name or '').strip()} {(notes or '').strip()}".strip(),
-            "maintenance_ref_id": record_id,
-        }, on_conflict="maintenance_ref_id").execute()
+    sc1, sc2 = st.columns(2)
+    with sc1:
+        st.markdown("**🧑‍✈️ Driver Split**")
+        d1 = st.text_input("Driver 1", value=ex_row.get("Driver 1") or "", key=f"sd_d1_{bus_number}_{split_date}")
+        d1km = st.number_input("Driver 1 KM", min_value=0.0, value=float(ex_row.get("Driver 1 KM") or 0), key=f"sd_d1km_{bus_number}_{split_date}")
+        d2 = st.text_input("Driver 2", value=ex_row.get("Driver 2") or "", key=f"sd_d2_{bus_number}_{split_date}")
+        d2km = st.number_input("Driver 2 KM", min_value=0.0, value=float(ex_row.get("Driver 2 KM") or 0), key=f"sd_d2km_{bus_number}_{split_date}")
+    with sc2:
+        st.markdown("**🎫 Conductor Split**")
+        c1 = st.text_input("Conductor 1", value=ex_row.get("Conductor 1") or "", key=f"sd_c1_{bus_number}_{split_date}")
+        c1km = st.number_input("Conductor 1 KM", min_value=0.0, value=float(ex_row.get("Conductor 1 KM") or 0), key=f"sd_c1km_{bus_number}_{split_date}")
+        c2 = st.text_input("Conductor 2", value=ex_row.get("Conductor 2") or "", key=f"sd_c2_{bus_number}_{split_date}")
+        c2km = st.number_input("Conductor 2 KM", min_value=0.0, value=float(ex_row.get("Conductor 2 KM") or 0), key=f"sd_c2km_{bus_number}_{split_date}")
+
+    if d1.strip() and d2.strip() and (d1km + d2km) > 0:
+        total = d1km + d2km
+        st.caption(f"➡️ Driver credit: **{d1}** = {d1km/total:.2f} duty, **{d2}** = {d2km/total:.2f} duty")
+    if c1.strip() and c2.strip() and (c1km + c2km) > 0:
+        total_c = c1km + c2km
+        st.caption(f"➡️ Conductor credit: **{c1}** = {c1km/total_c:.2f} duty, **{c2}** = {c2km/total_c:.2f} duty")
+
+    bc1, bc2 = st.columns(2)
+    with bc1:
+        if st.button("💾 Save Split Duty", key=f"sd_save_{bus_number}_{split_date}", width='stretch'):
+            save_duty_split(
+                bus_number, split_date,
+                driver_1=d1, driver_1_km=d1km, driver_2=d2, driver_2_km=d2km,
+                conductor_1=c1, conductor_1_km=c1km, conductor_2=c2, conductor_2_km=c2km,
+            )
+            st.success(f"✅ {split_date} ka split duty saved!")
+            st.rerun()
+    with bc2:
+        if not existing.empty:
+            if st.button("🗑️ Remove Split (is date ki)", key=f"sd_del_{bus_number}_{split_date}", width='stretch'):
+                delete_duty_split(bus_number, split_date)
+                st.success(f"✅ {split_date} ka split duty hata diya — ab normal 1.0 duty (Driver/Conductor Name field wale) apply hoga.")
+                st.rerun()
+
+    all_splits = get_duty_splits(bus_number, date_options)
+    if not all_splits.empty:
+        with st.expander("📋 Is period ke saare split-duty entries"):
+            _render_html_table(all_splits.drop(columns=["id"], errors="ignore"))
+
+
+# ──────────────────────────────────────────────
+# 1. VEHICLE RECORDS
+# ──────────────────────────────────────────────
+def editable_grid(bus_number: str):
+    numeric_cols = ["Scheduled KM", "Actual KM", "Diesel", "Diesel KM", "Avg", "Income"]
+    key          = f"grid_{bus_number}"
+    ed_key       = f"editor_{bus_number}"
+    fetch_key    = f"fetched_{bus_number}"
+    confirm_key  = f"show_confirm_{bus_number}"
+    pending_key  = f"pending_df_{bus_number}"
+    sched_km_key = f"sched_km_{bus_number}"
+
+    if sched_km_key not in st.session_state:
+        st.session_state[sched_km_key] = get_scheduled_km(bus_number)
+    scheduled_km = st.session_state[sched_km_key]
+
+    st.markdown(f"### Vehicle Records {bus_number} 🚐")
+
+    if key not in st.session_state:
+        st.session_state[key] = pd.DataFrame({
+            "Date":           [date.today()],
+            "Status":         ["Present"],
+            "Driver Name":    ['None'],
+            "Conductor Name": [None],
+            "Scheduled KM":   [scheduled_km],
+            "Actual KM":      [0],
+            "Diesel":         [None],
+            "Diesel KM":      [None],
+            "Income":         [None],
+            "Remark":         [""],
+            "Next":           [False],
+        })
+
+
+    # ── Extract Records from Image ──
+    FIELD_DEFS = {
+        "Diesel":         ("diesel",         "'DSL/CNG' column. POSITIONAL RULE (most reliable — use this over header text): scan each row from RIGHT to LEFT starting at the REMARKS column (which contains 'ON ROUTE'/'LEAVE APPROVED'/'NEXT PERIOD' text). The Diesel/DSL/CNG number is in the column IMMEDIATELY to the left of REMARKS — the very last numeric column in the row, adjacent to REMARKS with nothing numeric between them. Do NOT use the 'LF' (Load Factor) or 'IPKM' columns — those are several columns further left (right after the INCOME column) and contain unrelated calculated decimal ratios that superficially look similar. If a row's REMARKS says 'ON ROUTE' and there's a number just to its left, THAT number is the Diesel/CNG value, not IPKM or LF. If genuinely blank/zero for that row, set 0 or null."),
+        "Income":         ("income",         "'Income', 'INCOME', 'Base Fare' (NOT per-km, NOT load factor)"),
+        "Remark":         ("remark",         "'Remark', 'REMARK' column — copy the exact text as-is (e.g. 'ON ROUTE', 'LEAVE APPROVED', 'ABSENT', 'NEXT PERIOD'). If empty set null."),
+        "Driver Name":    ("driver_name",    "'Driver', 'Driver Name', 'DRIVER' column — copy exact name as-is"),
+        "Conductor Name": ("conductor_name", "'Conductor', 'Conductor Name', 'COND' column — copy exact name as-is"),
+        "Scheduled KM":   ("scheduled_km",   "'Scheduled KM', 'SCH KM', 'Sch.KM' column (numeric)"),
+        "Actual KM":      ("actual_km",      "'Actual KM', 'ACT KM', 'Actual' column (numeric)"),
+    }
+
+    with st.expander("📷 Extract Records from Image (optional)"):
+        st.caption("Agar sheet chaudi hai aur do photos mein aayi hai, dono upload karo.")
+
+        st.markdown("**Kya extract karna hai?**")
+        selected_fields = st.pills(
+            "Fields",
+            options=list(FIELD_DEFS.keys()),
+            selection_mode="multi",
+            default=["Income", "Remark"],
+            key=f"extract_fields_{bus_number}",
+            label_visibility="collapsed",
+        )
+        if not selected_fields:
+            st.caption("⚠️ Kam se kam ek field select karo.")
+
+        ai_choice = st.radio(
+            "🤖 AI Model",
+            ["🤖 Claude (Accurate — 2 images ek saath)", "⚡ Groq (Fast — 1 image at a time)"],
+            index=1,
+            horizontal=True,
+            key=f"ai_choice_{bus_number}"
+        )
+
+        img_file_1 = st.file_uploader("Image 1 (Date wali, ya poori image)",
+                                       type=["jpg","jpeg","png","webp"],
+                                       key=f"inc_img1_{bus_number}")
+        img_file_2 = st.file_uploader("Image 2 (optional — baaki columns wali)",
+                                       type=["jpg","jpeg","png","webp"],
+                                       key=f"inc_img2_{bus_number}")
+
+        if img_file_1 and selected_fields and st.button("🔍 Extract", key=f"inc_extract_{bus_number}"):
+            with st.spinner("Extracting..."):
+                from src.screens.products_manager import (
+                    _extract_data_from_images, _compress_image
+                )
+
+                field_bullets = "\n".join(
+                    f"- {FIELD_DEFS[f][0]}: {FIELD_DEFS[f][1]}" for f in selected_fields
+                )
+                json_keys = ", ".join(["date"] + [FIELD_DEFS[f][0] for f in selected_fields])
+
+                always_ignore = {"IPKM", "LF", "OTH.INC", "load factor", "per-km rates"}
+                km_labels = {"Scheduled KM", "Actual KM"}
+                ignore_extra = km_labels - set(selected_fields)
+                ignore_list = ", ".join(sorted(ignore_extra | always_ignore))
+
+                prompt = (
+                    "This is a vehicle log table with varying column names across different sheets. "
+                    + ("Two images are provided — they show the SAME rows in the SAME order, "
+                       "just different columns of a wide table split across two photos. "
+                       "Merge them row-by-row by position. "
+                       if img_file_2 else "")
+                    + "Extract every row (skip the TOTAL/summary row). "
+                    "For each row extract these fields if matching column exists:\n"
+                    "- date: Convert to YYYY-MM-DD.\n"
+                    f"{field_bullets}\n\n"
+                    f"IGNORE: {ignore_list}. "
+                    + ("CRITICAL for the diesel field: it sits immediately left of the REMARKS "
+                       "column, NOT immediately left of the INCOME column (that position, a few "
+                       "columns further left, holds IPKM then LF — both must be ignored for diesel). "
+                       "Verify by counting from the right edge of the table (REMARKS is rightmost, "
+                       "diesel is one column left of it) rather than from the left. "
+                       if "Diesel" in selected_fields else "")
+                    + "If field not present set null. "
+                    f"Return ONLY JSON array with keys: {json_keys}. "
+                    "No explanation, no markdown."
+                )
+
+                if "Claude" in ai_choice:
+                    import anthropic, base64, json, re
+                    client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
+
+                    img1_bytes = _compress_image(img_file_1.read())
+                    b64_1      = base64.standard_b64encode(img1_bytes).decode("utf-8")
+
+                    content = [
+                        {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64_1}},
+                    ]
+                    if img_file_2:
+                        img2_bytes = _compress_image(img_file_2.read())
+                        b64_2      = base64.standard_b64encode(img2_bytes).decode("utf-8")
+                        content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64_2}})
+
+                    content.append({"type": "text", "text": prompt})
+
+                    try:
+                        msg = client.messages.create(
+                            model="claude-sonnet-4-6",
+                            max_tokens=4000,
+                            messages=[{"role": "user", "content": content}],
+                        )
+                        raw   = re.sub(r"```json|```", "", msg.content[0].text.strip()).strip()
+                        match = re.search(r"\[.*\]", raw, re.DOTALL)
+                        if match:
+                            raw = match.group(0)
+                        result = json.loads(raw)
+                        if not isinstance(result, list):
+                            result = []
+                    except Exception as e:
+                        st.error(f"❌ Claude extract failed: {e}")
+                        result = []
+
+                else:
+                    images = [(img_file_1.read(), img_file_1.type)]
+                    if img_file_2:
+                        images.append((img_file_2.read(), img_file_2.type))
+                    result = _extract_data_from_images(images, prompt)
+
+            if result:
+                rows = []
+                for r in result:
+                    remark_text = str(r.get("remark") or "").strip().upper() if "Remark" in selected_fields else ""
+
+                    is_absent_or_leave = ("ABSENT" in remark_text) or ("LEAVE APPROVED" in remark_text) or ("LEAVE" in remark_text and "APPROV" in remark_text)
+                    status = "On Leave" if is_absent_or_leave else "Present"
+                    is_next = "NEXT" in remark_text and "PERIOD" in remark_text
+
+                    rows.append({
+                        "Date":           pd.to_datetime(r.get("date"), errors="coerce"),
+                        "Status":         status,
+                        "Driver Name":    (r.get("driver_name") or "None") if "Driver Name" in selected_fields else "None",
+                        "Conductor Name": (r.get("conductor_name") or "None") if "Conductor Name" in selected_fields else "None",
+                        "Scheduled KM":   (0 if is_absent_or_leave else (r.get("scheduled_km") if "Scheduled KM" in selected_fields else None)),
+                        "Actual KM":      (0 if is_absent_or_leave else (r.get("actual_km") if "Actual KM" in selected_fields else None)),
+                        "Diesel":         r.get("diesel") if "Diesel" in selected_fields else None,
+                        "Diesel KM":      None,
+                        "Income":         r.get("income") if "Income" in selected_fields else None,
+                        "Remark":         "",
+                        "Next":           is_next,
+                    })
+                new_df = pd.DataFrame(rows)
+                new_df = new_df.dropna(subset=["Date"])
+                new_df["Date"] = new_df["Date"].dt.date
+                st.session_state[key] = new_df
+                st.success(f"✅ {len(new_df)} rows extracted — baaki fields bhar ke Save karo")
+                st.rerun()
+            else:
+                st.warning("⚠️ Extraction failed, fill manually.")
+    st.caption(
+        f"ℹ️ **{fuel_label(bus_number)}** yahan bharoge to: nayi date pe seedha add ho "
+        f"jayega; purani date (jisme pehle se data hai) pe **3 options milenge** — "
+        f"Yes Update (purana replace), Add Diesel (naya add), Cancel. **Explicitly '0'** "
+        f"bharoge to us date ki saari existing fills clear ho jaayengi."
+    )
+    st.data_editor(
+        st.session_state[key],
+        num_rows="dynamic",
+        width='stretch',
+        hide_index=True,
+        key=ed_key,
+        column_config={
+            "Date":           st.column_config.DateColumn("Date", default=date.today()),
+            "Status":         st.column_config.SelectboxColumn("Status", options=["Present", "On Leave"], default="Present"),
+            "Driver Name":    st.column_config.TextColumn("Driver Name"),
+            "Conductor Name": st.column_config.TextColumn("Conductor Name"),
+            "Scheduled KM":   st.column_config.NumberColumn("Scheduled KM", min_value=0, default=scheduled_km),
+            "Actual KM":      st.column_config.NumberColumn("Actual KM", min_value=0, default=0),
+            "Diesel":         st.column_config.NumberColumn(f"{fuel_label(bus_number)} (naya fill)", min_value=0.0, step=0.01, format="%.2f"),
+            "Diesel KM":      st.column_config.NumberColumn(f"{fuel_label(bus_number)} KM", min_value=0),
+            "Income":         st.column_config.NumberColumn("Income", min_value=0),
+            "Remark":         st.column_config.TextColumn("Remark"),
+            "Next":           st.column_config.CheckboxColumn("Next", default=False),
+        },
+    )
+
+    editor_state  = st.session_state.get(ed_key, {})
+    edited_df     = _apply_editor_state(st.session_state[key], editor_state)
+    on_leave_mask = edited_df["Status"] == "On Leave"
+    edited_df.loc[on_leave_mask, ["Scheduled KM", "Actual KM", "Income"]] = 0
+
+    # ── Naye vs purane data ka column-wise compare karo — sirf REAL conflict
+    #    (jaha already koi non-empty value ek alag value se overwrite ho rahi
+    #    ho) pe hi confirmation mango. Agar sirf khaali field bhari ja rahi
+    #    hai (jaise Diesel pehle blank tha), to seedha save ho jaye. ──
+    _COMPARE_COLS = ["Status", "Driver Name", "Conductor Name", "Scheduled KM",
+                     "Actual KM", "Diesel KM", "Income", "Remark", "Next"]
+
+    def _is_empty_val(v) -> bool:
+        if v is None:
+            return True
+        if isinstance(v, float) and pd.isna(v):
+            return True
+        s = str(v).strip().lower()
+        return s in ("", "none", "nan")
+
+    diesel_confirm_key = f"diesel_confirm_{bus_number}"
+    diesel_pending_key = f"diesel_pending_{bus_number}"
+
+    # ── ✅ Diesel-specific 3-button confirmation — sirf tab dikhta hai jab
+    # kisi date ka Diesel field bhara ho AUR us date ka fuel_fills me pehle
+    # se data ho. Yeh KM/Income wale generic conflict-confirmation (upar)
+    # se bilkul alag/independent hai — dono ek saath bhi dikh sakte hain. ──
+    if st.session_state.get(diesel_confirm_key):
+        pending_diesel = st.session_state.get(diesel_pending_key, [])
+        st.warning(
+            f"⚠️ Neeche di gayi dates ka {fuel_label(bus_number)} data already maujood "
+            f"hai — batao kya karna hai:"
+        )
+        for item in pending_diesel:
+            st.markdown(f"📅 **{item['date']}** — naya entered value: **{item['qty']:.2f} L**")
+
+        dc1, dc2, dc3 = st.columns(3)
+        with dc1:
+            if st.button("✅ Yes, Update", key=f"diesel_yes_{bus_number}", width='stretch'):
+                for item in pending_diesel:
+                    rate_data = get_diesel_rate_payment(bus_number, item["month"], item["period"])
+                    replace_fuel_fill_for_date(bus_number, item["date"], item["qty"], rate_data["rate"])
+                st.session_state.pop(diesel_confirm_key, None)
+                st.session_state.pop(diesel_pending_key, None)
+                st.success(f"✅ {fuel_label(bus_number)} data update ho gaya (purani saari entries replace ho gayi)!")
+                st.rerun()
+        with dc2:
+            if st.button("➕ Add Diesel", key=f"diesel_add_{bus_number}", width='stretch'):
+                for item in pending_diesel:
+                    rate_data = get_diesel_rate_payment(bus_number, item["month"], item["period"])
+                    save_fuel_fill(bus_number, item["date"], item["qty"], rate_data["rate"])
+                st.session_state.pop(diesel_confirm_key, None)
+                st.session_state.pop(diesel_pending_key, None)
+                st.success(f"✅ Naya {fuel_label(bus_number)} fill add ho gaya (purani entries wahi rahengi)!")
+                st.rerun()
+        with dc3:
+            if st.button("❌ Cancel", key=f"diesel_cancel_{bus_number}", width='stretch'):
+                st.session_state.pop(diesel_confirm_key, None)
+                st.session_state.pop(diesel_pending_key, None)
+                st.info(f"{fuel_label(bus_number)} change cancel ho gaya.")
+                st.rerun()
+
+    if st.session_state.get(confirm_key):
+        conflict_df = st.session_state.get(pending_key)
+        old_lookup  = st.session_state.get(f"{pending_key}_old", {})
+
+        st.warning("⚠️ Neeche di gayi dates ki kuch values already bhari hui hain aur alag value se badal rahi hain — pehle compare kar lo:")
+        for _, new_row in conflict_df.iterrows():
+            date_str = str(new_row["Date"])
+            old_row  = old_lookup.get(date_str, {})
+            diff_rows = []
+            for col in _COMPARE_COLS:
+                old_val = old_row.get(col, "")
+                new_val = new_row.get(col, "")
+                if not _is_empty_val(old_val) and not _is_empty_val(new_val) and str(old_val) != str(new_val):
+                    diff_rows.append({"Field": col, "Old Value": old_val, "New Value": new_val})
+            st.markdown(f"**📅 {date_str}**")
+            if diff_rows:
+                _render_html_table(pd.DataFrame(diff_rows))
+            else:
+                st.caption("(koi conflicting field nahi mila)")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("✅ Yes, Update", key=f"yes_{bus_number}"):
+                save_vehicle_records(bus_number, conflict_df)
+                st.success("✅ Updated!")
+                for k in [key, fetch_key, confirm_key, pending_key, f"{pending_key}_old"]:
+                    st.session_state.pop(k, None)
+                st.rerun()
+        with col2:
+            if st.button("❌ Cancel", key=f"no_{bus_number}"):
+                for k in [confirm_key, pending_key, f"{pending_key}_old"]:
+                    st.session_state.pop(k, None)
+                st.rerun()
     else:
-        supabase.table("vehicle_expenses").delete().eq("maintenance_ref_id", record_id).execute()
+        if st.button("💾 Save Changes", key=f"save_{bus_number}", width='stretch'):
+            cleaned_df = edited_df[
+                edited_df["Driver Name"].notna() &
+                (edited_df["Driver Name"].astype(str).str.strip() != "")
+            ].copy()
+            if cleaned_df.empty:
+                st.warning("⚠️ No valid rows to save.")
+                return
+
+            # ── ✅ Diesel/CNG yahan bharoge to woh seedha vehicle_records.diesel
+            # overwrite NAHI karta. Teen cases:
+            # 1. Khaali → kuch nahi hota
+            # 2. Positive value, us date ka fuel_fills me PEHLE SE koi data
+            #    nahi → seedha naya fill add ho jaata hai (koi confirmation nahi)
+            # 3. Positive value, us date ka data PEHLE SE hai → save nahi hota,
+            #    3-button confirmation (Yes Update / Add Diesel / Cancel) upar
+            #    dikhta hai agli baar page render hone par
+            # 4. Explicitly 0 → us date ki saari existing fills clear ho jaati hain
+            # save_fuel_fill()/clear_fuel_fills_for_date()/replace_fuel_fill_for_date()
+            # internally us date ka vehicle_records.diesel total bhi khud sync
+            # kar dete hain. ──
+            new_fill_count      = 0
+            cleared_date_count  = 0
+            diesel_conflict_pending = []
+
+            diesel_rows = [
+                (idx, row) for idx, row in cleaned_df.iterrows()
+                if row.get("Diesel") is not None and pd.notna(row.get("Diesel"))
+            ]
+            positive_dates = [
+                str(row["Date"]) for _, row in diesel_rows if float(row["Diesel"]) > 0
+            ]
+            already_filled_dates = get_existing_fuel_fill_dates(bus_number, positive_dates)
+
+            for idx, row in diesel_rows:
+                qty = float(row["Diesel"])
+                row_date_str = str(row["Date"])
+                if qty > 0:
+                    row_date   = pd.Timestamp(row["Date"])
+                    row_period = "1-15" if row_date.day <= 15 else "16-31"
+                    if row_date_str in already_filled_dates:
+                        diesel_conflict_pending.append({
+                            "date": row_date_str, "qty": qty,
+                            "month": row_date.month, "period": row_period,
+                        })
+                    else:
+                        rate_data = get_diesel_rate_payment(bus_number, row_date.month, row_period)
+                        save_fuel_fill(bus_number, row_date_str, qty, rate_data["rate"])
+                        new_fill_count += 1
+                else:
+                    # ✅ explicitly 0 — is date ki saari fills clear/reset karo
+                    cleared = clear_fuel_fills_for_date(bus_number, row_date_str)
+                    if cleared:
+                        cleared_date_count += 1
+                cleaned_df.at[idx, "Diesel"] = None  # ✅ vehicle_records save-path isko touch na kare
+
+            if diesel_conflict_pending:
+                st.session_state[diesel_pending_key] = diesel_conflict_pending
+                st.session_state[diesel_confirm_key]  = True
+
+            if fetch_key not in st.session_state:
+                st.session_state[fetch_key] = get_vehicle_records(bus_number)
+            fetched_df = st.session_state[fetch_key]
+
+            existing_by_date = {}
+            if not fetched_df.empty:
+                for _, r in fetched_df.iterrows():
+                    existing_by_date[str(r["Date"])] = r.to_dict()
+
+            safe_rows, conflict_rows, conflict_old = [], [], {}
+            for _, new_row in cleaned_df.iterrows():
+                date_str = str(new_row["Date"])
+                old_row  = existing_by_date.get(date_str)
+                if old_row is None:
+                    safe_rows.append(new_row)
+                    continue
+                has_conflict = False
+                for col in _COMPARE_COLS:
+                    old_val = old_row.get(col, "")
+                    new_val = new_row.get(col, "")
+                    if not _is_empty_val(old_val) and not _is_empty_val(new_val) and str(old_val) != str(new_val):
+                        has_conflict = True
+                        break
+                if has_conflict:
+                    conflict_rows.append(new_row)
+                    conflict_old[date_str] = old_row
+                else:
+                    safe_rows.append(new_row)  # ✅ sirf khaali fields bhar rahe ho — direct save
+
+            if safe_rows:
+                save_vehicle_records(bus_number, pd.DataFrame(safe_rows))
+
+            if conflict_rows:
+                st.session_state[pending_key]              = pd.DataFrame(conflict_rows)
+                st.session_state[f"{pending_key}_old"]      = conflict_old
+                st.session_state[confirm_key]               = True
+                msg_parts = []
+                if safe_rows:
+                    msg_parts.append(f"{len(safe_rows)} row(s) direct save ho gayi")
+                if new_fill_count:
+                    msg_parts.append(f"{new_fill_count} naya {fuel_label(bus_number)} fill add hua")
+                if cleared_date_count:
+                    msg_parts.append(f"{cleared_date_count} date ki {fuel_label(bus_number)} entries clear hui")
+                if msg_parts:
+                    st.success("✅ " + ", ".join(msg_parts) + ".")
+                if diesel_conflict_pending:
+                    st.info(f"ℹ️ {len(diesel_conflict_pending)} date(s) ke {fuel_label(bus_number)} data ke liye confirmation chahiye — neeche dekho.")
+                st.session_state.pop(fetch_key, None)
+                st.rerun()
+            else:
+                msg_parts = ["✅ Saved!"]
+                if new_fill_count:
+                    msg_parts.append(f"({new_fill_count} naya {fuel_label(bus_number)} fill bhi add hua)")
+                if cleared_date_count:
+                    msg_parts.append(f"({cleared_date_count} date ki {fuel_label(bus_number)} entries clear hui)")
+                st.success(" ".join(msg_parts))
+                if diesel_conflict_pending:
+                    st.info(f"ℹ️ {len(diesel_conflict_pending)} date(s) ke {fuel_label(bus_number)} data ke liye confirmation chahiye — neeche dekho.")
+                st.session_state.pop(key, None)
+                st.session_state.pop(fetch_key, None)
+                st.rerun()
+
+    st.markdown("### Saved Records 📋")
+
+    # ── Delete row by date ──
+    with st.expander("🗑️ Delete a record by date"):
+        del_date = st.date_input("Select date to delete", value=date.today(), key=f"del_date_{bus_number}")
+        if st.button("Delete this record", key=f"del_btn_{bus_number}"):
+            delete_vehicle_record(bus_number, str(del_date))
+            st.success(f"✅ Deleted record for {del_date}")
+            st.session_state.pop(fetch_key, None)
+            st.rerun()
+
+    if fetch_key not in st.session_state:
+        st.session_state[fetch_key] = get_vehicle_records(bus_number)
+    fetched_df = st.session_state[fetch_key]
+
+    col1, col2, col3 = st.columns([2, 2, 1])
+    with col1:
+        month = st.selectbox("Month", options=list(range(1, 13)), index=date.today().month - 1,
+                             format_func=lambda x: date(2000, x, 1).strftime("%B"), key=f"month_{bus_number}")
+    with col2:
+        default_half = "1-15" if date.today().day <= 15 else "16-31"
+        half = st.radio("Period", ["1-15", "16-31"], index=0 if default_half == "1-15" else 1,
+                        horizontal=True, key=f"half_{bus_number}")
+    with col3:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("🔄 Load", key=f"refresh_{bus_number}", width='stretch'):
+            st.session_state.pop(fetch_key, None)
+            st.rerun()
+
+    if not fetched_df.empty:
+        display_df = fetched_df.copy()
+        display_df["Date"] = pd.to_datetime(display_df["Date"])
+        if "Next" not in display_df.columns:
+            display_df["Next"] = False
+        start, end           = _get_date_range(date.today().year, month, half)
+        normal_mask          = (display_df["Date"] >= start) & (display_df["Date"] <= end) & (display_df["Next"] == False)
+        prev_start, prev_end = shift_period_back(date.today().year, month, half)
+        shifted_mask         = (display_df["Date"] >= prev_start) & (display_df["Date"] <= prev_end) & (display_df["Next"] == True)
+        display_df           = display_df[normal_mask | shifted_mask]
+        display_df["Date"]   = display_df["Date"].dt.strftime("%Y-%m-%d")
+        if "Diesel KM" not in display_df.columns:
+            display_df["Diesel KM"] = 0
+        display_df["Avg"] = (
+            pd.to_numeric(display_df["Diesel KM"], errors="coerce") /
+            pd.to_numeric(display_df["Diesel"], errors="coerce").replace(0, float("nan"))
+        ).round(2)
+        for col, default in [("Income", 0), ("Remark", "")]:
+            if col not in display_df.columns:
+                display_df[col] = default
+        display_df = display_df[["Date", "Status", "Driver Name", "Conductor Name",
+                                  "Scheduled KM", "Actual KM", "Diesel", "Diesel KM",
+                                  "Avg", "Income", "Remark", "Next"]]
+
+        # ── ✅ Split Duty section — is loaded period ki dates ke liye ──
+        with st.expander("👥 Split Duty (ek din, 2 log KM ke hisaab se)"):
+            _split_duty_section(bus_number, display_df["Date"].tolist())
+
+        # ── Kayi din ke KM combine karo (Excel jaisa merge cell) — same period me kayi groups ho sakte hain ──
+        date_options = display_df["Date"].tolist()
+        combine_key = f"km_combines_{bus_number}"
+        if combine_key not in st.session_state:
+            st.session_state[combine_key] = get_km_combines(bus_number)
+        # sirf wahi groups rakho jinki saari dates is loaded period me maujood hain
+        active_groups = [
+            g for g in st.session_state[combine_key]
+            if all(d in date_options for d in g["dates"])
+        ]
+
+        # Overlapping/duplicate groups detect karo (jaise purani testing se stale entries)
+        # — inhi ki wajah se table half-broken dikhti thi, ab UI me clearly flag karte hain.
+        _claimed = set()
+        overlapping_group_ids = set()
+        for g in active_groups:
+            if any(d in _claimed for d in g["dates"]):
+                overlapping_group_ids.add(g["id"])
+            else:
+                _claimed.update(g["dates"])
+
+        if active_groups:
+            _render_km_merged_table(display_df, active_groups)
+        else:
+            _render_html_table(display_df)
+
+        if overlapping_group_ids:
+            st.warning(
+                "⚠️ Kuch combined groups ki dates overlap kar rahi hain (purani/duplicate "
+                "entries ho sakti hain) — neeche ⚠️ mark ki hui groups ko 'Hatao' se hata do."
+            )
+
+        used_dates = {d for g in active_groups for d in g["dates"]}
+        available_dates = [d for d in date_options if d not in used_dates]
+
+        if active_groups or len(available_dates) >= 2:
+            with st.expander("🔗 Kayi Din Ka KM Combine Karo"):
+                if len(available_dates) >= 2:
+                    selected_dates = st.multiselect(
+                        "Combine karne ke liye dates chuno (2 ya usse zyada)",
+                        options=available_dates, key=f"combine_multi_{bus_number}",
+                    )
+                    if st.button("Combine Karo", key=f"combine_btn_{bus_number}",
+                                 disabled=len(selected_dates) < 2):
+                        save_km_combine(bus_number, selected_dates)
+                        st.session_state[combine_key] = get_km_combines(bus_number)
+                        st.rerun()
+                    if 0 < len(selected_dates) < 2:
+                        st.caption("⚠️ Kam se kam 2 dates chuno.")
+
+                if active_groups:
+                    st.caption("Combined groups:")
+                    for g in active_groups:
+                        dates = g["dates"]
+                        rows_g = [display_df[display_df["Date"] == d] for d in dates]
+                        sch_vals = [pd.to_numeric(r["Scheduled KM"].iloc[0], errors="coerce") if not r.empty else 0 for r in rows_g]
+                        act_vals = [pd.to_numeric(r["Actual KM"].iloc[0], errors="coerce") if not r.empty else 0 for r in rows_g]
+                        inc_vals = [pd.to_numeric(r["Income"].iloc[0], errors="coerce") if not r.empty else 0 for r in rows_g]
+                        sch_sum = sum(v for v in sch_vals if pd.notna(v))
+                        act_sum = sum(v for v in act_vals if pd.notna(v))
+                        inc_sum = sum(v for v in inc_vals if pd.notna(v))
+                        is_overlap = g["id"] in overlapping_group_ids
+                        label = f"{'⚠️ ' if is_overlap else '🔗 '}{' + '.join(dates)}"
+                        rc1, rc2, rc3 = st.columns([3, 1, 1])
+                        with rc1:
+                            st.markdown(
+                                f"<span style='{'color:#FFB347;' if is_overlap else ''}'>{label}</span>",
+                                unsafe_allow_html=True,
+                            )
+                        with rc2:
+                            # ✅ Mobile-friendly — button tap karke breakdown dikhega,
+                            # hover tooltip ki tarah phone pe fail nahi hoga
+                            if st.button("🔍 Details", key=f"combine_detail_{bus_number}_{g['id']}"):
+                                st.session_state[f"show_detail_{bus_number}_{g['id']}"] = \
+                                    not st.session_state.get(f"show_detail_{bus_number}_{g['id']}", False)
+                        with rc3:
+                            if st.button("❌ Hatao", key=f"uncombine_btn_{bus_number}_{g['id']}"):
+                                delete_km_combine(bus_number, g["id"])
+                                st.session_state[combine_key] = get_km_combines(bus_number)
+                                st.rerun()
+                        if st.session_state.get(f"show_detail_{bus_number}_{g['id']}"):
+                            detail_rows = [
+                                {"Date": d, "Scheduled KM": s, "Actual KM": a, "Income": inc}
+                                for d, s, a, inc in zip(dates, sch_vals, act_vals, inc_vals)
+                            ]
+                            detail_rows.append({
+                                "Date": "TOTAL", "Scheduled KM": sch_sum, "Actual KM": act_sum, "Income": inc_sum,
+                            })
+                            _render_html_table(pd.DataFrame(detail_rows))
+
+        total_row = build_total_row(display_df, numeric_cols, label_col="Driver Name")
+        _render_html_table(pd.DataFrame(columns=total_row.columns), total_row=total_row.iloc[0].to_dict())
+
+        # ── 💰 Payment Summary — 2 methods, per-vehicle chosen + saved.
+        # Dono methods ke result me se 1% tax + fixed deduction minus hoke
+        # Final Payment banta hai. ──
+        st.markdown("#### 💰 Payment Summary")
+        cfg_key = f"payment_cfg_{bus_number}"
+        if cfg_key not in st.session_state:
+            st.session_state[cfg_key] = get_vehicle_payment_config(bus_number)
+        cfg = st.session_state[cfg_key]
+
+        method_label = st.radio(
+            "Payment Method (is vehicle ke liye)",
+            ["Standard (Income − KM×Rate − Tax)", "IPKM Slab (kuch vehicles ke liye)"],
+            index=0 if cfg["method"] == "standard" else 1,
+            key=f"payment_method_{bus_number}", horizontal=True,
+        )
+        method = "standard" if "Standard" in method_label else "ipkm_slab"
+
+        if method == "standard":
+            pc1, pc2 = st.columns([2, 1])
+            with pc1:
+                payment_rate = st.number_input(
+                    "Rate per Actual KM (₹)", min_value=0.0, step=0.5, format="%.2f",
+                    value=float(cfg["rate"]), key=f"payment_rate_input_{bus_number}",
+                )
+            threshold, deduction = cfg["ipkm_threshold"], cfg["ipkm_deduction"]
+        else:
+            ic1, ic2 = st.columns(2)
+            with ic1:
+                threshold = st.number_input(
+                    "IPKM Threshold (amount1)", min_value=0.0, step=0.1, format="%.2f",
+                    value=float(cfg["ipkm_threshold"]), key=f"ipkm_threshold_{bus_number}",
+                )
+            with ic2:
+                deduction = st.number_input(
+                    "Deduction (amount2)", min_value=0.0, step=0.1, format="%.2f",
+                    value=float(cfg["ipkm_deduction"]), key=f"ipkm_deduction_{bus_number}",
+                )
+            payment_rate = cfg["rate"]
+
+        # ── Final step — dono methods ke liye common (1% + fixed amount) ──
+        fd1, fd2 = st.columns(2)
+        with fd1:
+            final_deduction = st.number_input(
+                "Final Fixed Deduction (₹) — payment banne ke baad minus hoga",
+                min_value=0.0, step=50.0, format="%.2f",
+                value=float(cfg["final_deduction"]), key=f"final_deduction_{bus_number}",
+            )
+        with fd2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("💾 Save Payment Config", key=f"save_payment_cfg_{bus_number}", width='stretch'):
+                save_vehicle_payment_config(bus_number, payment_rate, method, threshold, deduction, final_deduction)
+                st.session_state[cfg_key] = get_vehicle_payment_config(bus_number)
+                st.success("✅ Saved!")
+                st.rerun()
+
+        total_income    = pd.to_numeric(display_df["Income"], errors="coerce").fillna(0).sum()
+        total_actual_km = pd.to_numeric(display_df["Actual KM"], errors="coerce").fillna(0).sum()
+        PERIOD_TAX      = 11700  # ✅ fixed, har period (chahe 15 din ho ya kam/zyada) ke liye ek hi baar
+
+        if method == "standard":
+            km_cost = total_actual_km * payment_rate
+            raw_payment = total_income - km_cost - PERIOD_TAX
+            mc1, mc2, mc3, mc4 = st.columns(4)
+            mc1.metric("Total Income", f"₹{total_income:,.0f}")
+            mc2.metric("KM Cost", f"₹{km_cost:,.0f}", help=f"{total_actual_km:,.0f} km × ₹{payment_rate:.2f}")
+            mc3.metric("Tax (fixed)", f"₹{PERIOD_TAX:,.0f}")
+            mc4.metric("Payment (before final cut)", f"₹{raw_payment:,.0f}")
+        else:
+            ipkm = (total_income - PERIOD_TAX) / total_actual_km if total_actual_km > 0 else 0
+            if ipkm < threshold:
+                raw_payment = (ipkm - deduction) * total_actual_km
+                slab_used = "Below threshold"
+            else:
+                # ✅ At/above threshold — High Rate hataya, ab (Threshold − Deduction) × KM
+                raw_payment = (threshold - deduction) * total_actual_km
+                slab_used = "At/Above threshold"
+            mc1, mc2, mc3, mc4 = st.columns(4)
+            mc1.metric("Total Income", f"₹{total_income:,.0f}")
+            mc2.metric("IPKM", f"₹{ipkm:.2f}", help="(Total Income − Tax) / Total Actual KM")
+            mc3.metric("Slab Used", slab_used)
+            mc4.metric("Payment (before final cut)", f"₹{raw_payment:,.0f}")
+
+        # ── Final Payment = raw_payment − tax% − final_deduction.
+        # Tax % method ke hisaab se alag: IPKM Slab = 2%, Standard = 1% ──
+        tax_pct        = 0.02 if method == "ipkm_slab" else 0.01
+        tax_amount     = raw_payment * tax_pct
+        final_payment  = raw_payment - tax_amount - final_deduction
+        fp1, fp2, fp3 = st.columns(3)
+        fp1.metric(f"{int(tax_pct*100)}% Tax", f"₹{tax_amount:,.0f}")
+        fp2.metric("Final Fixed Deduction", f"₹{final_deduction:,.0f}")
+        fp3.metric("💵 Final Payment", f"₹{final_payment:,.0f}")
+
+        pdf_bytes = _generate_pdf(display_df, total_row, bus_number, month, half)
+        st.download_button("📥 Download PDF", data=pdf_bytes,
+                           file_name=f"vehicle_records_{bus_number}_{date(2000,month,1).strftime('%B')}_{half.replace('-','_')}.pdf",
+                           mime="application/pdf", key=f"pdf_{bus_number}")
+    else:
+        st.info("No records found.")
 
 
-def delete_maintenance_record(bus_number: str, record_id: str) -> None:
-    supabase.table("maintenance_records").delete().eq("id", record_id).eq("bus_number", bus_number).execute()
+# ──────────────────────────────────────────────
+# 2. DRIVER SALARY
+# ──────────────────────────────────────────────
+def driver_salary(bus_number: str = ""):
+    key       = f"driver_salary_{bus_number}"
+    ed_key    = f"editor_salary_{bus_number}"
+    fetch_key = f"fetched_salary_{bus_number}"
+
+    if key not in st.session_state:
+        st.session_state[key] = pd.DataFrame({
+            "Date":        [date.today()],
+            "Driver Name": [None],
+            "Salary":      [0],
+            "Transaction": [""],
+        })
+
+    st.markdown("### Driver Salary 💰")
+    st.data_editor(
+    st.session_state[key],
+    num_rows="dynamic",
+    width='stretch',
+    hide_index=True,
+    key=ed_key,
+    column_config={
+        "Date":        st.column_config.DateColumn("Date", default=date.today()),
+        "Driver Name": st.column_config.TextColumn("Driver Name"),
+        "Salary":      st.column_config.NumberColumn("Salary", min_value=0, default=0),
+        "Transaction": st.column_config.SelectboxColumn("Transaction", options=["cash", "online"], default="cash"),
+    },
+)
+
+    editor_state = st.session_state.get(ed_key, {})
+    edited_df    = _apply_editor_state(st.session_state[key], editor_state)
+
+    if st.button("💾 Save Changes", key=f"save_salary_{bus_number}"):
+        cleaned_df = edited_df[
+            edited_df["Driver Name"].notna() &
+            (edited_df["Driver Name"].astype(str).str.strip() != "")
+        ].copy()
+        if cleaned_df.empty:
+            st.warning("⚠️ No valid rows to save.")
+            return
+        save_driver_salary(cleaned_df, bus_number=bus_number)
+        st.success("✅ Saved!")
+        st.session_state.pop(key, None)
+        st.session_state.pop(ed_key, None)  
+        st.session_state.pop(fetch_key, None)
+        st.rerun()
+        
+    st.markdown("### Saved Salary Records 📋")
+    col1, col2, col3 = st.columns([2, 2, 1])
+    with col1:
+        sal_month = st.selectbox("Month", options=list(range(1, 13)), index=date.today().month - 1,
+                                 format_func=lambda x: date(2000, x, 1).strftime("%B"),
+                                 key=f"sal_month_{bus_number}")
+    with col2:
+        default_half = "1-15" if date.today().day <= 15 else "16-31"
+        sal_half = st.radio("Period", ["1-15", "16-31"], index=0 if default_half == "1-15" else 1,
+                            horizontal=True, key=f"sal_half_{bus_number}")
+    with col3:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("🔄 Load", key=f"ref_sal_{bus_number}", width='stretch'):
+            st.session_state.pop(fetch_key, None)
+            st.rerun()
+
+    if fetch_key not in st.session_state:
+        st.session_state[fetch_key] = get_driver_salary(bus_number=bus_number)
+    fetched_df = st.session_state[fetch_key]
+
+    if not fetched_df.empty:
+        disp = fetched_df.copy()
+        disp["Date"] = pd.to_datetime(disp["Date"])
+        start, end   = _get_date_range(date.today().year, sal_month, sal_half)
+        disp         = disp[(disp["Date"] >= start) & (disp["Date"] <= end)].copy()
+        disp["Date"] = disp["Date"].dt.strftime("%Y-%m-%d")
+
+        st.data_editor(
+            disp, width='stretch', hide_index=True, num_rows="dynamic",
+            key=f"edit_sal_{bus_number}",
+            column_config={
+                "id":          None,
+                "Date":        st.column_config.TextColumn("Date"),
+                "Driver Name": st.column_config.TextColumn("Driver Name"),
+                "Salary":      st.column_config.NumberColumn("Salary", min_value=0),
+                "Transaction": st.column_config.TextColumn("Transaction"),
+                "Updated By":  None,
+            }
+        )
+
+        if st.button("💾 Update Salary", key=f"update_sal_{bus_number}"):
+            sal_state = st.session_state.get(f"edit_sal_{bus_number}", {})
+            for row_idx, changes in sal_state.get("edited_rows", {}).items():
+                update_driver_salary(disp.iloc[row_idx]["id"], changes)
+            for row_idx in sorted(sal_state.get("deleted_rows", []), reverse=True):
+                delete_driver_salary(disp.iloc[row_idx]["id"])
+            st.success("✅ Updated!")
+            st.session_state.pop(fetch_key, None)
+            st.rerun()
+
+        total_row = build_total_row(disp, ["Salary"], label_col="Driver Name")
+        _render_html_table(pd.DataFrame(columns=total_row.columns), total_row=total_row.iloc[0].to_dict())
+    else:
+        st.info("No records found.")
 
 
-def get_previous_service_date(bus_number: str, service_type: str, before_date):
-    res = supabase.table("maintenance_records").select("record_date").eq("bus_number", bus_number) \
-        .eq("service_type", service_type).lt("record_date", str(before_date)).order("record_date", desc=True).limit(1).execute()
-    return res.data[0]["record_date"] if res.data else None
+# ──────────────────────────────────────────────
+# 3. VEHICLE EXPENSES
+# ──────────────────────────────────────────────
+def expenses(bus_number: str = ""):
+    key       = f"expenses_{bus_number}"
+    ed_key    = f"editor_expenses_{bus_number}"
+    fetch_key = f"fetched_expenses_{bus_number}"
+
+    if key not in st.session_state:
+        st.session_state[key] = pd.DataFrame({
+            "Date":        [date.today()],
+            "Category":    [""],
+            "Amount":      [0],
+            "Description": [""],
+        })
+
+    st.markdown("### Vehicle Expenses 🧾")
+    st.data_editor(
+        st.session_state[key],
+        num_rows="dynamic",
+        width='stretch',
+        hide_index=True,
+        key=ed_key,
+        column_config={
+            "Date":        st.column_config.DateColumn("Date", default=date.today()),
+            "Category":    st.column_config.TextColumn("Category"),
+            "Amount":      st.column_config.NumberColumn("Amount", min_value=0, default=0),
+            "Description": st.column_config.TextColumn("Description"),
+        },
+    )
+
+    editor_state = st.session_state.get(ed_key, {})
+    edited_df    = _apply_editor_state(st.session_state[key], editor_state)
+
+    if st.button("💾 Save Changes", key=f"save_expenses_{bus_number}"):
+        cleaned_df = edited_df[
+            edited_df["Category"].notna() &
+            (edited_df["Category"].str.strip() != "")
+        ].copy()
+        if cleaned_df.empty:
+            st.warning("⚠️ No valid rows to save.")
+            return
+        save_vehicle_expenses(bus_number, cleaned_df)
+        st.success("✅ Saved!")
+        st.session_state.pop(key, None)
+        st.session_state.pop(ed_key, None)  
+        st.session_state.pop(fetch_key, None)
+        st.rerun()
+
+    st.markdown("### Saved Expenses 📋")
+    if fetch_key not in st.session_state:
+        st.session_state[fetch_key] = get_vehicle_expenses(bus_number)
+    fetched_df = st.session_state[fetch_key]
+
+    col1, col2, col3 = st.columns([2, 2, 1])
+    with col1:
+        exp_month = st.selectbox("Month", options=list(range(1, 13)), index=date.today().month - 1,
+                                 format_func=lambda x: date(2000, x, 1).strftime("%B"),
+                                 key=f"exp_month_{bus_number}")
+    with col2:
+        exp_period = st.radio("Period", ["1-15", "16-31", "01-31"], index=2,
+                              horizontal=True, key=f"exp_period_{bus_number}")
+    with col3:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("🔄 Refresh", key=f"ref_exp_{bus_number}", width='stretch'):
+            st.session_state.pop(fetch_key, None)
+            st.rerun()
+
+    if not fetched_df.empty:
+        display_exp = fetched_df.copy()
+        display_exp["Date"] = pd.to_datetime(display_exp["Date"])
+        start, end  = _get_date_range(date.today().year, exp_month, exp_period)
+        display_exp = display_exp[(display_exp["Date"] >= start) & (display_exp["Date"] <= end)].copy()
+        display_exp["Date"] = display_exp["Date"].dt.strftime("%Y-%m-%d")
+
+        st.data_editor(
+            display_exp, width='stretch', hide_index=True, num_rows="dynamic",
+            key=f"edit_exp_{bus_number}",
+            column_config={
+                "id":          None,
+                "Date":        st.column_config.TextColumn("Date"),
+                "Category":    st.column_config.TextColumn("Category"),
+                "Amount":      st.column_config.NumberColumn("Amount", min_value=0),
+                "Description": st.column_config.TextColumn("Description"),
+            }
+        )
+
+        if st.button("💾 Update Expenses", key=f"update_exp_{bus_number}"):
+            exp_state = st.session_state.get(f"edit_exp_{bus_number}", {})
+            for row_idx, changes in exp_state.get("edited_rows", {}).items():
+                update_vehicle_expense(display_exp.iloc[row_idx]["id"], changes)
+            for row_idx in sorted(exp_state.get("deleted_rows", []), reverse=True):
+                delete_vehicle_expense(display_exp.iloc[row_idx]["id"])
+            st.success("✅ Updated!")
+            st.session_state.pop(fetch_key, None)
+            st.rerun()
+
+        total_amount = pd.to_numeric(display_exp["Amount"], errors="coerce").sum()
+        st.markdown(f"""
+        <div style='background:#2D2D5E;border-radius:8px;padding:12px 20px;margin-top:8px;'>
+            <span style='color:#aaa;'>Total: </span>
+            <span style='color:#7B8CFF;font-size:1.2rem;font-weight:bold;'>₹{total_amount:,.0f}</span>
+        </div>""", unsafe_allow_html=True)
+
+        pdf_data = _generate_expenses_pdf(
+            display_exp[["Date", "Category", "Amount", "Description"]],
+            bus_number, exp_month, exp_period
+        )
+        st.download_button("📥 Download PDF", data=pdf_data,
+                           file_name=f"expenses_{bus_number}_{date(2000,exp_month,1).strftime('%B')}_{exp_period.replace('-','_')}.pdf",
+                           mime="application/pdf", key=f"exp_pdf_{bus_number}")
+    else:
+        st.info("No records found.")
 
 
-def get_km_between(bus_number: str, start_date, end_date) -> int:
-    query = supabase.table("vehicle_records").select("actual_km").eq("bus_number", bus_number)
-    if start_date: query = query.gt("date", str(start_date))
-    if end_date: query = query.lte("date", str(end_date))
-    return sum(r["actual_km"] or 0 for r in query.execute().data)
+# ──────────────────────────────────────────────
+# 4. DIESEL / CNG VIEW — multiple fills per date allowed
+# ──────────────────────────────────────────────
+def diesel_view(bus_number: str = ""):
+    fuel = fuel_label(bus_number)
+    st.markdown(f"### {fuel} View ⛽")
+
+    col1, col2, col3 = st.columns([2, 2, 1])
+    with col1:
+        d_month = st.selectbox("Month", options=list(range(1, 13)),
+                               index=date.today().month - 1,
+                               format_func=lambda x: date(2000, x, 1).strftime("%B"),
+                               key=f"diesel_month_{bus_number}")
+    with col2:
+        d_period = st.radio("Period", ["1-15", "16-31", "01-31"],
+                            index=2, horizontal=True,
+                            key=f"diesel_period_{bus_number}")
+    with col3:
+        st.markdown("<br>", unsafe_allow_html=True)
+        load = st.button("🔄 Load", key=f"diesel_load_{bus_number}", width='stretch')
+
+    # ✅ DB se rate + payment load karo (bus + month + period wise)
+    state_key = f"diesel_state_{bus_number}_{d_month}_{d_period}"
+    if state_key not in st.session_state or load:
+        st.session_state[state_key] = get_diesel_rate_payment(bus_number, d_month, d_period)
+
+    saved = st.session_state[state_key]
+
+    universal_rate = st.number_input(
+        f"⛽ Default rate ({fuel})",
+        min_value=0.0, step=0.01, format="%.2f",
+        value=saved["rate"],
+        key=f"diesel_rate_input_{bus_number}_{d_month}_{d_period}"
+    )
+
+    start, end = _get_date_range(date.today().year, d_month, d_period)
+
+    # ── ✅ Naya fill add karo — ek din mein jitni baar chaho fill kar sakte ho ──
+    st.markdown(f"#### ➕ Add {fuel} Fill")
+    fc1, fc2, fc3, fc4 = st.columns([2, 2, 2, 1])
+    with fc1:
+        fill_date = st.date_input("Date", value=date.today(), key=f"fill_date_{bus_number}")
+    with fc2:
+        fill_qty = st.number_input(f"{fuel} (L)", min_value=0.0, step=0.01, format="%.2f",
+                                    key=f"fill_qty_{bus_number}")
+    with fc3:
+        fill_rate = st.number_input("Rate (₹/L)", min_value=0.0, step=0.01, format="%.2f",
+                                     value=universal_rate, key=f"fill_rate_{bus_number}")
+    with fc4:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("Add", key=f"fill_add_{bus_number}", width='stretch'):
+            if fill_qty > 0:
+                save_fuel_fill(bus_number, str(fill_date), fill_qty, fill_rate)
+                st.session_state.pop(f"fills_df_{bus_number}", None)
+                st.success("✅ Entry added!")
+                st.rerun()
+            else:
+                st.warning(f"⚠️ {fuel} quantity 0 se zyada honi chahiye.")
+
+    fetch_key = f"fills_df_{bus_number}"
+    if load or fetch_key not in st.session_state:
+        st.session_state[fetch_key] = get_fuel_fills(
+            bus_number, str(start.date()), str(end.date())
+        )
+    df = st.session_state.get(fetch_key, pd.DataFrame())
+
+    # ── Migration nudge — sirf df empty hone par nahi, balki JAB BHI
+    # kahin bhi (kisi bhi period me) legacy vehicle_records.diesel data
+    # ho jo fuel_fills me abhi tak nahi aaya — taaki koi bhi date miss na ho ──
+    unmigrated_dates = get_unmigrated_diesel_dates(bus_number)
+    if unmigrated_dates:
+        st.warning(
+            f"⚠️ Vehicle Records tab me {len(unmigrated_dates)} din ka purana "
+            f"{fuel.lower()} data bhara hua hai jo abhi yahan nahi aaya."
+        )
+        with st.expander("🔍 Kaunsi dates flag ho rahi hain (debug)"):
+            st.write(sorted(unmigrated_dates))
+        if st.button(f"📦 Purana {fuel} data migrate karo ({len(unmigrated_dates)} din)", key=f"migrate_{bus_number}"):
+            count = migrate_diesel_to_fuel_fills(bus_number)
+            st.session_state.pop(fetch_key, None)
+            if count:
+                st.success(f"✅ {count} purani entries migrate ho gayi! Refresh ho raha hai...")
+            else:
+                st.error(
+                    "⚠️ Koi entry migrate nahi hui — matlab in dates ka diesel value 0 ya "
+                    "khaali hai (sirf date column ka mismatch tha), ya fuel_fills me pehle "
+                    "se hi (kisi aur reason se) row maujood hai. Neeche dates check karo."
+                )
+            st.rerun()
+
+    if df.empty:
+        st.info(f"No {fuel.lower()} records found for this period.")
+        return
+
+    st.markdown(f"#### 📋 All {fuel} Entries (individual fills)")
+    st.caption("✏️ Rate/Qty edit karne ke liye cell pe click karo.")
+    ed_key = f"diesel_editor_{bus_number}"
+    st.data_editor(
+        df, width='stretch', hide_index=True, key=ed_key,
+        column_config={
+            "id":       None,
+            "Date":     st.column_config.TextColumn("Date", disabled=True),
+            "Quantity": st.column_config.NumberColumn(f"{fuel} (L)", min_value=0.0, format="%.2f"),
+            "Rate":     st.column_config.NumberColumn("Rate (₹/L)", min_value=0.0, format="%.2f"),
+            "Amount":   st.column_config.NumberColumn("Amount (₹)", disabled=True, format="%.2f"),
+        }
+    )
+    editor_state = st.session_state.get(ed_key, {})
+    if editor_state.get("edited_rows"):
+        changed = False
+        for row_idx, changes in editor_state["edited_rows"].items():
+            if row_idx < len(df):
+                update_fuel_fill(bus_number, df.iloc[row_idx]["id"], changes)
+                changed = True
+        if changed:
+            st.session_state.pop(fetch_key, None)
+            st.session_state.pop(ed_key, None)
+            st.rerun()
+
+    # ── ✅ Explicit Delete section — data_editor ka checkbox-select+Delete-key
+    # tarika hide_index ke saath bharosemand nahi hai, isliye ek guaranteed
+    # dropdown+button diya hai (Vehicle Records tab ke "Delete by date" jaisa) ──
+    with st.expander(f"🗑️ Ek {fuel} entry delete karo"):
+        options = {
+            f"{row['Date']} — {row['Quantity']:.2f} L @ ₹{row['Rate']:.2f} (₹{row['Amount']:.2f})": row["id"]
+            for _, row in df.iterrows()
+        }
+        if options:
+            selected_label = st.selectbox("Entry chuno", options=list(options.keys()), key=f"del_fill_select_{bus_number}")
+            if st.button("Delete this entry", key=f"del_fill_btn_{bus_number}"):
+                delete_fuel_fill(bus_number, options[selected_label])
+                st.success("✅ Entry delete ho gayi!")
+                st.session_state.pop(fetch_key, None)
+                st.session_state.pop(ed_key, None)
+                st.rerun()
+        else:
+            st.caption("Koi entry nahi hai delete karne ke liye.")
+
+    # ── ✅ Date-wise summary — same date ke multiple fills yahan add hoke dikhenge ──
+    st.markdown(f"#### 📊 Date-wise {fuel} Summary")
+    summary_df = df.groupby("Date").agg(
+        Fills=("id", "count"), Total_Qty=("Quantity", "sum"), Total_Amount=("Amount", "sum")
+    ).reset_index()
+    summary_df.columns = ["Date", "Fills", f"Total {fuel} (L)", "Total Amount (₹)"]
+    _render_html_table(summary_df)
+
+    total_diesel = df["Quantity"].sum()
+    total_amount = df["Amount"].sum()
+
+    # ── Summary cards ──
+    st.markdown(f"""
+    <div style='background:#1e1e3a;border-radius:10px;padding:16px 24px;margin:12px 0;
+                display:flex;gap:40px;flex-wrap:wrap;'>
+        <div>
+            <div style='color:#aaa;font-size:0.85rem;'>Total {fuel}</div>
+            <div style='color:#7B8CFF;font-size:1.3rem;font-weight:bold;'>{total_diesel:.2f} L</div>
+        </div>
+        <div>
+            <div style='color:#aaa;font-size:0.85rem;'>Total Amount</div>
+            <div style='color:#FFB347;font-size:1.3rem;font-weight:bold;'>₹{total_amount:,.2f}</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── Payment Status (editable + saved per bus+month+period) ──
+    st.markdown("#### Payment Status")
+
+    edit_mode_key = f"diesel_pay_edit_{bus_number}_{d_month}_{d_period}"
+    if edit_mode_key not in st.session_state:
+        st.session_state[edit_mode_key] = False
+
+    is_locked = saved["payment_done"] and not st.session_state[edit_mode_key]
+
+    pay_col1, pay_col2 = st.columns(2)
+    with pay_col1:
+        paid_amount = st.number_input(
+            "Amount Paid (₹)", min_value=0.0, step=0.01, format="%.2f",
+            value=saved["paid_amount"],
+            disabled=is_locked,
+            key=f"diesel_paid_input_{bus_number}_{d_month}_{d_period}"
+        )
+    with pay_col2:
+        payment_done = st.checkbox(
+            "✅ Payment Done",
+            value=saved["payment_done"],
+            disabled=is_locked,
+            key=f"diesel_pay_chk_{bus_number}_{d_month}_{d_period}"
+        )
+
+    btn_col1, btn_col2 = st.columns([1, 1])
+    with btn_col1:
+        if st.button("💾 Save Rate & Payment", key=f"diesel_save_{bus_number}_{d_month}_{d_period}",
+                     width='stretch'):
+            save_diesel_rate_payment(bus_number, d_month, d_period,
+                                      universal_rate, paid_amount, payment_done)
+            st.session_state[state_key] = {
+                "rate": universal_rate, "paid_amount": paid_amount, "payment_done": payment_done
+            }
+            st.session_state[edit_mode_key] = False
+            st.success("✅ Saved!")
+            st.rerun()
+    with btn_col2:
+        if saved["payment_done"] and not st.session_state[edit_mode_key]:
+            if st.button("✏️ Edit Payment", key=f"diesel_edit_{bus_number}_{d_month}_{d_period}",
+                         width='stretch'):
+                st.session_state[edit_mode_key] = True
+                st.rerun()
+
+    remaining = total_amount - paid_amount
+    if payment_done or remaining <= 0:
+        st.markdown("""
+        <div style='background:#1B5E20;border-radius:10px;padding:14px 24px;margin-top:10px;'>
+            <span style='color:#69F0AE;font-size:1.1rem;font-weight:bold;'>✅ Fully Paid</span>
+        </div>""", unsafe_allow_html=True)
+    else:
+        st.markdown(f"""
+        <div style='background:#4a1010;border-radius:10px;padding:14px 24px;margin-top:10px;
+                    display:flex;justify-content:space-between;align-items:center;'>
+            <span style='color:#FF5252;font-size:1.1rem;font-weight:bold;'>⚠️ Payment Pending</span>
+            <span style='color:#FFB347;font-size:1.2rem;font-weight:bold;'>Remaining: ₹{remaining:,.2f}</span>
+        </div>""", unsafe_allow_html=True)
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def get_avg_daily_km(bus_number: str, days: int = 30) -> float:
-    from datetime import date
-    start = date.today() - timedelta(days=days)
-    rows = supabase.table("vehicle_records").select("actual_km").eq("bus_number", bus_number).gte("date", str(start)).execute().data or []
-    return round(sum(r["actual_km"] or 0 for r in rows) / len(rows), 1) if rows else 0.0
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def get_diesel_records_raw(bus_numbers: list) -> list:
-    if not bus_numbers:
-        return []
-    return supabase.table("vehicle_records").select("bus_number, diesel, diesel_km") \
-        .in_("bus_number", bus_numbers).gt("diesel", 0).execute().data or []
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def get_income_records_raw(bus_numbers: list) -> list:
-    if not bus_numbers:
-        return []
-    return supabase.table("vehicle_records").select("bus_number, income, actual_km") \
-        .in_("bus_number", bus_numbers).gt("actual_km", 0).execute().data or []
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def get_conductor_income_records_raw(bus_numbers: list) -> list:
-    """Conductor income-trend (src/ml/conductor_income_trend.py) aur
-    festival-aware conductor ranking (src/ml/festival_aware_income.py) ke
-    liye — per-record conductor + date + income + actual_km."""
-    if not bus_numbers:
-        return []
-    return supabase.table("vehicle_records").select("bus_number, date, conductor_name, income, actual_km") \
-        .in_("bus_number", bus_numbers).gt("actual_km", 0).order("date").execute().data or []
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def get_dated_income_records_raw(bus_numbers: list) -> list:
-    """Income forecasting (src/ml/income_forecast.py) aur festival-aware
-    baseline (src/ml/festival_aware_income.py) ke liye — per-day bus income."""
-    if not bus_numbers:
-        return []
-    return supabase.table("vehicle_records").select("bus_number, date, income, actual_km") \
-        .in_("bus_number", bus_numbers).gt("income", 0).order("date").execute().data or []
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def get_dated_diesel_records_raw(bus_numbers: list) -> list:
-    if not bus_numbers:
-        return []
-    return supabase.table("vehicle_records").select("bus_number, date, diesel") \
-        .in_("bus_number", bus_numbers).gt("diesel", 0).order("date").execute().data or []
+# ──────────────────────────────────────────────
+# 5. SALARY CHECK
+# ──────────────────────────────────────────────
+def salary_check_view():
+    st.markdown("### Salary Check 📊")
+    col1, col2, col3 = st.columns([2, 2, 1])
+    with col1:
+        from_date = st.date_input("From", value=None, key="sc_from", format="YYYY-MM-DD")
+    with col2:
+        to_date = st.date_input("To", value=None, key="sc_to", format="YYYY-MM-DD")
+    with col3:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("🔄 Load", key="sc_load"):
+            st.session_state["salary_check_df"] = get_salary_check(
+                from_date=str(from_date) if from_date else None,
+                to_date=str(to_date) if to_date else None,
+            )
+    if "salary_check_df" in st.session_state:
+        df = st.session_state["salary_check_df"]
+        if not df.empty:
+            _render_html_table(df)
+        else:
+            st.info("No data found.")
