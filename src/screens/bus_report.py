@@ -9,7 +9,7 @@ from src.database.db import (
     get_vehicle_compliance, save_vehicle_compliance,
     get_duty_splits, compute_role_duty_credits,
 )
-from src.ui.excel_format import _get_date_range, fuel_label, _render_html_table
+from src.ui.excel_format import _get_date_range, shift_period_back, fuel_label, _render_html_table
 
 
 
@@ -175,6 +175,34 @@ def _metric_card(label: str, value: str, sublabel: str = ""):
     """, unsafe_allow_html=True)
 
 
+def _get_vehicle_records_for_period(bus_number: str, year: int, month: int, period: str) -> pd.DataFrame:
+    """Vehicle Records tab jaisa hi 'Next Period' aware filtering karta hai:
+    agar kisi date ki entry 'Next' flag ke saath True hai, to woh apne asli
+    period ki jagah AGLE period mein dikhti hai — jaise 31-Aug ki Next=True
+    entry September ke '1-15' period mein chali jaati hai (kyunki
+    shift_period_back("1-15") pichle month ka 16-last range return karta
+    hai). '16-31' ke liye ulta — same month ke '1-15' range ka Next=True
+    data '16-31' mein aata hai.
+    '01-31' (poora month) ke liye yeh Next-flag wala shift nahi hota — Vehicle
+    Records tab bhi is case ko simple full-month range se hi handle karta
+    hai, isliye yahan bhi wahi (plain date range) use hota hai."""
+    vr = get_vehicle_records(bus_number)
+    if vr.empty:
+        return vr
+    vr["Date"] = pd.to_datetime(vr["Date"])
+    if "Next" not in vr.columns:
+        vr["Next"] = False
+
+    start, end = _get_date_range(year, month, period)
+    if period == "01-31":
+        return vr[(vr["Date"] >= start) & (vr["Date"] <= end)]
+
+    normal_mask = (vr["Date"] >= start) & (vr["Date"] <= end) & (vr["Next"] == False)
+    prev_start, prev_end = shift_period_back(year, month, period)
+    shifted_mask = (vr["Date"] >= prev_start) & (vr["Date"] <= prev_end) & (vr["Next"] == True)
+    return vr[normal_mask | shifted_mask]
+
+
 def bus_report_view():
     _page_style()
 
@@ -275,10 +303,7 @@ def bus_report_view():
     # ── Period ka data fetch (cached) ──
     report_key = f"br_report_{bus_number}_{from_date}_{to_date}"
     if load or report_key not in st.session_state:
-        vr = get_vehicle_records(bus_number)
-        if not vr.empty:
-            vr["Date"] = pd.to_datetime(vr["Date"])
-            vr = vr[(vr["Date"] >= pd.Timestamp(from_date)) & (vr["Date"] <= pd.Timestamp(to_date))]
+        vr = _get_vehicle_records_for_period(bus_number, year, br_month, br_period)
 
         fills = get_fuel_fills(bus_number, from_date, to_date)
 
