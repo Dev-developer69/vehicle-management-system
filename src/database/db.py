@@ -691,6 +691,30 @@ def get_driver_report(driver_name: str, from_date: str, to_date: str) -> dict:
     if df.empty:
         return empty
 
+    # ── Split-duty wale din, poore din ka total actual_km nahi — sirf is
+    # driver ka apna KM-share (splits table se) dikhana/count karna hai,
+    # taaki "kitna khud chalaya" sahi se pata chale, na ki poora din double
+    # na ho jaaye dono drivers ke reports me. ──
+    def _driver_km_for_split(bus, date_str, default_km):
+        splits = splits_by_bus.get(bus, pd.DataFrame())
+        if splits.empty:
+            return default_km
+        match = splits[splits["Date"].astype(str) == str(date_str)]
+        if match.empty:
+            return default_km
+        row0 = match.iloc[0]
+        p1, p1km = str(row0.get("Driver 1") or "").strip().lower(), float(row0.get("Driver 1 KM") or 0)
+        p2, p2km = str(row0.get("Driver 2") or "").strip().lower(), float(row0.get("Driver 2 KM") or 0)
+        if driver_key == p1:
+            return p1km
+        if driver_key == p2:
+            return p2km
+        return default_km
+
+    df["actual_km"] = df.apply(
+        lambda r: _driver_km_for_split(r["bus_number"], r["date"], r["actual_km"]), axis=1
+    )
+
     # ── Split-duty aware duty credit (bus-wise, kyunki split bus+date
     # specific hota hai) — normal dates 1.0, split dates KM-fraction ──
     duties_by_bus = {}
