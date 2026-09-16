@@ -214,43 +214,52 @@ def bus_report_view():
 
     st.markdown("---")
 
-    # ── Vehicle Info & Compliance (editable) ──
-    st.markdown("#### 📋 Vehicle Info & Compliance")
+    # ══════════════════════════════════════════════
+    # 📋 Vehicle Info & Compliance — ab ek collapsed
+    # dropdown (expander) ke andar. Saved details
+    # (agar hain) fields me already bhari hui dikhengi
+    # jaise pehle dikhti thi — sirf edit karne ke liye
+    # ab dropdown kholna padega, warna woh band rahega
+    # aur page saaf/chhota dikhega.
+    # ══════════════════════════════════════════════
     comp = get_vehicle_compliance(bus_number)
 
     def _default_date(key):
         return pd.to_datetime(comp[key]).date() if comp.get(key) else date.today()
 
-    cc1, cc2, cc3 = st.columns(3)
-    with cc1:
-        owner_name = st.text_input("Owner Name", value=comp.get("owner_name") or "", key="br_owner")
-        route_name = st.text_input("Route Name", value=comp.get("route_name") or "", key="br_route")
-    with cc2:
-        capacity = st.number_input("Capacity", min_value=0, value=int(comp.get("capacity") or 0), key="br_capacity")
-        registration_date = st.date_input("Registration Date", value=_default_date("registration_date"), key="br_reg_date")
-    with cc3:
-        insurance_validity = st.date_input("Insurance Validity", value=_default_date("insurance_validity"), key="br_insurance")
-        fitness_validity   = st.date_input("Fitness Validity",   value=_default_date("fitness_validity"),   key="br_fitness")
+    with st.expander("📋 Vehicle Info & Compliance — edit karne ke liye kholo", expanded=False):
+        cc1, cc2, cc3 = st.columns(3)
+        with cc1:
+            owner_name = st.text_input("Owner Name", value=comp.get("owner_name") or "", key="br_owner")
+            route_name = st.text_input("Route Name", value=comp.get("route_name") or "", key="br_route")
+        with cc2:
+            capacity = st.number_input("Capacity", min_value=0, value=int(comp.get("capacity") or 0), key="br_capacity")
+            registration_date = st.date_input("Registration Date", value=_default_date("registration_date"), key="br_reg_date")
+        with cc3:
+            insurance_validity = st.date_input("Insurance Validity", value=_default_date("insurance_validity"), key="br_insurance")
+            fitness_validity   = st.date_input("Fitness Validity",   value=_default_date("fitness_validity"),   key="br_fitness")
 
-    cc4, cc5 = st.columns(2)
-    with cc4:
-        pollution_validity = st.date_input("Pollution (PUC) Validity", value=_default_date("pollution_validity"), key="br_pollution")
-    with cc5:
-        road_tax_validity   = st.date_input("Road Tax Validity",        value=_default_date("road_tax_validity"),   key="br_roadtax")
+        cc4, cc5 = st.columns(2)
+        with cc4:
+            pollution_validity = st.date_input("Pollution (PUC) Validity", value=_default_date("pollution_validity"), key="br_pollution")
+        with cc5:
+            road_tax_validity   = st.date_input("Road Tax Validity",        value=_default_date("road_tax_validity"),   key="br_roadtax")
 
-    if st.button("💾 Save Vehicle Info", key="br_save_compliance"):
-        save_vehicle_compliance(
-            bus_number,
-            owner_name=owner_name, route_name=route_name, capacity=capacity,
-            registration_date=str(registration_date),
-            insurance_validity=str(insurance_validity),
-            fitness_validity=str(fitness_validity),
-            pollution_validity=str(pollution_validity),
-            road_tax_validity=str(road_tax_validity),
-        )
-        st.success("✅ Vehicle info saved!")
-        st.rerun()
+        if st.button("💾 Save Vehicle Info", key="br_save_compliance"):
+            save_vehicle_compliance(
+                bus_number,
+                owner_name=owner_name, route_name=route_name, capacity=capacity,
+                registration_date=str(registration_date),
+                insurance_validity=str(insurance_validity),
+                fitness_validity=str(fitness_validity),
+                pollution_validity=str(pollution_validity),
+                road_tax_validity=str(road_tax_validity),
+            )
+            st.success("✅ Vehicle info saved!")
+            st.rerun()
 
+    # ── Validity Status: yeh bahar hi rahega, taaki dropdown
+    # band hone par bhi expiry warnings dikhti rahen ──
     st.markdown("**Validity Status:**")
     vc1, vc2, vc3, vc4 = st.columns(4)
     with vc1:
