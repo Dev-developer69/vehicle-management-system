@@ -12,12 +12,13 @@ from src.ui.excel_format import _get_date_range, fuel_label, _render_html_table
 
 
 def _page_style():
-    """Bus Report page ka background color + Streamlit ka default header/toolbar
-    hide (login_page jaisa hi pattern)."""
+    """Bus Report page ka background color (deep maroon/amber theme) +
+    mobile-responsive font/padding fixes + Streamlit ka default
+    header/toolbar hide (login_page jaisa hi pattern)."""
     st.markdown("""
         <style>
             [data-testid="stAppViewContainer"] {
-                background: #0D1B1B !important;
+                background: #2B1518 !important;
             }
             [data-testid="stHeader"],
             [data-testid="stToolbar"],
@@ -29,6 +30,24 @@ def _page_style():
             }
             .block-container {
                 padding-top: 1.5rem !important;
+                padding-left: 1rem !important;
+                padding-right: 1rem !important;
+                max-width: 100% !important;
+            }
+
+            /* ── Mobile fixes: chhoti screens pe text readable rahe ── */
+            @media (max-width: 640px) {
+                .block-container {
+                    padding-left: 0.6rem !important;
+                    padding-right: 0.6rem !important;
+                }
+                [data-testid="column"] {
+                    min-width: 100% !important;
+                    flex: 1 1 100% !important;
+                }
+                h3, h4 {
+                    font-size: 1.05rem !important;
+                }
             }
         </style>
     """, unsafe_allow_html=True)
@@ -71,15 +90,20 @@ def _validity_status(label: str, val_date):
 
 
 def _metric_card(label: str, value: str, sublabel: str = ""):
-    """App-wide gradient-card style (Quick Overview ke Summary Cards jaisa
-    hi) — plain st.metric ke bajaye consistent look ke liye."""
-    sub_html = f"<div style='color:#d0f5ee;font-size:0.7rem;margin-top:3px;'>{sublabel}</div>" if sublabel else ""
+    """App-wide gradient-card style (maroon/amber theme) — plain st.metric ke
+    bajaye consistent look ke liye. Font-sizes clamp() se scale hote hain
+    taaki mobile pe bhi text chhota/crushed na lage aur readable rahe."""
+    sub_html = (
+        f"<div style='color:#f5d9cf;font-size:clamp(0.68rem,2.6vw,0.78rem);"
+        f"margin-top:3px;'>{sublabel}</div>"
+        if sublabel else ""
+    )
     st.markdown(f"""
-    <div style='background:linear-gradient(135deg,#14A085,#0d2626);border-radius:12px;
-                padding:14px;text-align:center;border:1px solid rgba(255,255,255,0.15);
+    <div style='background:linear-gradient(135deg,#8B3A3A,#2B1518);border-radius:12px;
+                padding:14px;text-align:center;border:1px solid rgba(255,255,255,0.18);
                 min-height:88px;'>
-        <div style='color:#d0f5ee;font-size:0.78rem;'>{label}</div>
-        <div style='color:white;font-size:1.25rem;font-weight:700;margin-top:4px;'>{value}</div>
+        <div style='color:#f5d9cf;font-size:clamp(0.72rem,2.8vw,0.85rem);'>{label}</div>
+        <div style='color:white;font-size:clamp(1.05rem,4.2vw,1.35rem);font-weight:700;margin-top:4px;'>{value}</div>
         {sub_html}
     </div>
     """, unsafe_allow_html=True)
@@ -220,7 +244,7 @@ def bus_report_view():
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # ── Diesel/CNG — ab "kitne din ka" suffix ke saath, aur Mileage ki jagah
+    # ── Diesel/CNG — "kitne din ka" suffix ke saath, aur Mileage ki jagah
     # DO alag averages (Diesel KM basis aur Actual KM basis, dono) ──
     fuel              = fuel_label(bus_number)
     total_diesel      = float(fills["Quantity"].sum()) if not fills.empty else 0.0
@@ -253,7 +277,7 @@ def bus_report_view():
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # ── Payment — ab "Total Income" headline nahi, seedha Payment dikhta hai ──
+    # ── Payment ──
     raw_payment, final_payment, tax_pct = _compute_final_payment(bus_number, total_income, total_actual_km)
     st.markdown("#### 💰 Payment")
     p1, p2 = st.columns(2)
@@ -294,22 +318,21 @@ def bus_report_view():
         _metric_card("Expected Driver Salary", f"₹{expected_salary:,.0f}", sublabel="duties × per-duty rate se")
 
     st.markdown(f"""
-    <div style='background:{"#1B5E20" if salary_savings >= 0 else "#4a1010"};border-radius:10px;
-                padding:12px 20px;margin-top:10px;display:flex;justify-content:space-between;align-items:center;'>
-        <span style='color:#eee;font-size:0.9rem;'>💰 Salary Savings/Bachat (Expected − Paid)</span>
-        <span style='color:{"#69F0AE" if salary_savings >= 0 else "#FF5252"};font-size:1.2rem;font-weight:700;'>₹{salary_savings:,.0f}</span>
+    <div style='background:{"#3D5A2E" if salary_savings >= 0 else "#4a1010"};border-radius:10px;
+                padding:12px 20px;margin-top:10px;display:flex;flex-wrap:wrap;
+                justify-content:space-between;align-items:center;gap:6px;'>
+        <span style='color:#eee;font-size:clamp(0.78rem,2.8vw,0.9rem);'>💰 Salary Savings/Bachat (Expected − Paid)</span>
+        <span style='color:{"#9BE38A" if salary_savings >= 0 else "#FF5252"};font-size:clamp(1rem,3.6vw,1.2rem);font-weight:700;'>₹{salary_savings:,.0f}</span>
     </div>
     """, unsafe_allow_html=True)
 
-    # ── Final Bachat — Final Payment me se diesel cost, expenses, aur
-    # EXPECTED driver salary (accrual basis, sirf paid nahi) minus karke ek
-    # poora "sab kuch mila ke" bottom-line ──
+    # ── Final Bachat ──
     final_bachat = final_payment - total_diesel_cost - total_expenses - expected_salary
     st.markdown(f"""
-    <div style='background:linear-gradient(90deg,#14A085,#7B8CFF);border-radius:12px;
+    <div style='background:linear-gradient(90deg,#8B3A3A,#C9A227);border-radius:12px;
                 padding:20px;text-align:center;margin-top:16px;'>
-        <span style='color:#fff;font-size:0.9rem;'>Final Bachat (Final Payment − Diesel − Expenses − Expected Driver Salary)</span><br>
-        <span style='color:#FFD700;font-size:1.8rem;font-weight:800;'>₹{final_bachat:,.0f}</span>
+        <span style='color:#fff;font-size:clamp(0.8rem,2.8vw,0.9rem);'>Final Bachat (Final Payment − Diesel − Expenses − Expected Driver Salary)</span><br>
+        <span style='color:#FFF3D0;font-size:clamp(1.4rem,5.5vw,1.8rem);font-weight:800;'>₹{final_bachat:,.0f}</span>
     </div>
     """, unsafe_allow_html=True)
 
