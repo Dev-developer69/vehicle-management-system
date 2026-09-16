@@ -7,6 +7,7 @@ from src.database.db import (
     get_vehicle_records, get_fuel_fills, get_vehicle_expenses, get_driver_salary,
     get_maintenance_records, get_vehicle_payment_config, get_driver_rate,
     get_vehicle_compliance, save_vehicle_compliance,
+    get_duty_splits, compute_role_duty_credits,
 )
 from src.ui.excel_format import _get_date_range, fuel_label, _render_html_table
 
@@ -105,16 +106,12 @@ def _compute_period_metrics(vr_sub, fills_sub, exp_sub, sal_sub, bus_number):
 
     expected_salary = 0.0
     if not vr_sub.empty:
-        duty_df = vr_sub[vr_sub["Status"] != "On Leave"].copy()
-        duty_df = duty_df[
-            duty_df["Driver Name"].notna()
-            & (duty_df["Driver Name"].astype(str).str.strip().str.lower() != "none")
-        ]
-        if not duty_df.empty:
-            duties_by_driver = duty_df.groupby(duty_df["Driver Name"].astype(str).str.strip())["Date"].nunique().to_dict()
-            for driver_name, duties in duties_by_driver.items():
-                rate = get_driver_rate(bus_number, driver_name)
-                expected_salary += duties * rate
+        dates_involved = pd.to_datetime(vr_sub["Date"]).dt.strftime("%Y-%m-%d").tolist()
+        splits = get_duty_splits(bus_number, dates_involved)
+        credits = compute_role_duty_credits(vr_sub, splits, "driver")
+        for driver_name, duties in credits.items():
+            rate = get_driver_rate(bus_number, driver_name)
+            expected_salary += duties * rate
 
     return {
         "present_days": present_days, "leave_days": leave_days,
@@ -214,52 +211,43 @@ def bus_report_view():
 
     st.markdown("---")
 
-    # ══════════════════════════════════════════════
-    # 📋 Vehicle Info & Compliance — ab ek collapsed
-    # dropdown (expander) ke andar. Saved details
-    # (agar hain) fields me already bhari hui dikhengi
-    # jaise pehle dikhti thi — sirf edit karne ke liye
-    # ab dropdown kholna padega, warna woh band rahega
-    # aur page saaf/chhota dikhega.
-    # ══════════════════════════════════════════════
+    # ── Vehicle Info & Compliance (editable) ──
+    st.markdown("#### 📋 Vehicle Info & Compliance")
     comp = get_vehicle_compliance(bus_number)
 
     def _default_date(key):
         return pd.to_datetime(comp[key]).date() if comp.get(key) else date.today()
 
-    with st.expander("📋 Vehicle Info & Compliance — edit karne ke liye kholo", expanded=False):
-        cc1, cc2, cc3 = st.columns(3)
-        with cc1:
-            owner_name = st.text_input("Owner Name", value=comp.get("owner_name") or "", key="br_owner")
-            route_name = st.text_input("Route Name", value=comp.get("route_name") or "", key="br_route")
-        with cc2:
-            capacity = st.number_input("Capacity", min_value=0, value=int(comp.get("capacity") or 0), key="br_capacity")
-            registration_date = st.date_input("Registration Date", value=_default_date("registration_date"), key="br_reg_date")
-        with cc3:
-            insurance_validity = st.date_input("Insurance Validity", value=_default_date("insurance_validity"), key="br_insurance")
-            fitness_validity   = st.date_input("Fitness Validity",   value=_default_date("fitness_validity"),   key="br_fitness")
+    cc1, cc2, cc3 = st.columns(3)
+    with cc1:
+        owner_name = st.text_input("Owner Name", value=comp.get("owner_name") or "", key="br_owner")
+        route_name = st.text_input("Route Name", value=comp.get("route_name") or "", key="br_route")
+    with cc2:
+        capacity = st.number_input("Capacity", min_value=0, value=int(comp.get("capacity") or 0), key="br_capacity")
+        registration_date = st.date_input("Registration Date", value=_default_date("registration_date"), key="br_reg_date")
+    with cc3:
+        insurance_validity = st.date_input("Insurance Validity", value=_default_date("insurance_validity"), key="br_insurance")
+        fitness_validity   = st.date_input("Fitness Validity",   value=_default_date("fitness_validity"),   key="br_fitness")
 
-        cc4, cc5 = st.columns(2)
-        with cc4:
-            pollution_validity = st.date_input("Pollution (PUC) Validity", value=_default_date("pollution_validity"), key="br_pollution")
-        with cc5:
-            road_tax_validity   = st.date_input("Road Tax Validity",        value=_default_date("road_tax_validity"),   key="br_roadtax")
+    cc4, cc5 = st.columns(2)
+    with cc4:
+        pollution_validity = st.date_input("Pollution (PUC) Validity", value=_default_date("pollution_validity"), key="br_pollution")
+    with cc5:
+        road_tax_validity   = st.date_input("Road Tax Validity",        value=_default_date("road_tax_validity"),   key="br_roadtax")
 
-        if st.button("💾 Save Vehicle Info", key="br_save_compliance"):
-            save_vehicle_compliance(
-                bus_number,
-                owner_name=owner_name, route_name=route_name, capacity=capacity,
-                registration_date=str(registration_date),
-                insurance_validity=str(insurance_validity),
-                fitness_validity=str(fitness_validity),
-                pollution_validity=str(pollution_validity),
-                road_tax_validity=str(road_tax_validity),
-            )
-            st.success("✅ Vehicle info saved!")
-            st.rerun()
+    if st.button("💾 Save Vehicle Info", key="br_save_compliance"):
+        save_vehicle_compliance(
+            bus_number,
+            owner_name=owner_name, route_name=route_name, capacity=capacity,
+            registration_date=str(registration_date),
+            insurance_validity=str(insurance_validity),
+            fitness_validity=str(fitness_validity),
+            pollution_validity=str(pollution_validity),
+            road_tax_validity=str(road_tax_validity),
+        )
+        st.success("✅ Vehicle info saved!")
+        st.rerun()
 
-    # ── Validity Status: yeh bahar hi rahega, taaki dropdown
-    # band hone par bhi expiry warnings dikhti rahen ──
     st.markdown("**Validity Status:**")
     vc1, vc2, vc3, vc4 = st.columns(4)
     with vc1:
