@@ -317,12 +317,24 @@ def bus_report_view():
             sal["Date"] = pd.to_datetime(sal["Date"])
             sal = sal[(sal["Date"] >= pd.Timestamp(from_date)) & (sal["Date"] <= pd.Timestamp(to_date))]
 
-        maint = get_maintenance_records(bus_number)
+        # ── Maintenance: overdue-check poori history se (safety ke liye —
+        # koi bhi purana overdue record miss na ho), display TABLE sirf is
+        # period ke records tak scoped. Pehle 'maint' poore history ka tha
+        # (period-blind), isliye Sept ke report mein bhi July/Aug ke
+        # records dikh rahe the. ──
+        maint_all = get_maintenance_records(bus_number)
+        maint = maint_all.copy()
+        if not maint.empty:
+            maint["Date"] = pd.to_datetime(maint["Date"])
+            maint = maint[(maint["Date"] >= pd.Timestamp(from_date)) & (maint["Date"] <= pd.Timestamp(to_date))]
+            maint["Date"] = maint["Date"].dt.strftime("%Y-%m-%d")
 
-        st.session_state[report_key] = {"vr": vr, "fills": fills, "exp": exp, "sal": sal, "maint": maint}
+        st.session_state[report_key] = {"vr": vr, "fills": fills, "exp": exp, "sal": sal, "maint": maint, "maint_all": maint_all}
 
     data = st.session_state[report_key]
-    vr, fills, exp, sal, maint = data["vr"], data["fills"], data["exp"], data["sal"], data["maint"]
+    vr, fills, exp, sal, maint, maint_all = (
+        data["vr"], data["fills"], data["exp"], data["sal"], data["maint"], data["maint_all"]
+    )
 
     if vr.empty:
         st.info(f"📭 {bus_number} ke liye {date(2000, br_month, 1).strftime('%B')} ({br_period}) me koi record nahi mila.")
@@ -443,20 +455,23 @@ def bus_report_view():
 
     # ── Maintenance ──
     st.markdown("#### 🔧 Maintenance")
-    if not maint.empty:
-        overdue_shown = False
-        due_check = maint[maint["Next Due Date"].notna()].copy()
+    overdue_shown = False
+    if not maint_all.empty:
+        due_check = maint_all[maint_all["Next Due Date"].notna()].copy()
         if not due_check.empty:
             due_check["Next Due Date"] = pd.to_datetime(due_check["Next Due Date"])
             overdue = due_check[due_check["Next Due Date"] < pd.Timestamp(date.today())]
             for _, r in overdue.iterrows():
                 st.error(f"⚠️ {r['Service Type']} overdue since {r['Next Due Date'].date()}")
                 overdue_shown = True
-        if not overdue_shown:
-            st.caption("Koi overdue maintenance nahi hai.")
+    if not overdue_shown:
+        st.caption("Koi overdue maintenance nahi hai.")
+
+    if not maint.empty:
+        st.caption(f"📅 Is period ({date(2000, br_month, 1).strftime('%B')}, {br_period}) ke maintenance records:")
         _render_html_table(maint.drop(columns=["id"], errors="ignore").head(10))
     else:
-        st.info("Koi maintenance record nahi mila.")
+        st.info("Is period ke liye koi maintenance record nahi mila.")
 
     # ── Driver Salary detail (is period ke liye) ──
     if not sal.empty:
