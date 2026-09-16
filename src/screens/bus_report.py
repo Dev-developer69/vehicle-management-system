@@ -12,13 +12,6 @@ from src.database.db import (
 from src.ui.excel_format import _get_date_range, fuel_label, _render_html_table
 
 
-# ── Expected Diesel assumptions ──
-# Jitne "Actual KM" ke against diesel record (Diesel KM/fill) match nahi
-# hota, unke liye yeh 2 assumptions use hoti hain. Business ke hisaab se
-# inhe yahin se adjust kar sakte ho.
-ASSUMED_MILEAGE_KMPL = 5.0   # missing km ke liye assumed average (km per litre)
-DEFAULT_DIESEL_RATE  = 95.0  # ₹/L fallback rate, agar period me koi diesel fill record hi na ho
-
 
 def _page_style():
     """Bus Report page ka background color (deep maroon/amber theme) +
@@ -107,27 +100,6 @@ def _compute_period_metrics(vr_sub, fills_sub, exp_sub, sal_sub, bus_number):
     avg_via_diesel_km = round(total_diesel_km / diesel_for_km_calc, 2) if diesel_for_km_calc > 0 else 0.0
     avg_via_actual_km = round(total_actual_km / total_diesel, 2) if total_diesel > 0 else 0.0
 
-    # ── Expected Diesel: Present/KM/Income Vehicle Records se aate hain,
-    # lekin diesel actually fill hua ya nahi — yeh sirf Fuel Fills
-    # ("diesel wale page") ki dates se decide hota hai, Vehicle Records
-    # ke apne "Diesel KM" column se nahi (woh column zyadatar khaali/0
-    # rehta hai aur unreliable hai). Jin dates par koi fuel-fill record
-    # nahi mila, un dates ka Actual KM "uncovered" maana jata hai aur
-    # ASSUMED_MILEAGE_KMPL (5 km/L) se uska diesel expense estimate hota
-    # hai — Final Bachat me actual diesel cost ke saath jud kar minus
-    # hota hai. ──
-    filled_dates = set(pd.to_datetime(fills_sub["Date"]).dt.strftime("%Y-%m-%d")) if not fills_sub.empty else set()
-    if not vr_sub.empty:
-        vr_dates_str = pd.to_datetime(vr_sub["Date"]).dt.strftime("%Y-%m-%d")
-        covered_mask = vr_dates_str.isin(filled_dates)
-        uncovered_km = pd.to_numeric(vr_sub.loc[~covered_mask, "Actual KM"], errors="coerce").fillna(0).sum()
-    else:
-        uncovered_km = 0.0
-
-    expected_diesel_liters = round(uncovered_km / ASSUMED_MILEAGE_KMPL, 2) if uncovered_km > 0 else 0.0
-    rate_per_liter = (total_diesel_cost / total_diesel) if total_diesel > 0 else DEFAULT_DIESEL_RATE
-    expected_diesel_cost = round(expected_diesel_liters * rate_per_liter, 2)
-
     raw_payment, final_payment, tax_pct = _compute_final_payment(bus_number, total_income, total_actual_km)
 
     total_expenses = pd.to_numeric(exp_sub["Amount"], errors="coerce").fillna(0).sum() if not exp_sub.empty else 0.0
@@ -147,8 +119,6 @@ def _compute_period_metrics(vr_sub, fills_sub, exp_sub, sal_sub, bus_number):
         "actual_km": total_actual_km, "efficiency": efficiency,
         "diesel": total_diesel, "diesel_cost": total_diesel_cost, "diesel_days": diesel_days,
         "avg_diesel_km": avg_via_diesel_km, "avg_actual_km": avg_via_actual_km,
-        "uncovered_km": uncovered_km,
-        "expected_diesel_liters": expected_diesel_liters, "expected_diesel_cost": expected_diesel_cost,
         "raw_payment": raw_payment, "final_payment": final_payment, "tax_pct": tax_pct,
         "expenses": total_expenses, "salary_paid": total_salary, "expected_salary": expected_salary,
     }
@@ -385,7 +355,7 @@ def bus_report_view():
     # ── Diesel/CNG ──
     fuel = fuel_label(bus_number)
     st.markdown(f"#### ⛽ {fuel}")
-    d1, d2, d3, d4, d5 = st.columns(5)
+    d1, d2, d3, d4 = st.columns(4)
     with d1:
         _metric_card(f"Total {fuel}", f"{full['diesel']:.2f} L",
                      sublabel=_sub(f"{full['diesel_days']} din", "diesel", fmt_l))
@@ -397,15 +367,6 @@ def bus_report_view():
     with d4:
         _metric_card("Avg (Actual KM basis)", f"{full['avg_actual_km']:.2f} km/L",
                      sublabel=_sub("", "avg_actual_km", fmt_kml))
-    with d5:
-        _metric_card("⚠️ Expected Diesel", f"₹{full['expected_diesel_cost']:,.0f}",
-                     sublabel=_sub(f"{full['expected_diesel_liters']:.2f} L · {full['uncovered_km']:,.0f} uncovered km @ {ASSUMED_MILEAGE_KMPL:.0f}km/L",
-                                    "expected_diesel_cost", fmt_rs))
-
-    st.caption(
-        f"ℹ️ Expected Diesel un Actual KM ke liye estimate hai jinke liye is period me Diesel KM/fill record match nahi hua "
-        f"— {ASSUMED_MILEAGE_KMPL:.0f} km/L ke assumed average se (agar koi fill record hi nahi to poore Actual KM par)."
-    )
 
     st.markdown("<br>", unsafe_allow_html=True)
 
@@ -443,13 +404,12 @@ def bus_report_view():
     </div>
     """, unsafe_allow_html=True)
 
-    # ── Final Bachat (ab Expected Diesel bhi minus hota hai) ──
-    total_diesel_outflow = full["diesel_cost"] + full["expected_diesel_cost"]
-    final_bachat = full["final_payment"] - total_diesel_outflow - full["expenses"] - full["expected_salary"]
+    # ── Final Bachat ──
+    final_bachat = full["final_payment"] - full["diesel_cost"] - full["expenses"] - full["expected_salary"]
     st.markdown(f"""
     <div style='background:linear-gradient(90deg,#8B3A3A,#C9A227);border-radius:12px;
                 padding:20px;text-align:center;margin-top:16px;'>
-        <span style='color:#fff;font-size:clamp(0.8rem,2.8vw,0.9rem);'>Final Bachat (Final Payment − Diesel − Expected Diesel − Expenses − Expected Driver Salary)</span><br>
+        <span style='color:#fff;font-size:clamp(0.8rem,2.8vw,0.9rem);'>Final Bachat (Final Payment − Diesel − Expenses − Expected Driver Salary)</span><br>
         <span style='color:#FFF3D0;font-size:clamp(1.4rem,5.5vw,1.8rem);font-weight:800;'>₹{final_bachat:,.0f}</span>
     </div>
     """, unsafe_allow_html=True)
