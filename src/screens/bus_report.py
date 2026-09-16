@@ -73,6 +73,74 @@ def _compute_final_payment(bus_number: str, total_income: float, total_actual_km
     return raw, final, tax_pct
 
 
+def _compute_period_metrics(vr_sub, fills_sub, exp_sub, sal_sub, bus_number):
+    """Ek date-range (poora period ya half) ke liye saare summary metrics ek
+    saath nikalta hai — full period aur 1-15/16-31 split, dono ke liye
+    reuse hota hai."""
+    present_days    = len(vr_sub[vr_sub["Status"] == "Present"]) if not vr_sub.empty else 0
+    leave_days      = len(vr_sub[vr_sub["Status"] == "On Leave"]) if not vr_sub.empty else 0
+    total_actual_km = pd.to_numeric(vr_sub["Actual KM"], errors="coerce").fillna(0).sum() if not vr_sub.empty else 0.0
+    total_sched_km  = pd.to_numeric(vr_sub["Scheduled KM"], errors="coerce").fillna(0).sum() if not vr_sub.empty else 0.0
+    efficiency      = round(total_actual_km / total_sched_km * 100, 1) if total_sched_km > 0 else 0.0
+    total_income    = pd.to_numeric(vr_sub["Income"], errors="coerce").fillna(0).sum() if not vr_sub.empty else 0.0
+
+    total_diesel      = float(fills_sub["Quantity"].sum()) if not fills_sub.empty else 0.0
+    total_diesel_cost = float(fills_sub["Amount"].sum())   if not fills_sub.empty else 0.0
+    diesel_days       = int(fills_sub["Date"].nunique())   if not fills_sub.empty else 0
+    total_diesel_km   = pd.to_numeric(vr_sub["Diesel KM"], errors="coerce").fillna(0).sum() if not vr_sub.empty else 0.0
+
+    diesel_km_rows  = vr_sub[pd.to_numeric(vr_sub["Diesel KM"], errors="coerce").fillna(0) > 0] if not vr_sub.empty else vr_sub
+    diesel_km_dates = set(pd.to_datetime(diesel_km_rows["Date"]).dt.strftime("%Y-%m-%d")) if not diesel_km_rows.empty else set()
+    diesel_for_km_calc = (
+        float(fills_sub[pd.to_datetime(fills_sub["Date"]).dt.strftime("%Y-%m-%d").isin(diesel_km_dates)]["Quantity"].sum())
+        if not fills_sub.empty and diesel_km_dates else 0.0
+    )
+    avg_via_diesel_km = round(total_diesel_km / diesel_for_km_calc, 2) if diesel_for_km_calc > 0 else 0.0
+    avg_via_actual_km = round(total_actual_km / total_diesel, 2) if total_diesel > 0 else 0.0
+
+    raw_payment, final_payment, tax_pct = _compute_final_payment(bus_number, total_income, total_actual_km)
+
+    total_expenses = pd.to_numeric(exp_sub["Amount"], errors="coerce").fillna(0).sum() if not exp_sub.empty else 0.0
+    total_salary   = pd.to_numeric(sal_sub["Salary"], errors="coerce").fillna(0).sum() if not sal_sub.empty else 0.0
+
+    expected_salary = 0.0
+    if not vr_sub.empty:
+        duty_df = vr_sub[vr_sub["Status"] != "On Leave"].copy()
+        duty_df = duty_df[
+            duty_df["Driver Name"].notna()
+            & (duty_df["Driver Name"].astype(str).str.strip().str.lower() != "none")
+        ]
+        if not duty_df.empty:
+            duties_by_driver = duty_df.groupby(duty_df["Driver Name"].astype(str).str.strip())["Date"].nunique().to_dict()
+            for driver_name, duties in duties_by_driver.items():
+                rate = get_driver_rate(bus_number, driver_name)
+                expected_salary += duties * rate
+
+    return {
+        "present_days": present_days, "leave_days": leave_days,
+        "actual_km": total_actual_km, "efficiency": efficiency,
+        "diesel": total_diesel, "diesel_cost": total_diesel_cost, "diesel_days": diesel_days,
+        "avg_diesel_km": avg_via_diesel_km, "avg_actual_km": avg_via_actual_km,
+        "raw_payment": raw_payment, "final_payment": final_payment, "tax_pct": tax_pct,
+        "expenses": total_expenses, "salary_paid": total_salary, "expected_salary": expected_salary,
+    }
+
+
+def _filter_by_range(df, start, end, date_col="Date"):
+    """Ek dataframe ko given date-range ke andar filter karta hai — 01-31
+    period select hone par usko 1-15/16-31 halves me todne ke liye."""
+    if df.empty:
+        return df
+    d = pd.to_datetime(df[date_col])
+    return df[(d >= pd.Timestamp(start)) & (d <= pd.Timestamp(end))]
+
+
+def _p_suffix(p1_val, p2_val, fmt):
+    """'1-15: X  •  16-31: Y' jaisa suffix banata hai — poora month (01-31)
+    select hone par har card me dono halves ka breakdown dikhane ke liye."""
+    return f"1-15: {fmt(p1_val)}  •  16-31: {fmt(p2_val)}"
+
+
 def _validity_status(label: str, val_date):
     """Insurance/Fitness/Pollution/Road Tax jaisi validity dates ke liye
     ✅/⚠️/❌ status dikhata hai — Driver Report ke license-status jaisa hi."""
@@ -227,95 +295,97 @@ def bus_report_view():
         st.info(f"📭 {bus_number} ke liye {date(2000, br_month, 1).strftime('%B')} ({br_period}) me koi record nahi mila.")
         return
 
-    # ── Duty summary ──
-    present_days    = len(vr[vr["Status"] == "Present"]) if not vr.empty else 0
-    leave_days      = len(vr[vr["Status"] == "On Leave"]) if not vr.empty else 0
-    total_actual_km = pd.to_numeric(vr["Actual KM"], errors="coerce").fillna(0).sum() if not vr.empty else 0.0
-    total_sched_km  = pd.to_numeric(vr["Scheduled KM"], errors="coerce").fillna(0).sum() if not vr.empty else 0.0
-    efficiency      = round(total_actual_km / total_sched_km * 100, 1) if total_sched_km > 0 else 0.0
-    total_income    = pd.to_numeric(vr["Income"], errors="coerce").fillna(0).sum() if not vr.empty else 0.0
+    # ── Poore period (full/half, jo bhi selected hai) ke metrics ──
+    full = _compute_period_metrics(vr, fills, exp, sal, bus_number)
 
+    # ── Agar poora month (01-31) selected hai, to 1-15 aur 16-31 ke
+    # metrics alag se nikalo — har card ke sublabel me dono halves ka
+    # breakdown suffix ke roop me dikhane ke liye ──
+    show_split = (br_period == "01-31")
+    p1_metrics = p2_metrics = None
+    if show_split:
+        p1_start, p1_end = _get_date_range(year, br_month, "1-15")
+        p2_start, p2_end = _get_date_range(year, br_month, "16-31")
+
+        vr_p1  = _filter_by_range(vr,  p1_start, p1_end)
+        vr_p2  = _filter_by_range(vr,  p2_start, p2_end)
+        fills_p1 = _filter_by_range(fills, p1_start, p1_end)
+        fills_p2 = _filter_by_range(fills, p2_start, p2_end)
+        exp_p1 = _filter_by_range(exp, p1_start, p1_end)
+        exp_p2 = _filter_by_range(exp, p2_start, p2_end)
+        sal_p1 = _filter_by_range(sal, p1_start, p1_end)
+        sal_p2 = _filter_by_range(sal, p2_start, p2_end)
+
+        p1_metrics = _compute_period_metrics(vr_p1, fills_p1, exp_p1, sal_p1, bus_number)
+        p2_metrics = _compute_period_metrics(vr_p2, fills_p2, exp_p2, sal_p2, bus_number)
+
+    def _sub(base_sublabel, key, fmt):
+        """Existing sublabel (jaise '17 din') ke saath 1-15/16-31 breakdown
+        jodta hai — sirf jab 01-31 selected ho."""
+        if not show_split:
+            return base_sublabel
+        split_txt = _p_suffix(p1_metrics[key], p2_metrics[key], fmt)
+        return f"{base_sublabel}  ·  {split_txt}" if base_sublabel else split_txt
+
+    fmt_int   = lambda v: f"{v:.0f}"
+    fmt_km    = lambda v: f"{v:,.0f}"
+    fmt_pct   = lambda v: f"{v}%"
+    fmt_l     = lambda v: f"{v:.2f} L"
+    fmt_rs    = lambda v: f"₹{v:,.0f}"
+    fmt_kml   = lambda v: f"{v:.2f} km/L"
+
+    # ── Duty summary ──
     st.markdown(f"#### 📊 {bus_number} — {date(2000, br_month, 1).strftime('%B')} ({br_period}) Summary")
     s1, s2, s3, s4 = st.columns(4)
-    with s1: _metric_card("📅 Present Days", str(present_days))
-    with s2: _metric_card("🏖️ On Leave", str(leave_days))
-    with s3: _metric_card("🛣️ Actual KM", f"{total_actual_km:,.0f}")
-    with s4: _metric_card("🎯 Efficiency", f"{efficiency}%")
+    with s1: _metric_card("📅 Present Days", str(full["present_days"]), sublabel=_sub("", "present_days", fmt_int))
+    with s2: _metric_card("🏖️ On Leave", str(full["leave_days"]), sublabel=_sub("", "leave_days", fmt_int))
+    with s3: _metric_card("🛣️ Actual KM", f"{full['actual_km']:,.0f}", sublabel=_sub("", "actual_km", fmt_km))
+    with s4: _metric_card("🎯 Efficiency", f"{full['efficiency']}%", sublabel=_sub("", "efficiency", fmt_pct))
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # ── Diesel/CNG — "kitne din ka" suffix ke saath, aur Mileage ki jagah
-    # DO alag averages (Diesel KM basis aur Actual KM basis, dono) ──
-    fuel              = fuel_label(bus_number)
-    total_diesel      = float(fills["Quantity"].sum()) if not fills.empty else 0.0
-    total_diesel_cost = float(fills["Amount"].sum())   if not fills.empty else 0.0
-    diesel_days       = int(fills["Date"].nunique())   if not fills.empty else 0
-    total_diesel_km   = pd.to_numeric(vr["Diesel KM"], errors="coerce").fillna(0).sum() if not vr.empty else 0.0
-
-    # ✅ "Diesel KM basis" avg — sirf un dates ka diesel use karo jin dates
-    # ke liye Diesel KM actually record hua hai, poore period ka total diesel nahi.
-    diesel_km_rows  = vr[pd.to_numeric(vr["Diesel KM"], errors="coerce").fillna(0) > 0] if not vr.empty else vr
-    diesel_km_dates = set(diesel_km_rows["Date"].dt.strftime("%Y-%m-%d")) if not diesel_km_rows.empty else set()
-    diesel_for_km_calc = (
-        float(fills[fills["Date"].isin(diesel_km_dates)]["Quantity"].sum())
-        if not fills.empty and diesel_km_dates else 0.0
-    )
-
-    avg_via_diesel_km = round(total_diesel_km / diesel_for_km_calc, 2) if diesel_for_km_calc > 0 else 0.0
-    avg_via_actual_km = round(total_actual_km / total_diesel, 2) if total_diesel > 0 else 0.0
-
+    # ── Diesel/CNG ──
+    fuel = fuel_label(bus_number)
     st.markdown(f"#### ⛽ {fuel}")
     d1, d2, d3, d4 = st.columns(4)
     with d1:
-        _metric_card(f"Total {fuel}", f"{total_diesel:.2f} L", sublabel=f"{diesel_days} din")
+        _metric_card(f"Total {fuel}", f"{full['diesel']:.2f} L",
+                     sublabel=_sub(f"{full['diesel_days']} din", "diesel", fmt_l))
     with d2:
-        _metric_card("Total Cost", f"₹{total_diesel_cost:,.0f}")
+        _metric_card("Total Cost", f"₹{full['diesel_cost']:,.0f}", sublabel=_sub("", "diesel_cost", fmt_rs))
     with d3:
-        _metric_card("Avg (Diesel KM basis)", f"{avg_via_diesel_km:.2f} km/L")
+        _metric_card("Avg (Diesel KM basis)", f"{full['avg_diesel_km']:.2f} km/L",
+                     sublabel=_sub("", "avg_diesel_km", fmt_kml))
     with d4:
-        _metric_card("Avg (Actual KM basis)", f"{avg_via_actual_km:.2f} km/L")
+        _metric_card("Avg (Actual KM basis)", f"{full['avg_actual_km']:.2f} km/L",
+                     sublabel=_sub("", "avg_actual_km", fmt_kml))
 
     st.markdown("<br>", unsafe_allow_html=True)
 
     # ── Payment ──
-    raw_payment, final_payment, tax_pct = _compute_final_payment(bus_number, total_income, total_actual_km)
     st.markdown("#### 💰 Payment")
     p1, p2 = st.columns(2)
     with p1:
-        _metric_card("Payment", f"₹{raw_payment:,.0f}", sublabel="tax/deduction se pehle")
+        _metric_card("Payment", f"₹{full['raw_payment']:,.0f}",
+                     sublabel=_sub("tax/deduction se pehle", "raw_payment", fmt_rs))
     with p2:
-        _metric_card("Final Payment", f"₹{final_payment:,.0f}", sublabel=f"{int(tax_pct*100)}% tax + fixed deduction minus")
+        _metric_card("Final Payment", f"₹{full['final_payment']:,.0f}",
+                     sublabel=_sub(f"{int(full['tax_pct']*100)}% tax + fixed deduction minus", "final_payment", fmt_rs))
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # ── Expenses & Driver Salary — Paid ke saath EXPECTED salary bhi (duties
-    # × per-duty rate se), taaki "kitna bachaya" pata chale ──
-    total_expenses = pd.to_numeric(exp["Amount"], errors="coerce").fillna(0).sum() if not exp.empty else 0.0
-    total_salary   = pd.to_numeric(sal["Salary"], errors="coerce").fillna(0).sum() if not sal.empty else 0.0
-
-    expected_salary = 0.0
-    if not vr.empty:
-        duty_df = vr[vr["Status"] != "On Leave"].copy()
-        duty_df = duty_df[
-            duty_df["Driver Name"].notna()
-            & (duty_df["Driver Name"].astype(str).str.strip().str.lower() != "none")
-        ]
-        if not duty_df.empty:
-            duties_by_driver = duty_df.groupby(duty_df["Driver Name"].astype(str).str.strip())["Date"].nunique().to_dict()
-            for driver_name, duties in duties_by_driver.items():
-                rate = get_driver_rate(bus_number, driver_name)
-                expected_salary += duties * rate
-
-    salary_savings = expected_salary - total_salary
+    # ── Expenses & Driver Salary ──
+    salary_savings = full["expected_salary"] - full["salary_paid"]
 
     st.markdown("#### 🧾 Expenses & Driver Salary")
     e1, e2, e3 = st.columns(3)
     with e1:
-        _metric_card("Vehicle Expenses", f"₹{total_expenses:,.0f}")
+        _metric_card("Vehicle Expenses", f"₹{full['expenses']:,.0f}", sublabel=_sub("", "expenses", fmt_rs))
     with e2:
-        _metric_card("Driver Salary Paid", f"₹{total_salary:,.0f}")
+        _metric_card("Driver Salary Paid", f"₹{full['salary_paid']:,.0f}", sublabel=_sub("", "salary_paid", fmt_rs))
     with e3:
-        _metric_card("Expected Driver Salary", f"₹{expected_salary:,.0f}", sublabel="duties × per-duty rate se")
+        _metric_card("Expected Driver Salary", f"₹{full['expected_salary']:,.0f}",
+                     sublabel=_sub("duties × per-duty rate se", "expected_salary", fmt_rs))
 
     st.markdown(f"""
     <div style='background:{"#3D5A2E" if salary_savings >= 0 else "#4a1010"};border-radius:10px;
@@ -327,7 +397,7 @@ def bus_report_view():
     """, unsafe_allow_html=True)
 
     # ── Final Bachat ──
-    final_bachat = final_payment - total_diesel_cost - total_expenses - expected_salary
+    final_bachat = full["final_payment"] - full["diesel_cost"] - full["expenses"] - full["expected_salary"]
     st.markdown(f"""
     <div style='background:linear-gradient(90deg,#8B3A3A,#C9A227);border-radius:12px;
                 padding:20px;text-align:center;margin-top:16px;'>
