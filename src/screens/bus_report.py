@@ -8,6 +8,7 @@ from src.database.db import (
     get_maintenance_records, get_vehicle_payment_config, get_driver_rate,
     get_vehicle_compliance, save_vehicle_compliance,
     get_duty_splits, compute_role_duty_credits,
+    get_vehicle_fuel_rate, save_vehicle_fuel_rate,   # NEW
 )
 from src.ui.excel_format import _get_date_range, shift_period_back, fuel_label, _render_html_table
 
@@ -116,7 +117,7 @@ def _compute_period_metrics(vr_sub, fills_sub, exp_sub, sal_sub, bus_number):
 
     return {
         "present_days": present_days, "leave_days": leave_days,
-        "actual_km": total_actual_km, "efficiency": efficiency,
+        "actual_km": total_actual_km, "sched_km": total_sched_km, "efficiency": efficiency,
         "diesel": total_diesel, "diesel_cost": total_diesel_cost, "diesel_days": diesel_days,
         "avg_diesel_km": avg_via_diesel_km, "avg_actual_km": avg_via_actual_km,
         "raw_payment": raw_payment, "final_payment": final_payment, "tax_pct": tax_pct,
@@ -221,6 +222,31 @@ def bus_report_view():
         return
 
     bus_number = st.selectbox("Bus chuno", options=accessible, key="br_bus")
+
+    # ══════════════════════════════════════════════
+    # ⛽ Fuel Rate Config — bus chuno ke neeche hi.
+    # Har vehicle ke liye alag CNG/Diesel rate (₹/km)
+    # save hota hai, "Expected Fuel Cost" card isi rate
+    # se calculate hoga. Default: CNG ₹5, Diesel ₹5.5.
+    # ══════════════════════════════════════════════
+    fuel_rate = get_vehicle_fuel_rate(bus_number)
+    fr1, fr2, fr3 = st.columns([2, 2, 1])
+    with fr1:
+        cng_rate_input = st.number_input(
+            "CNG Rate (₹/km)", min_value=0.0, step=0.1,
+            value=float(fuel_rate.get("cng_rate", 5.0)), key=f"br_cngrate_{bus_number}",
+        )
+    with fr2:
+        diesel_rate_input = st.number_input(
+            "Diesel Rate (₹/km)", min_value=0.0, step=0.1,
+            value=float(fuel_rate.get("diesel_rate", 5.5)), key=f"br_dieselrate_{bus_number}",
+        )
+    with fr3:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("💾 Save Rate", key=f"br_save_rate_{bus_number}", width='stretch'):
+            save_vehicle_fuel_rate(bus_number, cng_rate_input, diesel_rate_input)
+            st.success("✅ Rate saved!")
+            st.rerun()
 
     col1, col2, col3 = st.columns([2, 2, 1])
     with col1:
@@ -372,6 +398,17 @@ def bus_report_view():
         split_txt = _p_suffix(p1_metrics[key], p2_metrics[key], fmt)
         return f"{base_sublabel}  ·  {split_txt}" if base_sublabel else split_txt
 
+    def _actual_km_sub():
+        """Actual KM card ke sublabel me KM ke saath uska % (actual/sched)
+        bhi jodta hai — '2,200 km (45.2%) · 2,333 km (44.2%)'. Combined
+        (01-31) % khud Efficiency card me full['efficiency'] se already
+        dikh raha hai."""
+        if not show_split:
+            return ""
+        p1_txt = f"{p1_metrics['actual_km']:,.0f} km ({p1_metrics['efficiency']}%)"
+        p2_txt = f"{p2_metrics['actual_km']:,.0f} km ({p2_metrics['efficiency']}%)"
+        return f"{p1_txt}  ·  {p2_txt}"
+
     fmt_int   = lambda v: f"{v:.0f} days"
     fmt_km    = lambda v: f"{v:,.0f} km"
     fmt_pct   = lambda v: f"{v}%"
@@ -384,15 +421,25 @@ def bus_report_view():
     s1, s2, s3, s4 = st.columns(4)
     with s1: _metric_card("📅 Present Days", str(full["present_days"]), sublabel=_sub("", "present_days", fmt_int))
     with s2: _metric_card("🏖️ On Leave", str(full["leave_days"]), sublabel=_sub("", "leave_days", fmt_int))
-    with s3: _metric_card("🛣️ Actual KM", f"{full['actual_km']:,.0f}", sublabel=_sub("", "actual_km", fmt_km))
+    with s3: _metric_card("🛣️ Actual KM", f"{full['actual_km']:,.0f}", sublabel=_actual_km_sub())
     with s4: _metric_card("🎯 Efficiency", f"{full['efficiency']}%", sublabel=_sub("", "efficiency", fmt_pct))
 
     st.markdown("<br>", unsafe_allow_html=True)
 
     # ── Diesel/CNG ──
     fuel = fuel_label(bus_number)
+    fuel_rate_value = cng_rate_input if "CNG" in fuel else diesel_rate_input
+    expected_fuel_cost = full["actual_km"] * fuel_rate_value
+
+    def _expected_cost_sub():
+        if not show_split:
+            return f"@ ₹{fuel_rate_value}/km"
+        p1_cost = p1_metrics["actual_km"] * fuel_rate_value
+        p2_cost = p2_metrics["actual_km"] * fuel_rate_value
+        return f"@ ₹{fuel_rate_value}/km  ·  {fmt_rs(p1_cost)}  ·  {fmt_rs(p2_cost)}"
+
     st.markdown(f"#### ⛽ {fuel}")
-    d1, d2, d3, d4 = st.columns(4)
+    d1, d2, d3, d4, d5 = st.columns(5)
     with d1:
         _metric_card(f"Total {fuel}", f"{full['diesel']:.2f} L",
                      sublabel=_sub(f"{full['diesel_days']} din", "diesel", fmt_l))
@@ -404,6 +451,8 @@ def bus_report_view():
     with d4:
         _metric_card("Avg (Actual KM basis)", f"{full['avg_actual_km']:.2f} km/L",
                      sublabel=_sub("", "avg_actual_km", fmt_kml))
+    with d5:
+        _metric_card(f"Expected {fuel} Cost", f"₹{expected_fuel_cost:,.0f}", sublabel=_expected_cost_sub())
 
     st.markdown("<br>", unsafe_allow_html=True)
 
