@@ -125,7 +125,13 @@ def delete_vehicle_record(bus_number: str, date_str: str) -> None:
     supabase.table("vehicle_records").delete().eq("bus_number", bus_number).eq("date", date_str).execute()
 
 
-def save_vehicle_records(bus_number: str, df: pd.DataFrame) -> None:
+def save_vehicle_records(bus_number: str, df: pd.DataFrame, fields_to_update: list = None) -> None:
+    """`fields_to_update` (optional): jab conflict-resolution me user sirf
+    kuch specific fields hi update karna chahta hai (jaise 'Sirf Driver
+    update karo'), yahan un fields ke DB column names ki list do — sirf
+    wahi columns naye value se update honge, baaki sab EXISTING (old) DB
+    value pe hi rahenge. `None` (default) = purana full-merge behaviour
+    (khaali fields purani value rakhte hain, bhari hui fields overwrite)."""
     from src.database.auth import get_current_role
     user = st.session_state.get("user")
     current_email, current_role = (user.email if user else "unknown"), get_current_role()
@@ -153,19 +159,43 @@ def save_vehicle_records(bus_number: str, df: pd.DataFrame) -> None:
 
         if existing.data:
             old = existing.data[0]
-            merged = {
-                "bus_number": bus_number, "date": date_str, "status": new_data["status"],
-                "updated_by": current_email, "updated_by_role": current_role,
-                "remark": new_data["remark"] or old.get("remark", ""), "next_period": new_data["next_period"],
-                "driver_name":    keep(new_data["driver_name"],    old.get("driver_name"),    [None, "", "None", "none"]),
-                "conductor_name": keep(new_data["conductor_name"], old.get("conductor_name"), [None, "", "None", "none"]),
-                "scheduled_km": new_data["scheduled_km"] if on_leave else keep(new_data["scheduled_km"], old.get("scheduled_km"), [None]),
-                "actual_km":    new_data["actual_km"]    if on_leave else keep(new_data["actual_km"],    old.get("actual_km"),    [None]),
-                "diesel":       keep(new_data["diesel"],       old.get("diesel"),       [None]),
-                "diesel_km":    keep(new_data["diesel_km"],    old.get("diesel_km"),    [None]),
-                "income":       keep(new_data["income"],       old.get("income"),       [None]),
-                "gross_income": keep(new_data["gross_income"], old.get("gross_income"), [None]),
-            }
+
+            if fields_to_update is not None:
+                # ── ✅ Partial save — sirf caller-specified fields update
+                # hote hain, baaki SAB old (DB) value pe hi wapas set hote
+                # hain (chhede bhi jaate hain taaki update() call consistent
+                # rahe, par value change nahi hoti). ──
+                merged = {
+                    "bus_number": bus_number, "date": date_str,
+                    "status": old.get("status", "Present"),
+                    "updated_by": current_email, "updated_by_role": current_role,
+                    "remark": old.get("remark", ""), "next_period": old.get("next_period", False),
+                    "driver_name":    old.get("driver_name"),
+                    "conductor_name": old.get("conductor_name"),
+                    "scheduled_km":   old.get("scheduled_km"),
+                    "actual_km":      old.get("actual_km"),
+                    "diesel":         old.get("diesel"),
+                    "diesel_km":      old.get("diesel_km"),
+                    "income":         old.get("income"),
+                    "gross_income":   old.get("gross_income"),
+                }
+                for f in fields_to_update:
+                    if f in new_data:
+                        merged[f] = new_data[f]
+            else:
+                merged = {
+                    "bus_number": bus_number, "date": date_str, "status": new_data["status"],
+                    "updated_by": current_email, "updated_by_role": current_role,
+                    "remark": new_data["remark"] or old.get("remark", ""), "next_period": new_data["next_period"],
+                    "driver_name":    keep(new_data["driver_name"],    old.get("driver_name"),    [None, "", "None", "none"]),
+                    "conductor_name": keep(new_data["conductor_name"], old.get("conductor_name"), [None, "", "None", "none"]),
+                    "scheduled_km": new_data["scheduled_km"] if on_leave else keep(new_data["scheduled_km"], old.get("scheduled_km"), [None]),
+                    "actual_km":    new_data["actual_km"]    if on_leave else keep(new_data["actual_km"],    old.get("actual_km"),    [None]),
+                    "diesel":       keep(new_data["diesel"],       old.get("diesel"),       [None]),
+                    "diesel_km":    keep(new_data["diesel_km"],    old.get("diesel_km"),    [None]),
+                    "income":       keep(new_data["income"],       old.get("income"),       [None]),
+                    "gross_income": keep(new_data["gross_income"], old.get("gross_income"), [None]),
+                }
             supabase.table("vehicle_records").update(merged).eq("bus_number", bus_number).eq("date", date_str).execute()
         else:
             supabase.table("vehicle_records").insert(new_data).execute()
@@ -266,7 +296,21 @@ def compute_role_duty_credits(vr: pd.DataFrame, splits_df: pd.DataFrame, role: s
     if vr.empty:
         return credits
 
+    # ✅ Case-insensitive merge — "Avdhesh" aur "avdhesh" do alag entries
+    # nahi banni chahiye. Har naam ke lowercase-key ke liye pehli baar jo
+    # casing mili wahi consistently use hoti hai, taaki saari credit ek hi
+    # entry me jama ho.
     _JUNK_NAMES = ("none", "", "no", "test")
+    display_names: dict[str, str] = {}
+
+    def _add_credit(name: str, amount: float) -> None:
+        name = (name or "").strip()
+        if not name or name.lower() in _JUNK_NAMES:
+            return
+        key = name.lower()
+        canon = display_names.setdefault(key, name)
+        credits[canon] = credits.get(canon, 0.0) + amount
+
     duty_df = vr[vr["Status"] != "On Leave"]
     for _, row in duty_df.iterrows():
         date_str = str(row["Date"])
@@ -274,18 +318,27 @@ def compute_role_duty_credits(vr: pd.DataFrame, splits_df: pd.DataFrame, role: s
             people = split_by_date[date_str]
             total_km = sum(km for _, km in people) or 1  # div/0 se bachao
             for name, km in people:
-                if name and name.lower() not in _JUNK_NAMES:
-                    credits[name] = credits.get(name, 0.0) + (km / total_km)
+                _add_credit(name, km / total_km)
         else:
-            name = str(row.get(name_col) or "").strip()
-            if name and name.lower() not in _JUNK_NAMES:
-                credits[name] = credits.get(name, 0.0) + 1.0
+            _add_credit(str(row.get(name_col) or ""), 1.0)
     return credits
 
 
 # ══════════════════════════════════════════════
 # DIESEL RATE + PAYMENT (universal), PER-ROW RATE
 # ══════════════════════════════════════════════
+
+def _lookup_credit(credits: dict, name: str) -> float:
+    """compute_role_duty_credits ke return-dict me case-insensitive lookup —
+    kyunki credits dict ki canonical casing (first-seen) aur caller ke paas
+    jo naam hai (jaise get_drivers_for_buses ka most-common casing) kabhi
+    match nahi bhi kar sakte, jisse exact-match .get() silently 0.0de deta."""
+    key = (name or "").strip().lower()
+    for k, v in credits.items():
+        if k.strip().lower() == key:
+            return v
+    return 0.0
+
 
 def get_diesel_rate_payment(bus_number: str, month: int, period: str) -> dict:
     res = supabase_admin.table("diesel_details").select("rate, paid_amount, payment_done") \
@@ -548,11 +601,13 @@ def get_salary_check(from_date: str = None, to_date: str = None, bus_numbers: li
 # ══════════════════════════════════════════════
 
 def get_driver_rate(bus_number: str, driver_name: str) -> float:
-    res = supabase.table("driver_salary_rates").select("rate").eq("bus_number", bus_number).eq("driver_name", driver_name).execute()
+    # ✅ ilike (case-insensitive) — "Avdhesh" ke liye rate set hui ho aur
+    # kahin "avdhesh" casing se lookup ho, tab bhi match milna chahiye.
+    res = supabase.table("driver_salary_rates").select("rate").eq("bus_number", bus_number).ilike("driver_name", driver_name).execute()
     if res.data:
         return float(res.data[0]["rate"] or 0)
     if bus_number != "ALL":  # ✅ 'ALL vehicles' rate fallback
-        res_all = supabase.table("driver_salary_rates").select("rate").eq("bus_number", "ALL").eq("driver_name", driver_name).execute()
+        res_all = supabase.table("driver_salary_rates").select("rate").eq("bus_number", "ALL").ilike("driver_name", driver_name).execute()
         if res_all.data:
             return float(res_all.data[0]["rate"] or 0)
     return 0.0
@@ -579,8 +634,19 @@ def get_drivers_for_buses(bus_numbers: list = None) -> list:
     res = query.execute()
     if not res.data:
         return []
-    names = {r["driver_name"].strip() for r in res.data
-             if r.get("driver_name") and r["driver_name"].strip().lower() not in ("no", "test", "none", "")}
+    # ✅ Case-insensitive dedup — "Avdhesh" aur "avdhesh" alag-alag dropdown
+    # entries na bane. Har lowercase-key ke liye jo casing sabse zyada baar
+    # aayi hai wahi final naam banega (taaki koi ek random casing na ban
+    # jaaye).
+    from collections import Counter
+    casing_counts: dict[str, Counter] = {}
+    for r in res.data:
+        raw = (r.get("driver_name") or "").strip()
+        if not raw or raw.lower() in ("no", "test", "none", ""):
+            continue
+        key = raw.lower()
+        casing_counts.setdefault(key, Counter())[raw] += 1
+    names = {counter.most_common(1)[0][0] for counter in casing_counts.values()}
     return sorted(names)
 
 
@@ -730,7 +796,7 @@ def get_driver_report(driver_name: str, from_date: str, to_date: str) -> dict:
         vr_like = bus_df.rename(columns={"driver_name": "Driver Name", "date": "Date"}).copy()
         vr_like["Status"] = "Present"
         credits = compute_role_duty_credits(vr_like, splits, "driver")
-        duties_by_bus[bus] = credits.get(driver_name.strip(), 0.0)
+        duties_by_bus[bus] = _lookup_credit(credits, driver_name)
 
     diesel_rows = df[df["diesel"] > 0]
     total_diesel, total_diesel_km = diesel_rows["diesel"].sum(), diesel_rows["diesel_km"].sum()
