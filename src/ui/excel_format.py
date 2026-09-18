@@ -430,10 +430,10 @@ def editable_grid(bus_number: str):
         st.session_state[key] = pd.DataFrame({
             "Date":           [date.today()],
             "Status":         ["Present"],
-            "Driver Name":    ['None'],
+            "Driver Name":    [None],
             "Conductor Name": [None],
             "Scheduled KM":   [scheduled_km],
-            "Actual KM":      [0],
+            "Actual KM":      [scheduled_km],
             "Diesel":         [None],
             "Diesel KM":      [None],
             "Income":         [None],
@@ -573,8 +573,8 @@ def editable_grid(bus_number: str):
                     rows.append({
                         "Date":           pd.to_datetime(r.get("date"), errors="coerce"),
                         "Status":         status,
-                        "Driver Name":    (r.get("driver_name") or "None") if "Driver Name" in selected_fields else "None",
-                        "Conductor Name": (r.get("conductor_name") or "None") if "Conductor Name" in selected_fields else "None",
+                        "Driver Name":    (r.get("driver_name") or None) if "Driver Name" in selected_fields else None,
+                        "Conductor Name": (r.get("conductor_name") or None) if "Conductor Name" in selected_fields else None,
                         "Scheduled KM":   (0 if is_absent_or_leave else (r.get("scheduled_km") if "Scheduled KM" in selected_fields else None)),
                         "Actual KM":      (0 if is_absent_or_leave else (r.get("actual_km") if "Actual KM" in selected_fields else None)),
                         "Diesel":         r.get("diesel") if "Diesel" in selected_fields else None,
@@ -609,7 +609,7 @@ def editable_grid(bus_number: str):
             "Driver Name":    st.column_config.TextColumn("Driver Name"),
             "Conductor Name": st.column_config.TextColumn("Conductor Name"),
             "Scheduled KM":   st.column_config.NumberColumn("Scheduled KM", min_value=0, default=scheduled_km),
-            "Actual KM":      st.column_config.NumberColumn("Actual KM", min_value=0, default=0),
+            "Actual KM":      st.column_config.NumberColumn("Actual KM", min_value=0, default=scheduled_km),
             "Diesel":         st.column_config.NumberColumn(f"{fuel_label(bus_number)} (naya fill)", min_value=0.0, step=0.01, format="%.2f"),
             "Diesel KM":      st.column_config.NumberColumn(f"{fuel_label(bus_number)} KM", min_value=0),
             "Income":         st.column_config.NumberColumn("Income", min_value=0),
@@ -736,10 +736,7 @@ def editable_grid(bus_number: str):
                 st.rerun()
     else:
         if st.button("💾 Save Changes", key=f"save_{bus_number}", width='stretch'):
-            cleaned_df = edited_df[
-                edited_df["Driver Name"].notna() &
-                (edited_df["Driver Name"].astype(str).str.strip() != "")
-            ].copy()
+            cleaned_df = edited_df[edited_df["Date"].notna()].copy()
             if cleaned_df.empty:
                 st.warning("⚠️ No valid rows to save.")
                 return
@@ -854,6 +851,7 @@ def editable_grid(bus_number: str):
                 if diesel_conflict_pending:
                     st.info(f"ℹ️ {len(diesel_conflict_pending)} date(s) ke {fuel_label(bus_number)} data ke liye confirmation chahiye — neeche dekho.")
                 st.session_state.pop(key, None)
+                st.session_state.pop(ed_key, None)
                 st.session_state.pop(fetch_key, None)
                 st.rerun()
 
