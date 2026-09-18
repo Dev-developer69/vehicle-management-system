@@ -700,16 +700,37 @@ def editable_grid(bus_number: str):
             else:
                 st.caption("(koi conflicting field nahi mila)")
 
-        col1, col2 = st.columns(2)
+        col1, col2, col3, col4, col5 = st.columns(5)
         with col1:
-            if st.button("✅ Yes, Update", key=f"yes_{bus_number}"):
-                save_vehicle_records(bus_number, conflict_df)
-                st.success("✅ Updated!")
+            if st.button("🧑‍✈️ Sirf Driver", key=f"upd_driver_{bus_number}", width='stretch'):
+                save_vehicle_records(bus_number, conflict_df, fields_to_update=["driver_name"])
+                st.success("✅ Sirf Driver Name update hua — baaki fields purane hi rahe!")
                 for k in [key, fetch_key, confirm_key, pending_key, f"{pending_key}_old"]:
                     st.session_state.pop(k, None)
                 st.rerun()
         with col2:
-            if st.button("❌ Cancel", key=f"no_{bus_number}"):
+            if st.button("🎫 Sirf Conductor", key=f"upd_conductor_{bus_number}", width='stretch'):
+                save_vehicle_records(bus_number, conflict_df, fields_to_update=["conductor_name"])
+                st.success("✅ Sirf Conductor Name update hua — baaki fields purane hi rahe!")
+                for k in [key, fetch_key, confirm_key, pending_key, f"{pending_key}_old"]:
+                    st.session_state.pop(k, None)
+                st.rerun()
+        with col3:
+            if st.button("🛣️ Sirf KM", key=f"upd_km_{bus_number}", width='stretch'):
+                save_vehicle_records(bus_number, conflict_df, fields_to_update=["scheduled_km", "actual_km"])
+                st.success("✅ Sirf Scheduled/Actual KM update hua — baaki fields purane hi rahe!")
+                for k in [key, fetch_key, confirm_key, pending_key, f"{pending_key}_old"]:
+                    st.session_state.pop(k, None)
+                st.rerun()
+        with col4:
+            if st.button("✅ Sab Update", key=f"yes_{bus_number}", width='stretch'):
+                save_vehicle_records(bus_number, conflict_df)
+                st.success("✅ Saari fields update ho gayi!")
+                for k in [key, fetch_key, confirm_key, pending_key, f"{pending_key}_old"]:
+                    st.session_state.pop(k, None)
+                st.rerun()
+        with col5:
+            if st.button("❌ Cancel", key=f"no_{bus_number}", width='stretch'):
                 for k in [confirm_key, pending_key, f"{pending_key}_old"]:
                     st.session_state.pop(k, None)
                 st.rerun()
@@ -840,12 +861,18 @@ def editable_grid(bus_number: str):
 
     # ── Delete row by date ──
     with st.expander("🗑️ Delete a record by date"):
-        del_date = st.date_input("Select date to delete", value=date.today(), key=f"del_date_{bus_number}")
+        del_date = st.date_input(
+            "Select date to delete", value=None, format="DD-MM-YYYY",
+            key=f"del_date_{bus_number}",
+        )
         if st.button("Delete this record", key=f"del_btn_{bus_number}"):
-            delete_vehicle_record(bus_number, str(del_date))
-            st.success(f"✅ Deleted record for {del_date}")
-            st.session_state.pop(fetch_key, None)
-            st.rerun()
+            if del_date is None:
+                st.warning("⚠️ Pehle ek date chuno.")
+            else:
+                delete_vehicle_record(bus_number, str(del_date))
+                st.success(f"✅ Deleted record for {del_date}")
+                st.session_state.pop(fetch_key, None)
+                st.rerun()
 
     if fetch_key not in st.session_state:
         st.session_state[fetch_key] = get_vehicle_records(bus_number)
