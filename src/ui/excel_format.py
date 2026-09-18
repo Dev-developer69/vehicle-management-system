@@ -414,11 +414,20 @@ def _split_duty_section(bus_number: str, date_options: list):
 def editable_grid(bus_number: str):
     numeric_cols = ["Scheduled KM", "Actual KM", "Diesel", "Diesel KM", "Avg", "Income"]
     key          = f"grid_{bus_number}"
-    ed_key       = f"editor_{bus_number}"
     fetch_key    = f"fetched_{bus_number}"
     confirm_key  = f"show_confirm_{bus_number}"
     pending_key  = f"pending_df_{bus_number}"
     sched_km_key = f"sched_km_{bus_number}"
+
+    # ── ✅ Reset counter — ed_key is isse suffix hota hai. Har successful
+    # save ke baad iska value +1 hota hai, taaki agli baar ek BILKUL NAYA
+    # (kabhi na dekha gaya) widget key mile — Streamlit ko fresh widget
+    # banana majboori ho jaata hai, purana typed data kisi bhi internal
+    # caching ki wajah se reh nahi sakta. ──
+    reset_key = f"grid_reset_{bus_number}"
+    if reset_key not in st.session_state:
+        st.session_state[reset_key] = 0
+    ed_key = f"editor_{bus_number}_{st.session_state[reset_key]}"
 
     if sched_km_key not in st.session_state:
         st.session_state[sched_km_key] = get_scheduled_km(bus_number)
@@ -430,7 +439,7 @@ def editable_grid(bus_number: str):
         st.session_state[key] = pd.DataFrame({
             "Date":           [date.today()],
             "Status":         ["Present"],
-            "Driver Name":    'None',
+            "Driver Name":    [None],
             "Conductor Name": [None],
             "Scheduled KM":   [scheduled_km],
             "Actual KM":      [scheduled_km],
@@ -705,28 +714,32 @@ def editable_grid(bus_number: str):
             if st.button("🧑‍✈️ Sirf Driver", key=f"upd_driver_{bus_number}", width='stretch'):
                 save_vehicle_records(bus_number, conflict_df, fields_to_update=["driver_name"])
                 st.success("✅ Sirf Driver Name update hua — baaki fields purane hi rahe!")
-                for k in [key, fetch_key, confirm_key, pending_key, f"{pending_key}_old"]:
+                st.session_state[reset_key] += 1
+                for k in [key, ed_key, fetch_key, confirm_key, pending_key, f"{pending_key}_old"]:
                     st.session_state.pop(k, None)
                 st.rerun()
         with col2:
             if st.button("🎫 Sirf Conductor", key=f"upd_conductor_{bus_number}", width='stretch'):
                 save_vehicle_records(bus_number, conflict_df, fields_to_update=["conductor_name"])
                 st.success("✅ Sirf Conductor Name update hua — baaki fields purane hi rahe!")
-                for k in [key, fetch_key, confirm_key, pending_key, f"{pending_key}_old"]:
+                st.session_state[reset_key] += 1
+                for k in [key, ed_key, fetch_key, confirm_key, pending_key, f"{pending_key}_old"]:
                     st.session_state.pop(k, None)
                 st.rerun()
         with col3:
             if st.button("🛣️ Sirf KM", key=f"upd_km_{bus_number}", width='stretch'):
                 save_vehicle_records(bus_number, conflict_df, fields_to_update=["scheduled_km", "actual_km"])
                 st.success("✅ Sirf Scheduled/Actual KM update hua — baaki fields purane hi rahe!")
-                for k in [key, fetch_key, confirm_key, pending_key, f"{pending_key}_old"]:
+                st.session_state[reset_key] += 1
+                for k in [key, ed_key, fetch_key, confirm_key, pending_key, f"{pending_key}_old"]:
                     st.session_state.pop(k, None)
                 st.rerun()
         with col4:
             if st.button("✅ Sab Update", key=f"yes_{bus_number}", width='stretch'):
                 save_vehicle_records(bus_number, conflict_df)
                 st.success("✅ Saari fields update ho gayi!")
-                for k in [key, fetch_key, confirm_key, pending_key, f"{pending_key}_old"]:
+                st.session_state[reset_key] += 1
+                for k in [key, ed_key, fetch_key, confirm_key, pending_key, f"{pending_key}_old"]:
                     st.session_state.pop(k, None)
                 st.rerun()
         with col5:
@@ -850,6 +863,7 @@ def editable_grid(bus_number: str):
                 st.success(" ".join(msg_parts))
                 if diesel_conflict_pending:
                     st.info(f"ℹ️ {len(diesel_conflict_pending)} date(s) ke {fuel_label(bus_number)} data ke liye confirmation chahiye — neeche dekho.")
+                st.session_state[reset_key] += 1
                 st.session_state.pop(key, None)
                 st.session_state.pop(ed_key, None)
                 st.session_state.pop(fetch_key, None)
