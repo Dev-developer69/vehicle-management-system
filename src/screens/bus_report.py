@@ -1,6 +1,8 @@
+import time
 import streamlit as st
 import pandas as pd
 from datetime import date
+from httpx import TransportError   # RemoteProtocolError / ReadError / ConnectError ka base
 
 from src.database.auth import get_accessible_vehicles
 from src.database.db import (
@@ -13,6 +15,19 @@ from src.database.db import (
 )
 from src.ui.excel_format import _get_date_range, shift_period_back, fuel_label, _render_html_table
 
+
+
+def _retry(fn, *args, tries=3, **kwargs):
+    """Supabase (httpx) kabhi-kabhi purani idle connection band kar deta hai
+    -> 'RemoteProtocolError: Server disconnected'. Yeh temporary hota hai,
+    isliye 2-3 baar retry karte hain (naya connection khul jaata hai)."""
+    for attempt in range(tries):
+        try:
+            return fn(*args, **kwargs)
+        except TransportError:
+            if attempt == tries - 1:
+                raise
+            time.sleep(0.5 * (attempt + 1))
 
 
 def _page_style():
@@ -61,7 +76,7 @@ def _compute_final_payment(bus_number: str, total_income: float, total_actual_km
     """Vehicle Records ke 'Payment Summary' jaisa hi calculation — Standard
     ya IPKM Slab method, saved config ke hisaab se. Returns (raw_payment,
     final_payment, tax_pct)."""
-    cfg = get_vehicle_payment_config(bus_number)
+    cfg = _retry(get_vehicle_payment_config, bus_number)
     PERIOD_TAX = 11700
     if cfg["method"] == "standard":
         raw = total_income - (total_actual_km * cfg["rate"]) - PERIOD_TAX
@@ -77,7 +92,8 @@ def _compute_final_payment(bus_number: str, total_income: float, total_actual_km
     return raw, final, tax_pct
 
 
-def _compute_period_metrics(vr_sub, fills_sub, exp_sub, sal_sub, bus_number):
+def _compute_period_metrics(vr_sub, fills_sub, exp_sub, sal_sub, bus_number,
+                            sched_per_day=None, rate_cache=None):
     """Ek date-range (poora period ya half) ke liye saare summary metrics ek
     saath nikalta hai — full period aur 1-15/16-31 split, dono ke liye
     reuse hota hai."""
@@ -87,7 +103,10 @@ def _compute_period_metrics(vr_sub, fills_sub, exp_sub, sal_sub, bus_number):
 
     # ✅ Total Schedule KM = Present Days × bus ka daily schedule KM
     # (On Leave din count nahi hote). Efficiency = Actual ÷ Total Schedule.
-    sched_per_day   = get_scheduled_km(bus_number)
+    if sched_per_day is None:
+        sched_per_day = _retry(get_scheduled_km, bus_number)
+    if rate_cache is None:
+        rate_cache = {}
     total_sched_km  = present_days * sched_per_day
     efficiency      = round(total_actual_km / total_sched_km * 100, 1) if total_sched_km > 0 else 0.0
 
@@ -115,10 +134,14 @@ def _compute_period_metrics(vr_sub, fills_sub, exp_sub, sal_sub, bus_number):
     expected_salary = 0.0
     if not vr_sub.empty:
         dates_involved = pd.to_datetime(vr_sub["Date"]).dt.strftime("%Y-%m-%d").tolist()
-        splits = get_duty_splits(bus_number, dates_involved)
+        splits = _retry(get_duty_splits, bus_number, dates_involved)
         credits = compute_role_duty_credits(vr_sub, splits, "driver")
         for driver_name, duties in credits.items():
-            rate = get_driver_rate(bus_number, driver_name)
+            # rate_cache: full/1-15/16-31 teeno calls me ek driver ka rate ek hi baar DB se aaye
+            ckey = driver_name.strip().lower()
+            if ckey not in rate_cache:
+                rate_cache[ckey] = _retry(get_driver_rate, bus_number, driver_name)
+            rate = rate_cache[ckey]
             expected_salary += duties * rate
 
     return {
@@ -376,7 +399,9 @@ def bus_report_view():
         return
 
     # ── Poore period (full/half, jo bhi selected hai) ke metrics ──
-    full = _compute_period_metrics(vr, fills, exp, sal, bus_number)
+    sched_per_day = _retry(get_scheduled_km, bus_number)   # ek hi baar DB se
+    rate_cache = {}                                        # driver rates ka per-run cache
+    full = _compute_period_metrics(vr, fills, exp, sal, bus_number, sched_per_day, rate_cache)
 
     # ── Agar poora month (01-31) selected hai, to 1-15 aur 16-31 ke
     # metrics alag se nikalo — har card ke sublabel me dono halves ka
@@ -396,8 +421,8 @@ def bus_report_view():
         sal_p1 = _filter_by_range(sal, p1_start, p1_end)
         sal_p2 = _filter_by_range(sal, p2_start, p2_end)
 
-        p1_metrics = _compute_period_metrics(vr_p1, fills_p1, exp_p1, sal_p1, bus_number)
-        p2_metrics = _compute_period_metrics(vr_p2, fills_p2, exp_p2, sal_p2, bus_number)
+        p1_metrics = _compute_period_metrics(vr_p1, fills_p1, exp_p1, sal_p1, bus_number, sched_per_day, rate_cache)
+        p2_metrics = _compute_period_metrics(vr_p2, fills_p2, exp_p2, sal_p2, bus_number, sched_per_day, rate_cache)
 
     def _sub(base_sublabel, key, fmt):
         """Existing sublabel (jaise '17 din') ke saath 1-15/16-31 breakdown
@@ -406,18 +431,6 @@ def bus_report_view():
             return base_sublabel
         split_txt = _p_suffix(p1_metrics[key], p2_metrics[key], fmt)
         return f"{base_sublabel}  ·  {split_txt}" if base_sublabel else split_txt
-
-    def _actual_km_sub():
-        """Actual KM ke neeche: schedule (Present Days × Schedule KM) ke
-        muqable kitna % chali — 1-15, 16-31 aur combined (01-31)."""
-        if not show_split:
-            return (f"{full['efficiency']}% of {full['sched_km']:,.0f} km "
-                    f"({full['present_days']} din × {get_scheduled_km(bus_number)})")
-        p1_txt = f"{p1_metrics['actual_km']:,.0f} km ({p1_metrics['efficiency']}%)"
-        p2_txt = f"{p2_metrics['actual_km']:,.0f} km ({p2_metrics['efficiency']}%)"
-        combined = (f"Combined: {full['actual_km']:,.0f} / {full['sched_km']:,.0f} km "
-                    f"({full['efficiency']}%)")
-        return f"{p1_txt}  ·  {p2_txt}<br>{combined}"
 
     fmt_int   = lambda v: f"{v:.0f} days"
     fmt_km    = lambda v: f"{v:,.0f} km"
@@ -431,7 +444,7 @@ def bus_report_view():
     s1, s2, s3, s4 = st.columns(4)
     with s1: _metric_card("📅 Present Days", str(full["present_days"]), sublabel=_sub("", "present_days", fmt_int))
     with s2: _metric_card("🏖️ On Leave", str(full["leave_days"]), sublabel=_sub("", "leave_days", fmt_int))
-    with s3: _metric_card("🛣️ Actual KM", f"{full['actual_km']:,.0f}", sublabel=_actual_km_sub())
+    with s3: _metric_card("🛣️ Actual KM", f"{full['actual_km']:,.0f}")
     with s4: _metric_card("🎯 Efficiency", f"{full['efficiency']}%", sublabel=_sub("", "efficiency", fmt_pct))
 
     st.markdown("<br>", unsafe_allow_html=True)
