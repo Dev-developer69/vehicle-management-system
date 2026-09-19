@@ -65,6 +65,15 @@ def _render_html_table(df: pd.DataFrame, total_row: dict = None):
     st.markdown("".join(html), unsafe_allow_html=True)
 
 
+# ──────────────────────────────────────────────
+# HELPER: Year options — current year ± 2, taaki purane/aane wale saal
+# ka data bhi dekha ja sake (sirf hardcoded date.today().year nahi)
+# ──────────────────────────────────────────────
+def _year_options() -> list:
+    this_year = date.today().year
+    return list(range(this_year - 2, this_year + 1))
+
+
 def driver_records():
     if st.button('Home page', type='secondary', width='stretch', icon=':material/home:', shortcut='control+backspace'):
         st.session_state['login_state'] = None
@@ -119,7 +128,13 @@ def driver_records():
 def salary_check_view():
     st.markdown("### Salary Check 📊")
 
-    col1, col2, col3 = st.columns([2, 2, 1])
+    col_year, col1, col2, col3 = st.columns([1, 2, 2, 1])
+    with col_year:
+        year = st.selectbox(
+            "Year", options=_year_options(),
+            index=_year_options().index(date.today().year),
+            key="sc_year",
+        )
     with col1:
         month = st.selectbox(
             "Month",
@@ -140,7 +155,6 @@ def salary_check_view():
     with col3:
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button("🔄 Load", key="sc_load", type='primary', use_container_width=True):
-            year = date.today().year
             if half == "1-15":
                 from_date = f"{year}-{month:02d}-01"
                 to_date   = f"{year}-{month:02d}-15"
@@ -180,7 +194,13 @@ def salary_check_view():
     # ──────────────────────────────────────────────
     st.markdown("### Driver Salary Records 💰")
 
-    col1, col2, col3 = st.columns([2, 2, 1])
+    col_year2, col1, col2, col3 = st.columns([1, 2, 2, 1])
+    with col_year2:
+        sal_year = st.selectbox(
+            "Year", options=_year_options(),
+            index=_year_options().index(date.today().year),
+            key="sal_year",
+        )
     with col1:
         sal_month = st.selectbox(
             "Month",
@@ -201,14 +221,13 @@ def salary_check_view():
     with col3:
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button("🔄 Load", key="sal_load", type='primary', use_container_width=True):
-            year = date.today().year
             if sal_half == "1-15":
-                sal_from = f"{year}-{sal_month:02d}-01"
-                sal_to   = f"{year}-{sal_month:02d}-15"
+                sal_from = f"{sal_year}-{sal_month:02d}-01"
+                sal_to   = f"{sal_year}-{sal_month:02d}-15"
             else:
-                last_day = calendar.monthrange(year, sal_month)[1]
-                sal_from = f"{year}-{sal_month:02d}-16"
-                sal_to   = f"{year}-{sal_month:02d}-{last_day}"
+                last_day = calendar.monthrange(sal_year, sal_month)[1]
+                sal_from = f"{sal_year}-{sal_month:02d}-16"
+                sal_to   = f"{sal_year}-{sal_month:02d}-{last_day}"
 
             # ✅ sabhi accessible vehicles ke drivers dikhao (loop over each bus)
             accessible = get_accessible_vehicles()
@@ -374,7 +393,13 @@ def driver_report_view():
         options=all_drivers, key="dr_search_driver",
     )
 
-    col1, col2, col3 = st.columns([2, 2, 1])
+    col_year, col1, col2, col3 = st.columns([1, 2, 2, 1])
+    with col_year:
+        dr_year = st.selectbox(
+            "Year", options=_year_options(),
+            index=_year_options().index(date.today().year),
+            key="dr_year",
+        )
     with col1:
         dr_month = st.selectbox(
             "Month", options=list(range(1, 13)), index=date.today().month - 1,
@@ -386,15 +411,14 @@ def driver_report_view():
         st.markdown("<br>", unsafe_allow_html=True)
         load = st.button("🔄 Load Report", key="dr_load", type='primary', use_container_width=True)
 
-    year = date.today().year
     if dr_period == "1-15":
-        from_date, to_date = f"{year}-{dr_month:02d}-01", f"{year}-{dr_month:02d}-15"
+        from_date, to_date = f"{dr_year}-{dr_month:02d}-01", f"{dr_year}-{dr_month:02d}-15"
     elif dr_period == "16-31":
-        last_day = calendar.monthrange(year, dr_month)[1]
-        from_date, to_date = f"{year}-{dr_month:02d}-16", f"{year}-{dr_month:02d}-{last_day}"
+        last_day = calendar.monthrange(dr_year, dr_month)[1]
+        from_date, to_date = f"{dr_year}-{dr_month:02d}-16", f"{dr_year}-{dr_month:02d}-{last_day}"
     else:
-        last_day = calendar.monthrange(year, dr_month)[1]
-        from_date, to_date = f"{year}-{dr_month:02d}-01", f"{year}-{dr_month:02d}-{last_day}"
+        last_day = calendar.monthrange(dr_year, dr_month)[1]
+        from_date, to_date = f"{dr_year}-{dr_month:02d}-01", f"{dr_year}-{dr_month:02d}-{last_day}"
 
     report_key = f"dr_report_{driver_name}_{from_date}_{to_date}"
     if load or report_key not in st.session_state:
