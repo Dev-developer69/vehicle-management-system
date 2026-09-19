@@ -8,7 +8,8 @@ from src.database.db import (
     get_maintenance_records, get_vehicle_payment_config, get_driver_rate,
     get_vehicle_compliance, save_vehicle_compliance,
     get_duty_splits, compute_role_duty_credits,
-    get_vehicle_fuel_rate, save_vehicle_fuel_rate,   # NEW
+    get_vehicle_fuel_rate, save_vehicle_fuel_rate,
+    get_scheduled_km,   # NEW — Total Schedule KM = Present Days × bus ka daily schedule KM
 )
 from src.ui.excel_format import _get_date_range, shift_period_back, fuel_label, _render_html_table
 
@@ -83,8 +84,13 @@ def _compute_period_metrics(vr_sub, fills_sub, exp_sub, sal_sub, bus_number):
     present_days    = len(vr_sub[vr_sub["Status"] == "Present"]) if not vr_sub.empty else 0
     leave_days      = len(vr_sub[vr_sub["Status"] == "On Leave"]) if not vr_sub.empty else 0
     total_actual_km = pd.to_numeric(vr_sub["Actual KM"], errors="coerce").fillna(0).sum() if not vr_sub.empty else 0.0
-    total_sched_km  = pd.to_numeric(vr_sub["Scheduled KM"], errors="coerce").fillna(0).sum() if not vr_sub.empty else 0.0
+
+    # ✅ Total Schedule KM = Present Days × bus ka daily schedule KM
+    # (On Leave din count nahi hote). Efficiency = Actual ÷ Total Schedule.
+    sched_per_day   = get_scheduled_km(bus_number)
+    total_sched_km  = present_days * sched_per_day
     efficiency      = round(total_actual_km / total_sched_km * 100, 1) if total_sched_km > 0 else 0.0
+
     total_income    = pd.to_numeric(vr_sub["Income"], errors="coerce").fillna(0).sum() if not vr_sub.empty else 0.0
 
     total_diesel      = float(fills_sub["Quantity"].sum()) if not fills_sub.empty else 0.0
@@ -224,28 +230,31 @@ def bus_report_view():
     bus_number = st.selectbox("Bus chuno", options=accessible, key="br_bus")
 
     # ══════════════════════════════════════════════
-    # ⛽ Fuel Rate Config — bus chuno ke neeche hi.
-    # Har vehicle ke liye alag CNG/Diesel rate (₹/km)
-    # save hota hai, "Expected Fuel Cost" card isi rate
-    # se calculate hoga. Default: CNG ₹5, Diesel ₹5.5.
+    # ⛽ Fuel Avg Config — bus chuno ke neeche hi.
+    # Har vehicle ke liye alag CNG (km/kg) / Diesel (km/L)
+    # AVERAGE save hota hai (mileage, ₹/km nahi). "Expected
+    # Fuel Cost" card isi avg se calculate hoga:
+    #     (Actual KM ÷ Avg) × fuel price
+    # Default: CNG 5, Diesel 5.5. DB column names wahi
+    # (cng_rate / diesel_rate) — sirf meaning km/L ho gayi.
     # ══════════════════════════════════════════════
     fuel_rate = get_vehicle_fuel_rate(bus_number)
     fr1, fr2, fr3 = st.columns([2, 2, 1])
     with fr1:
         cng_rate_input = st.number_input(
-            "CNG Rate (₹/km)", min_value=0.0, step=0.1,
-            value=float(fuel_rate.get("cng_rate", 5.0)), key=f"br_cngrate_{bus_number}",
+            "CNG Avg (km/kg)", min_value=0.1, step=0.1,
+            value=max(0.1, float(fuel_rate.get("cng_rate", 5.0))), key=f"br_cngrate_{bus_number}",
         )
     with fr2:
         diesel_rate_input = st.number_input(
-            "Diesel Rate (₹/km)", min_value=0.0, step=0.1,
-            value=float(fuel_rate.get("diesel_rate", 5.5)), key=f"br_dieselrate_{bus_number}",
+            "Diesel Avg (km/L)", min_value=0.1, step=0.1,
+            value=max(0.1, float(fuel_rate.get("diesel_rate", 5.5))), key=f"br_dieselrate_{bus_number}",
         )
     with fr3:
         st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("💾 Save Rate", key=f"br_save_rate_{bus_number}", width='stretch'):
+        if st.button("💾 Save Avg", key=f"br_save_rate_{bus_number}", width='stretch'):
             save_vehicle_fuel_rate(bus_number, cng_rate_input, diesel_rate_input)
-            st.success("✅ Rate saved!")
+            st.success("✅ Avg saved!")
             st.rerun()
 
     col1, col2, col3 = st.columns([2, 2, 1])
@@ -399,15 +408,16 @@ def bus_report_view():
         return f"{base_sublabel}  ·  {split_txt}" if base_sublabel else split_txt
 
     def _actual_km_sub():
-        """Actual KM card ke sublabel me KM ke saath uska % (actual/sched)
-        bhi jodta hai — '2,200 km (45.2%) · 2,333 km (44.2%)'. Combined
-        (01-31) % khud Efficiency card me full['efficiency'] se already
-        dikh raha hai."""
+        """Actual KM ke neeche: schedule (Present Days × Schedule KM) ke
+        muqable kitna % chali — 1-15, 16-31 aur combined (01-31)."""
         if not show_split:
-            return ""
+            return (f"{full['efficiency']}% of {full['sched_km']:,.0f} km "
+                    f"({full['present_days']} din × {get_scheduled_km(bus_number)})")
         p1_txt = f"{p1_metrics['actual_km']:,.0f} km ({p1_metrics['efficiency']}%)"
         p2_txt = f"{p2_metrics['actual_km']:,.0f} km ({p2_metrics['efficiency']}%)"
-        return f"{p1_txt}  ·  {p2_txt}"
+        combined = (f"Combined: {full['actual_km']:,.0f} / {full['sched_km']:,.0f} km "
+                    f"({full['efficiency']}%)")
+        return f"{p1_txt}  ·  {p2_txt}<br>{combined}"
 
     fmt_int   = lambda v: f"{v:.0f} days"
     fmt_km    = lambda v: f"{v:,.0f} km"
@@ -427,16 +437,32 @@ def bus_report_view():
     st.markdown("<br>", unsafe_allow_html=True)
 
     # ── Diesel/CNG ──
+    # Expected Cost = (Actual KM ÷ Avg km/L ya km/kg) × fuel price per L/kg
     fuel = fuel_label(bus_number)
-    fuel_rate_value = cng_rate_input if "CNG" in fuel else diesel_rate_input
-    expected_fuel_cost = full["actual_km"] * fuel_rate_value
+    is_cng = "CNG" in fuel
+    fuel_avg = cng_rate_input if is_cng else diesel_rate_input
+    unit = "km/kg" if is_cng else "km/L"
+    price_unit = "kg" if is_cng else "L"
+
+    # Price per L/kg: period ki fills se, warna pichle 90 din ki last fill ka rate
+    if full["diesel"] > 0:
+        price = full["diesel_cost"] / full["diesel"]
+    else:
+        recent = get_fuel_fills(bus_number, str((start - pd.Timedelta(days=90)).date()), to_date)
+        rates = pd.to_numeric(recent["Rate"], errors="coerce").dropna() if not recent.empty else []
+        price = float(rates.iloc[-1]) if len(rates) else 0.0
+
+    def _exp_cost(km):
+        return (km / fuel_avg) * price if fuel_avg > 0 else 0.0
+
+    expected_fuel_cost = _exp_cost(full["actual_km"])
 
     def _expected_cost_sub():
+        base = f"@ {fuel_avg} {unit} · ₹{price:.2f}/{price_unit}"
         if not show_split:
-            return f"@ ₹{fuel_rate_value}/km"
-        p1_cost = p1_metrics["actual_km"] * fuel_rate_value
-        p2_cost = p2_metrics["actual_km"] * fuel_rate_value
-        return f"@ ₹{fuel_rate_value}/km  ·  {fmt_rs(p1_cost)}  ·  {fmt_rs(p2_cost)}"
+            return base
+        return (f"{base}<br>{fmt_rs(_exp_cost(p1_metrics['actual_km']))}"
+                f"  ·  {fmt_rs(_exp_cost(p2_metrics['actual_km']))}")
 
     st.markdown(f"#### ⛽ {fuel}")
     d1, d2, d3, d4, d5 = st.columns(5)
