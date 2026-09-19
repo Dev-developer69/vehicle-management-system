@@ -73,6 +73,25 @@ def save_vehicle_payment_config(bus_number: str, rate: float, method: str,
     }, on_conflict="bus_number").execute()
 
 
+# ══════════════════════════════════════════════
+# VEHICLE FUEL RATE (CNG/Diesel ₹-per-km — Expected Fuel Cost card ke liye,
+# Bus Report page par bus-selector ke neeche editable)
+# ══════════════════════════════════════════════
+
+def get_vehicle_fuel_rate(bus_number: str) -> dict:
+    res = supabase.table("vehicle_fuel_rate").select("cng_rate, diesel_rate").eq("bus_number", bus_number).execute()
+    if res.data:
+        r = res.data[0]
+        return {"cng_rate": float(r.get("cng_rate") or 5.0), "diesel_rate": float(r.get("diesel_rate") or 5.5)}
+    return {"cng_rate": 5.0, "diesel_rate": 5.5}
+
+
+def save_vehicle_fuel_rate(bus_number: str, cng_rate: float, diesel_rate: float) -> None:
+    supabase.table("vehicle_fuel_rate").upsert({
+        "bus_number": bus_number, "cng_rate": float(cng_rate), "diesel_rate": float(diesel_rate),
+    }, on_conflict="bus_number").execute()
+
+
 _COMPLIANCE_FIELDS = [
     "owner_name", "route_name", "capacity",
     "insurance_validity", "fitness_validity", "pollution_validity",
