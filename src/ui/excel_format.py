@@ -258,6 +258,21 @@ def _get_date_range(year, month, period):
 
 
 # ──────────────────────────────────────────────
+# HELPER: Year selector — ek hi jagah defined, poore app me (har file me)
+# yahi use hota hai. Jab kabhi saal badalne ki range change karni ho
+# (abhi: current year se 2 saal peeche tak), sirf yahin change karo.
+# ──────────────────────────────────────────────
+def year_options() -> list:
+    this_year = date.today().year
+    return list(range(this_year - 2, this_year + 1))
+
+
+def year_selectbox(label: str = "Year", key: str = "year"):
+    opts = year_options()
+    return st.selectbox(label, options=opts, index=opts.index(date.today().year), key=key)
+
+
+# ──────────────────────────────────────────────
 # HELPER: Previous period shift (for Next flag)
 # ──────────────────────────────────────────────
 def shift_period_back(year, month, period):
@@ -414,20 +429,11 @@ def _split_duty_section(bus_number: str, date_options: list):
 def editable_grid(bus_number: str):
     numeric_cols = ["Scheduled KM", "Actual KM", "Diesel", "Diesel KM", "Avg", "Income"]
     key          = f"grid_{bus_number}"
+    ed_key       = f"editor_{bus_number}"
     fetch_key    = f"fetched_{bus_number}"
     confirm_key  = f"show_confirm_{bus_number}"
     pending_key  = f"pending_df_{bus_number}"
     sched_km_key = f"sched_km_{bus_number}"
-
-    # ── ✅ Reset counter — ed_key is isse suffix hota hai. Har successful
-    # save ke baad iska value +1 hota hai, taaki agli baar ek BILKUL NAYA
-    # (kabhi na dekha gaya) widget key mile — Streamlit ko fresh widget
-    # banana majboori ho jaata hai, purana typed data kisi bhi internal
-    # caching ki wajah se reh nahi sakta. ──
-    reset_key = f"grid_reset_{bus_number}"
-    if reset_key not in st.session_state:
-        st.session_state[reset_key] = 0
-    ed_key = f"editor_{bus_number}_{st.session_state[reset_key]}"
 
     if sched_km_key not in st.session_state:
         st.session_state[sched_km_key] = get_scheduled_km(bus_number)
@@ -439,10 +445,10 @@ def editable_grid(bus_number: str):
         st.session_state[key] = pd.DataFrame({
             "Date":           [date.today()],
             "Status":         ["Present"],
-            "Driver Name":    'None',
+            "Driver Name":    ['None'],
             "Conductor Name": [None],
             "Scheduled KM":   [scheduled_km],
-            "Actual KM":      [scheduled_km],
+            "Actual KM":      [0],
             "Diesel":         [None],
             "Diesel KM":      [None],
             "Income":         [None],
@@ -582,8 +588,8 @@ def editable_grid(bus_number: str):
                     rows.append({
                         "Date":           pd.to_datetime(r.get("date"), errors="coerce"),
                         "Status":         status,
-                        "Driver Name":    (r.get("driver_name") or None) if "Driver Name" in selected_fields else None,
-                        "Conductor Name": (r.get("conductor_name") or None) if "Conductor Name" in selected_fields else None,
+                        "Driver Name":    (r.get("driver_name") or "None") if "Driver Name" in selected_fields else "None",
+                        "Conductor Name": (r.get("conductor_name") or "None") if "Conductor Name" in selected_fields else "None",
                         "Scheduled KM":   (0 if is_absent_or_leave else (r.get("scheduled_km") if "Scheduled KM" in selected_fields else None)),
                         "Actual KM":      (0 if is_absent_or_leave else (r.get("actual_km") if "Actual KM" in selected_fields else None)),
                         "Diesel":         r.get("diesel") if "Diesel" in selected_fields else None,
@@ -618,7 +624,7 @@ def editable_grid(bus_number: str):
             "Driver Name":    st.column_config.TextColumn("Driver Name"),
             "Conductor Name": st.column_config.TextColumn("Conductor Name"),
             "Scheduled KM":   st.column_config.NumberColumn("Scheduled KM", min_value=0, default=scheduled_km),
-            "Actual KM":      st.column_config.NumberColumn("Actual KM", min_value=0, default=scheduled_km),
+            "Actual KM":      st.column_config.NumberColumn("Actual KM", min_value=0, default=0),
             "Diesel":         st.column_config.NumberColumn(f"{fuel_label(bus_number)} (naya fill)", min_value=0.0, step=0.01, format="%.2f"),
             "Diesel KM":      st.column_config.NumberColumn(f"{fuel_label(bus_number)} KM", min_value=0),
             "Income":         st.column_config.NumberColumn("Income", min_value=0),
@@ -694,6 +700,10 @@ def editable_grid(bus_number: str):
         old_lookup  = st.session_state.get(f"{pending_key}_old", {})
 
         st.warning("⚠️ Neeche di gayi dates ki kuch values already bhari hui hain aur alag value se badal rahi hain — pehle compare kar lo:")
+        # ✅ Poore conflict_df me se kaunse fields me actually conflict hai,
+        # yeh collect karo — sirf unhi ke buttons dikhenge neeche (jaise sirf
+        # KM change hua ho to Driver/Conductor button dikhega hi nahi).
+        conflicting_fields = set()
         for _, new_row in conflict_df.iterrows():
             date_str = str(new_row["Date"])
             old_row  = old_lookup.get(date_str, {})
@@ -703,53 +713,59 @@ def editable_grid(bus_number: str):
                 new_val = new_row.get(col, "")
                 if not _is_empty_val(old_val) and not _is_empty_val(new_val) and str(old_val) != str(new_val):
                     diff_rows.append({"Field": col, "Old Value": old_val, "New Value": new_val})
+                    conflicting_fields.add(col)
             st.markdown(f"**📅 {date_str}**")
             if diff_rows:
                 _render_html_table(pd.DataFrame(diff_rows))
             else:
                 st.caption("(koi conflicting field nahi mila)")
 
-        col1, col2, col3, col4, col5 = st.columns(5)
-        with col1:
-            if st.button("🧑‍✈️ Sirf Driver", key=f"upd_driver_{bus_number}", width='stretch'):
-                save_vehicle_records(bus_number, conflict_df, fields_to_update=["driver_name"])
-                st.success("✅ Sirf Driver Name update hua — baaki fields purane hi rahe!")
-                st.session_state[reset_key] += 1
-                for k in [key, ed_key, fetch_key, confirm_key, pending_key, f"{pending_key}_old"]:
-                    st.session_state.pop(k, None)
-                st.rerun()
-        with col2:
-            if st.button("🎫 Sirf Conductor", key=f"upd_conductor_{bus_number}", width='stretch'):
-                save_vehicle_records(bus_number, conflict_df, fields_to_update=["conductor_name"])
-                st.success("✅ Sirf Conductor Name update hua — baaki fields purane hi rahe!")
-                st.session_state[reset_key] += 1
-                for k in [key, ed_key, fetch_key, confirm_key, pending_key, f"{pending_key}_old"]:
-                    st.session_state.pop(k, None)
-                st.rerun()
-        with col3:
-            if st.button("🛣️ Sirf KM", key=f"upd_km_{bus_number}", width='stretch'):
-                save_vehicle_records(bus_number, conflict_df, fields_to_update=["scheduled_km", "actual_km"])
-                st.success("✅ Sirf Scheduled/Actual KM update hua — baaki fields purane hi rahe!")
-                st.session_state[reset_key] += 1
-                for k in [key, ed_key, fetch_key, confirm_key, pending_key, f"{pending_key}_old"]:
-                    st.session_state.pop(k, None)
-                st.rerun()
-        with col4:
+        show_driver_btn    = "Driver Name" in conflicting_fields
+        show_conductor_btn = "Conductor Name" in conflicting_fields
+        show_sched_km_btn  = "Scheduled KM" in conflicting_fields
+        show_actual_km_btn = "Actual KM" in conflicting_fields
+        show_income_btn    = "Income" in conflicting_fields
+
+        btn_specs = []
+        if show_driver_btn:
+            btn_specs.append(("🧑‍✈️ Sirf Driver", f"upd_driver_{bus_number}", ["driver_name"], "✅ Sirf Driver Name update hua — baaki fields purane hi rahe!"))
+        if show_conductor_btn:
+            btn_specs.append(("🎫 Sirf Conductor", f"upd_conductor_{bus_number}", ["conductor_name"], "✅ Sirf Conductor Name update hua — baaki fields purane hi rahe!"))
+        if show_sched_km_btn:
+            btn_specs.append(("📏 Sirf Scheduled KM", f"upd_sched_km_{bus_number}", ["scheduled_km"], "✅ Sirf Scheduled KM update hua — baaki fields purane hi rahe!"))
+        if show_actual_km_btn:
+            btn_specs.append(("🛣️ Sirf Actual KM", f"upd_actual_km_{bus_number}", ["actual_km"], "✅ Sirf Actual KM update hua — baaki fields purane hi rahe!"))
+        if show_income_btn:
+            btn_specs.append(("💰 Sirf Income", f"upd_income_{bus_number}", ["income"], "✅ Sirf Income update hua — baaki fields purane hi rahe!"))
+
+        n_btns = len(btn_specs) + 2  # +2 for Sab Update aur Cancel
+        cols = st.columns(n_btns)
+        for i, (label, btn_key, fields, success_msg) in enumerate(btn_specs):
+            with cols[i]:
+                if st.button(label, key=btn_key, width='stretch'):
+                    save_vehicle_records(bus_number, conflict_df, fields_to_update=fields)
+                    st.success(success_msg)
+                    for k in [key, fetch_key, confirm_key, pending_key, f"{pending_key}_old"]:
+                        st.session_state.pop(k, None)
+                    st.rerun()
+        with cols[len(btn_specs)]:
             if st.button("✅ Sab Update", key=f"yes_{bus_number}", width='stretch'):
                 save_vehicle_records(bus_number, conflict_df)
                 st.success("✅ Saari fields update ho gayi!")
-                st.session_state[reset_key] += 1
-                for k in [key, ed_key, fetch_key, confirm_key, pending_key, f"{pending_key}_old"]:
+                for k in [key, fetch_key, confirm_key, pending_key, f"{pending_key}_old"]:
                     st.session_state.pop(k, None)
                 st.rerun()
-        with col5:
+        with cols[len(btn_specs) + 1]:
             if st.button("❌ Cancel", key=f"no_{bus_number}", width='stretch'):
                 for k in [confirm_key, pending_key, f"{pending_key}_old"]:
                     st.session_state.pop(k, None)
                 st.rerun()
     else:
         if st.button("💾 Save Changes", key=f"save_{bus_number}", width='stretch'):
-            cleaned_df = edited_df[edited_df["Date"].notna()].copy()
+            cleaned_df = edited_df[
+                edited_df["Driver Name"].notna() &
+                (edited_df["Driver Name"].astype(str).str.strip() != "")
+            ].copy()
             if cleaned_df.empty:
                 st.warning("⚠️ No valid rows to save.")
                 return
@@ -863,9 +879,7 @@ def editable_grid(bus_number: str):
                 st.success(" ".join(msg_parts))
                 if diesel_conflict_pending:
                     st.info(f"ℹ️ {len(diesel_conflict_pending)} date(s) ke {fuel_label(bus_number)} data ke liye confirmation chahiye — neeche dekho.")
-                st.session_state[reset_key] += 1
                 st.session_state.pop(key, None)
-                st.session_state.pop(ed_key, None)
                 st.session_state.pop(fetch_key, None)
                 st.rerun()
 
@@ -890,7 +904,9 @@ def editable_grid(bus_number: str):
         st.session_state[fetch_key] = get_vehicle_records(bus_number)
     fetched_df = st.session_state[fetch_key]
 
-    col1, col2, col3 = st.columns([2, 2, 1])
+    col_year, col1, col2, col3 = st.columns([1, 2, 2, 1])
+    with col_year:
+        year = year_selectbox(key=f"year_{bus_number}")
     with col1:
         month = st.selectbox("Month", options=list(range(1, 13)), index=date.today().month - 1,
                              format_func=lambda x: date(2000, x, 1).strftime("%B"), key=f"month_{bus_number}")
@@ -909,9 +925,9 @@ def editable_grid(bus_number: str):
         display_df["Date"] = pd.to_datetime(display_df["Date"])
         if "Next" not in display_df.columns:
             display_df["Next"] = False
-        start, end           = _get_date_range(date.today().year, month, half)
+        start, end           = _get_date_range(year, month, half)
         normal_mask          = (display_df["Date"] >= start) & (display_df["Date"] <= end) & (display_df["Next"] == False)
-        prev_start, prev_end = shift_period_back(date.today().year, month, half)
+        prev_start, prev_end = shift_period_back(year, month, half)
         shifted_mask         = (display_df["Date"] >= prev_start) & (display_df["Date"] <= prev_end) & (display_df["Next"] == True)
         display_df           = display_df[normal_mask | shifted_mask]
         display_df["Date"]   = display_df["Date"].dt.strftime("%Y-%m-%d")
@@ -1202,7 +1218,9 @@ def driver_salary(bus_number: str = ""):
         st.rerun()
         
     st.markdown("### Saved Salary Records 📋")
-    col1, col2, col3 = st.columns([2, 2, 1])
+    col_year, col1, col2, col3 = st.columns([1, 2, 2, 1])
+    with col_year:
+        sal_year = year_selectbox(key=f"sal_year_{bus_number}")
     with col1:
         sal_month = st.selectbox("Month", options=list(range(1, 13)), index=date.today().month - 1,
                                  format_func=lambda x: date(2000, x, 1).strftime("%B"),
@@ -1224,7 +1242,7 @@ def driver_salary(bus_number: str = ""):
     if not fetched_df.empty:
         disp = fetched_df.copy()
         disp["Date"] = pd.to_datetime(disp["Date"])
-        start, end   = _get_date_range(date.today().year, sal_month, sal_half)
+        start, end   = _get_date_range(sal_year, sal_month, sal_half)
         disp         = disp[(disp["Date"] >= start) & (disp["Date"] <= end)].copy()
         disp["Date"] = disp["Date"].dt.strftime("%Y-%m-%d")
 
@@ -1311,7 +1329,9 @@ def expenses(bus_number: str = ""):
         st.session_state[fetch_key] = get_vehicle_expenses(bus_number)
     fetched_df = st.session_state[fetch_key]
 
-    col1, col2, col3 = st.columns([2, 2, 1])
+    col_year, col1, col2, col3 = st.columns([1, 2, 2, 1])
+    with col_year:
+        exp_year = year_selectbox(key=f"exp_year_{bus_number}")
     with col1:
         exp_month = st.selectbox("Month", options=list(range(1, 13)), index=date.today().month - 1,
                                  format_func=lambda x: date(2000, x, 1).strftime("%B"),
@@ -1328,7 +1348,7 @@ def expenses(bus_number: str = ""):
     if not fetched_df.empty:
         display_exp = fetched_df.copy()
         display_exp["Date"] = pd.to_datetime(display_exp["Date"])
-        start, end  = _get_date_range(date.today().year, exp_month, exp_period)
+        start, end  = _get_date_range(exp_year, exp_month, exp_period)
         display_exp = display_exp[(display_exp["Date"] >= start) & (display_exp["Date"] <= end)].copy()
         display_exp["Date"] = display_exp["Date"].dt.strftime("%Y-%m-%d")
 
@@ -1379,7 +1399,9 @@ def diesel_view(bus_number: str = ""):
     fuel = fuel_label(bus_number)
     st.markdown(f"### {fuel} View ⛽")
 
-    col1, col2, col3 = st.columns([2, 2, 1])
+    col_year, col1, col2, col3 = st.columns([1, 2, 2, 1])
+    with col_year:
+        d_year = year_selectbox(key=f"diesel_year_{bus_number}")
     with col1:
         d_month = st.selectbox("Month", options=list(range(1, 13)),
                                index=date.today().month - 1,
@@ -1394,6 +1416,11 @@ def diesel_view(bus_number: str = ""):
         load = st.button("🔄 Load", key=f"diesel_load_{bus_number}", width='stretch')
 
     # ✅ DB se rate + payment load karo (bus + month + period wise)
+    # ⚠️ NOTE: diesel_details table sirf (bus_number, month, period) se keyed
+    # hai — koi 'year' column nahi hai. Matlab yahan neeche wala "Default rate"
+    # aur "Payment Status" har saal ke isi month+period ke liye SAME record
+    # dikhayega/save karega (fuel_fills ki actual entries neeche year ke
+    # hisaab se sahi filter hoti hain, sirf yeh rate/payment config alag hai).
     state_key = f"diesel_state_{bus_number}_{d_month}_{d_period}"
     if state_key not in st.session_state or load:
         st.session_state[state_key] = get_diesel_rate_payment(bus_number, d_month, d_period)
@@ -1407,7 +1434,7 @@ def diesel_view(bus_number: str = ""):
         key=f"diesel_rate_input_{bus_number}_{d_month}_{d_period}"
     )
 
-    start, end = _get_date_range(date.today().year, d_month, d_period)
+    start, end = _get_date_range(d_year, d_month, d_period)
 
     # ── ✅ Naya fill add karo — ek din mein jitni baar chaho fill kar sakte ho ──
     st.markdown(f"#### ➕ Add {fuel} Fill")
