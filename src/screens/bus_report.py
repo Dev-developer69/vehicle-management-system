@@ -13,7 +13,7 @@ from src.database.db import (
     get_vehicle_fuel_rate, save_vehicle_fuel_rate,
     get_scheduled_km,   # NEW — Total Schedule KM = Present Days × bus ka daily schedule KM
 )
-from src.ui.excel_format import _get_date_range, shift_period_back, fuel_label, _render_html_table
+from src.ui.excel_format import _get_date_range, shift_period_back, fuel_label, _render_html_table, year_selectbox
 
 
 
@@ -280,7 +280,9 @@ def bus_report_view():
             st.success("✅ Avg saved!")
             st.rerun()
 
-    col1, col2, col3 = st.columns([2, 2, 1])
+    col_year, col1, col2, col3 = st.columns([1, 2, 2, 1])
+    with col_year:
+        year = year_selectbox(key="br_year")
     with col1:
         br_month = st.selectbox(
             "Month", options=list(range(1, 13)), index=date.today().month - 1,
@@ -292,7 +294,6 @@ def bus_report_view():
         st.markdown("<br>", unsafe_allow_html=True)
         load = st.button("🔄 Load Report", key="br_load", type='primary', width='stretch')
 
-    year = date.today().year
     start, end = _get_date_range(year, br_month, br_period)
     from_date, to_date = str(start.date()), str(end.date())
 
@@ -395,7 +396,7 @@ def bus_report_view():
     maint_all = data.get("maint_all", maint)
 
     if vr.empty:
-        st.info(f"📭 {bus_number} ke liye {date(2000, br_month, 1).strftime('%B')} ({br_period}) me koi record nahi mila.")
+        st.info(f"📭 {bus_number} ke liye {date(2000, br_month, 1).strftime('%B')} {year} ({br_period}) me koi record nahi mila.")
         return
 
     # ── Poore period (full/half, jo bhi selected hai) ke metrics ──
@@ -440,7 +441,7 @@ def bus_report_view():
     fmt_kml   = lambda v: f"{v:.2f} km/L"
 
     # ── Duty summary ──
-    st.markdown(f"#### 📊 {bus_number} — {date(2000, br_month, 1).strftime('%B')} ({br_period}) Summary")
+    st.markdown(f"#### 📊 {bus_number} — {date(2000, br_month, 1).strftime('%B')} {year} ({br_period}) Summary")
     s1, s2, s3, s4 = st.columns(4)
     with s1: _metric_card("📅 Present Days", str(full["present_days"]), sublabel=_sub("", "present_days", fmt_int))
     with s2: _metric_card("🏖️ On Leave", str(full["leave_days"]), sublabel=_sub("", "leave_days", fmt_int))
@@ -556,7 +557,7 @@ def bus_report_view():
         st.caption("Koi overdue maintenance nahi hai.")
 
     if not maint.empty:
-        st.caption(f"📅 Is period ({date(2000, br_month, 1).strftime('%B')}, {br_period}) ke maintenance records:")
+        st.caption(f"📅 Is period ({date(2000, br_month, 1).strftime('%B')} {year}, {br_period}) ke maintenance records:")
         _render_html_table(maint.drop(columns=["id"], errors="ignore").head(10))
     else:
         st.info("Is period ke liye koi maintenance record nahi mila.")
