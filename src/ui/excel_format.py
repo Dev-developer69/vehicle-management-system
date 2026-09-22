@@ -429,11 +429,20 @@ def _split_duty_section(bus_number: str, date_options: list):
 def editable_grid(bus_number: str):
     numeric_cols = ["Scheduled KM", "Actual KM", "Diesel", "Diesel KM", "Avg", "Income"]
     key          = f"grid_{bus_number}"
-    ed_key       = f"editor_{bus_number}"
     fetch_key    = f"fetched_{bus_number}"
     confirm_key  = f"show_confirm_{bus_number}"
     pending_key  = f"pending_df_{bus_number}"
     sched_km_key = f"sched_km_{bus_number}"
+
+    # ── ✅ Reset counter — ed_key is isse suffix hota hai. Har successful
+    # save ke baad iska value +1 hota hai, taaki agli baar ek BILKUL NAYA
+    # (kabhi na dekha gaya) widget key mile — Streamlit ko fresh widget
+    # banana majboori ho jaata hai, purana typed data kisi bhi internal
+    # caching ki wajah se reh nahi sakta. ──
+    reset_key = f"grid_reset_{bus_number}"
+    if reset_key not in st.session_state:
+        st.session_state[reset_key] = 0
+    ed_key = f"editor_{bus_number}_{st.session_state[reset_key]}"
 
     if sched_km_key not in st.session_state:
         st.session_state[sched_km_key] = get_scheduled_km(bus_number)
@@ -445,10 +454,10 @@ def editable_grid(bus_number: str):
         st.session_state[key] = pd.DataFrame({
             "Date":           [date.today()],
             "Status":         ["Present"],
-            "Driver Name":    ['None'],
+            "Driver Name":    [None],
             "Conductor Name": [None],
             "Scheduled KM":   [scheduled_km],
-            "Actual KM":      [0],
+            "Actual KM":      [scheduled_km],
             "Diesel":         [None],
             "Diesel KM":      [None],
             "Income":         [None],
@@ -588,8 +597,8 @@ def editable_grid(bus_number: str):
                     rows.append({
                         "Date":           pd.to_datetime(r.get("date"), errors="coerce"),
                         "Status":         status,
-                        "Driver Name":    (r.get("driver_name") or "None") if "Driver Name" in selected_fields else "None",
-                        "Conductor Name": (r.get("conductor_name") or "None") if "Conductor Name" in selected_fields else "None",
+                        "Driver Name":    (r.get("driver_name") or None) if "Driver Name" in selected_fields else None,
+                        "Conductor Name": (r.get("conductor_name") or None) if "Conductor Name" in selected_fields else None,
                         "Scheduled KM":   (0 if is_absent_or_leave else (r.get("scheduled_km") if "Scheduled KM" in selected_fields else None)),
                         "Actual KM":      (0 if is_absent_or_leave else (r.get("actual_km") if "Actual KM" in selected_fields else None)),
                         "Diesel":         r.get("diesel") if "Diesel" in selected_fields else None,
@@ -624,7 +633,7 @@ def editable_grid(bus_number: str):
             "Driver Name":    st.column_config.TextColumn("Driver Name"),
             "Conductor Name": st.column_config.TextColumn("Conductor Name"),
             "Scheduled KM":   st.column_config.NumberColumn("Scheduled KM", min_value=0, default=scheduled_km),
-            "Actual KM":      st.column_config.NumberColumn("Actual KM", min_value=0, default=0),
+            "Actual KM":      st.column_config.NumberColumn("Actual KM", min_value=0, default=scheduled_km),
             "Diesel":         st.column_config.NumberColumn(f"{fuel_label(bus_number)} (naya fill)", min_value=0.0, step=0.01, format="%.2f"),
             "Diesel KM":      st.column_config.NumberColumn(f"{fuel_label(bus_number)} KM", min_value=0),
             "Income":         st.column_config.NumberColumn("Income", min_value=0),
@@ -745,14 +754,16 @@ def editable_grid(bus_number: str):
                 if st.button(label, key=btn_key, width='stretch'):
                     save_vehicle_records(bus_number, conflict_df, fields_to_update=fields)
                     st.success(success_msg)
-                    for k in [key, fetch_key, confirm_key, pending_key, f"{pending_key}_old"]:
+                    st.session_state[reset_key] += 1
+                    for k in [key, ed_key, fetch_key, confirm_key, pending_key, f"{pending_key}_old"]:
                         st.session_state.pop(k, None)
                     st.rerun()
         with cols[len(btn_specs)]:
             if st.button("✅ Sab Update", key=f"yes_{bus_number}", width='stretch'):
                 save_vehicle_records(bus_number, conflict_df)
                 st.success("✅ Saari fields update ho gayi!")
-                for k in [key, fetch_key, confirm_key, pending_key, f"{pending_key}_old"]:
+                st.session_state[reset_key] += 1
+                for k in [key, ed_key, fetch_key, confirm_key, pending_key, f"{pending_key}_old"]:
                     st.session_state.pop(k, None)
                 st.rerun()
         with cols[len(btn_specs) + 1]:
@@ -762,10 +773,7 @@ def editable_grid(bus_number: str):
                 st.rerun()
     else:
         if st.button("💾 Save Changes", key=f"save_{bus_number}", width='stretch'):
-            cleaned_df = edited_df[
-                edited_df["Driver Name"].notna() &
-                (edited_df["Driver Name"].astype(str).str.strip() != "")
-            ].copy()
+            cleaned_df = edited_df[edited_df["Date"].notna()].copy()
             if cleaned_df.empty:
                 st.warning("⚠️ No valid rows to save.")
                 return
@@ -879,7 +887,9 @@ def editable_grid(bus_number: str):
                 st.success(" ".join(msg_parts))
                 if diesel_conflict_pending:
                     st.info(f"ℹ️ {len(diesel_conflict_pending)} date(s) ke {fuel_label(bus_number)} data ke liye confirmation chahiye — neeche dekho.")
+                st.session_state[reset_key] += 1
                 st.session_state.pop(key, None)
+                st.session_state.pop(ed_key, None)
                 st.session_state.pop(fetch_key, None)
                 st.rerun()
 
@@ -1417,7 +1427,7 @@ def diesel_view(bus_number: str = ""):
 
     # ✅ DB se rate + payment load karo (bus + month + period wise)
     # ⚠️ NOTE: diesel_details table sirf (bus_number, month, period) se keyed
-    # hai — koi 'year' column nahi hai. Matlab yahan neeche wala "Default rate"
+    # hai — koi 'year' column nahi hai. Matlab neeche wala "Default rate"
     # aur "Payment Status" har saal ke isi month+period ke liye SAME record
     # dikhayega/save karega (fuel_fills ki actual entries neeche year ke
     # hisaab se sahi filter hoti hain, sirf yeh rate/payment config alag hai).
