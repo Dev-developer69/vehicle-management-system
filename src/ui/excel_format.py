@@ -653,6 +653,7 @@ def editable_grid(bus_number: str):
     #    hai (jaise Diesel pehle blank tha), to seedha save ho jaye. ──
     _COMPARE_COLS = ["Status", "Driver Name", "Conductor Name", "Scheduled KM",
                      "Actual KM", "Diesel KM", "Income", "Remark", "Next"]
+    _NUMERIC_COMPARE_COLS = {"Scheduled KM", "Actual KM", "Diesel KM", "Income"}
 
     def _is_empty_val(v) -> bool:
         if v is None:
@@ -661,6 +662,20 @@ def editable_grid(bus_number: str):
             return True
         s = str(v).strip().lower()
         return s in ("", "none", "nan")
+
+    def _values_differ(col: str, old_val, new_val) -> bool:
+        """Column-aware comparison. Numeric columns (Scheduled KM, Actual KM,
+        Diesel KM, Income) number ki tarah compare hote hain — taaki DB se
+        aayi '446.0' (float) aur editor ki '446' (int) SAME maani jayein.
+        Pehle plain str() compare hota tha, jisse same value hone par bhi
+        false conflict dikhta tha (446.0 != 446 as strings). Baaki (text)
+        columns pehle jaisa hi string compare (trimmed) karte hain."""
+        if col in _NUMERIC_COMPARE_COLS:
+            try:
+                return float(old_val) != float(new_val)
+            except (TypeError, ValueError):
+                pass
+        return str(old_val).strip() != str(new_val).strip()
 
     diesel_confirm_key = f"diesel_confirm_{bus_number}"
     diesel_pending_key = f"diesel_pending_{bus_number}"
@@ -720,7 +735,7 @@ def editable_grid(bus_number: str):
             for col in _COMPARE_COLS:
                 old_val = old_row.get(col, "")
                 new_val = new_row.get(col, "")
-                if not _is_empty_val(old_val) and not _is_empty_val(new_val) and str(old_val) != str(new_val):
+                if not _is_empty_val(old_val) and not _is_empty_val(new_val) and _values_differ(col, old_val, new_val):
                     diff_rows.append({"Field": col, "Old Value": old_val, "New Value": new_val})
                     conflicting_fields.add(col)
             st.markdown(f"**📅 {date_str}**")
@@ -849,14 +864,14 @@ def editable_grid(bus_number: str):
                 for col in _COMPARE_COLS:
                     old_val = old_row.get(col, "")
                     new_val = new_row.get(col, "")
-                    if not _is_empty_val(old_val) and not _is_empty_val(new_val) and str(old_val) != str(new_val):
+                    if not _is_empty_val(old_val) and not _is_empty_val(new_val) and _values_differ(col, old_val, new_val):
                         has_conflict = True
                         break
                 if has_conflict:
                     conflict_rows.append(new_row)
                     conflict_old[date_str] = old_row
                 else:
-                    safe_rows.append(new_row)  # ✅ sirf khaali fields bhar rahe ho — direct save
+                    safe_rows.append(new_row)  # ✅ sirf khaali fields bhar rahe ho, ya value same hai — direct save
 
             if safe_rows:
                 save_vehicle_records(bus_number, pd.DataFrame(safe_rows))
