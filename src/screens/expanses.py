@@ -9,7 +9,7 @@ from src.database.db import (
     get_maintenance_records,
 )
 from src.database.auth import get_accessible_vehicles
-from src.ui.excel_format import _get_date_range
+from src.ui.excel_format import _get_date_range, year_selectbox
 
 ALL_BUSES = [("3131", "3131_E"), ("0303", "0303_E"), ("7389", "7389_E"), ("2350", "2350_E"), ("AT7389", "AT7389_E")]
 
@@ -147,7 +147,9 @@ def expenses():
 
     # ── Period filter ──
     st.markdown("### Expenses Summary 📊")
-    fc1, fc2, fc3 = st.columns([2, 3, 1])
+    fc_year, fc1, fc2, fc3 = st.columns([1, 2, 3, 1])
+    with fc_year:
+        summary_year = year_selectbox(key="summary_year")
     with fc1:
         summary_month = st.selectbox(
             "Month",
@@ -169,13 +171,13 @@ def expenses():
             st.session_state["open_bus_detail"] = None
             st.rerun()
 
-    year       = date.today().year
+    year       = summary_year
     start, end = _get_date_range(year, summary_month, summary_period)
 
     # ── Per bus totals (cached) ──
     bus_data = {}
     for bus, _ in visible_buses:
-        cache_key = f"exp_cache_{bus}_{summary_month}_{summary_period}"
+        cache_key = f"exp_cache_{bus}_{year}_{summary_month}_{summary_period}"
         if cache_key not in st.session_state:
             exp_df = get_vehicle_expenses(bus)
             if not exp_df.empty:
