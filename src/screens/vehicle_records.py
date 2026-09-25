@@ -32,7 +32,7 @@ from src.ml.festival_aware_income import (
     compute_income_baseline_festival_aware, income_alert_status_festival_aware,
     estimate_festival_income_multiplier, conductor_festival_performance,
 )
-from src.ui.excel_format import shift_period_back, _get_date_range
+from src.ui.excel_format import shift_period_back, _get_date_range, year_selectbox
 
 VEHICLE_MAP = {
     "7389": "page_7389",
@@ -323,7 +323,9 @@ def quick_overview(bus_list: list):
     if not bus_list:
         return
 
-    sel_col1, sel_col2, sel_col3 = st.columns([2, 2, 1])
+    sel_year_col, sel_col1, sel_col2, sel_col3 = st.columns([1, 2, 2, 1])
+    with sel_year_col:
+        sel_year = year_selectbox(key="qo_year")
     with sel_col1:
         sel_month = st.selectbox(
             "Month", options=list(range(1, 13)),
@@ -342,10 +344,10 @@ def quick_overview(bus_list: list):
         st.markdown("<br>", unsafe_allow_html=True)
         load_clicked = st.button("🔄 Load", key="qo_load", width='stretch')
 
-    year = date.today().year
+    year = sel_year
     raw_start, raw_end = _get_date_range(year, sel_month, sel_period)
     start, end = raw_start.date(), raw_end.date()
-    period_label = f"{date(2000, sel_month, 1).strftime('%B')} ({sel_period})"
+    period_label = f"{date(2000, sel_month, 1).strftime('%B')} {year} ({sel_period})"
 
     st.markdown(f"""
     <div style='display:flex;align-items:center;gap:10px;margin-bottom:0.5rem;'>
