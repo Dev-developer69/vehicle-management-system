@@ -451,10 +451,10 @@ def editable_grid(bus_number: str):
 
     # ── ✅ Driver Name ko "dropdown + writable" banane ke liye — DB me
     # jitne bhi distinct drivers hain (case-insensitive dedup, junk names
-    # already filtered) unki list + ek sentinel "Naya Driver" option, jo
-    # select hone par neeche ek free-text input khol deta hai. ──
-    DRIVER_NEW = "➕ Naya Driver Likho"
-    driver_options = get_drivers_for_buses() + [DRIVER_NEW]
+    # already filtered), plus a sentinel "Add New Driver" option placed
+    # FIRST in the list, which opens a free-text input when selected. ──
+    DRIVER_NEW = "➕ Add New Driver"
+    driver_options = [DRIVER_NEW] + get_drivers_for_buses()
 
     st.markdown(f"### Vehicle Records {bus_number} 🚐")
 
@@ -638,7 +638,7 @@ def editable_grid(bus_number: str):
         column_config={
             "Date":           st.column_config.DateColumn("Date", default=date.today()),
             "Status":         st.column_config.SelectboxColumn("Status", options=["Present", "On Leave"], default="Present"),
-            "Driver Name":    st.column_config.SelectboxColumn("Driver Name", options=driver_options),  # ✅ dropdown + "Naya Driver" option
+            "Driver Name":    st.column_config.SelectboxColumn("Driver Name", options=driver_options),  # dropdown + "Add New Driver" option
             "Conductor Name": st.column_config.TextColumn("Conductor Name"),
             "Scheduled KM":   st.column_config.NumberColumn("Scheduled KM", min_value=0, default=scheduled_km),
             "Actual KM":      st.column_config.NumberColumn("Actual KM", min_value=0, default=scheduled_km),
@@ -655,14 +655,14 @@ def editable_grid(bus_number: str):
     on_leave_mask = edited_df["Status"] == "On Leave"
     edited_df.loc[on_leave_mask, ["Scheduled KM", "Actual KM", "Income"]] = 0
 
-    # ── ✅ "➕ Naya Driver Likho" select hua to uske liye ek alag free-text
-    # input dikhao — typed value seedha edited_df me wapas daal diya jaata
-    # hai, taaki save-flow ko pata bhi na chale ki ye dropdown se aaya ya
-    # naya typed gaya. ──
+    # ── When "➕ Add New Driver" is selected, show a free-text input for
+    # that row — the typed value is written straight back into edited_df,
+    # so the save flow doesn't need to know whether it came from the
+    # dropdown or was newly typed. ──
     for _drv_idx, _drv_row in edited_df.iterrows():
         if _drv_row.get("Driver Name") == DRIVER_NEW:
             _typed_driver = st.text_input(
-                f"Naya driver naam — {_drv_row['Date']}",
+                f"New driver name — {_drv_row['Date']}",
                 key=f"new_driver_{bus_number}_{_drv_idx}",
             )
             if _typed_driver.strip():
@@ -814,11 +814,11 @@ def editable_grid(bus_number: str):
                 st.warning("⚠️ No valid rows to save.")
                 return
 
-            # ── ✅ Cross-vehicle driver clash check — agar isi date pe
-            # yehi driver naam kisi DUSRI vehicle me bhi 'Present' hai to
-            # warning table dikhao. Ye sirf warning hai — save block nahi
-            # hota, taaki genuine cases (jaise chota overlap, data-entry
-            # correction ke waqt) rukein na. ──
+            # ── Cross-vehicle driver clash check — if the same driver name
+            # is already 'Present' on a DIFFERENT vehicle on the same date,
+            # show a warning table. This is warning-only — it does not
+            # block the save, so genuine cases (small overlaps, data-entry
+            # corrections) aren't stuck. ──
             clashes = []
             for _, crow in cleaned_df.iterrows():
                 if crow.get("Status") == "Present" and crow.get("Driver Name"):
@@ -829,8 +829,8 @@ def editable_grid(bus_number: str):
                         })
             if clashes:
                 st.warning(
-                    "⚠️ Driver clash mila — same date pe ye driver dusri vehicle mein bhi "
-                    "'Present' hai (save phir bhi ho gaya, verify kar lo):"
+                    "⚠️ Driver clash found — this driver is already 'Present' on "
+                    "another vehicle for the same date (saved anyway, please verify):"
                 )
                 _render_html_table(pd.DataFrame(clashes))
 
