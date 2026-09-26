@@ -2,8 +2,8 @@ import time
 import streamlit as st
 import pandas as pd
 from datetime import date
-from fpdf import FPDF              # ✅ NEW — poore Bus Report ka PDF download banane ke liye
-from httpx import TransportError   # RemoteProtocolError / ReadError / ConnectError ka base
+from fpdf import FPDF              
+from httpx import TransportError   
 
 from src.database.auth import get_accessible_vehicles
 from src.database.db import (
@@ -12,10 +12,10 @@ from src.database.db import (
     get_vehicle_compliance, save_vehicle_compliance,
     get_duty_splits, compute_role_duty_credits,
     get_vehicle_fuel_rate, save_vehicle_fuel_rate,
-    get_scheduled_km,   # NEW — Total Schedule KM = Present Days × bus ka daily schedule KM
-    get_all_fuel_fills,  # ✅ NEW — poori fuel_fills history (interval-mileage ke liye)
+    get_scheduled_km,   
+    get_all_fuel_fills,  
 )
-from src.ml.diesel_forecast import estimate_bus_mileage, expected_diesel_cost  # ✅ NEW
+from src.ml.diesel_forecast import estimate_bus_mileage, expected_diesel_cost  
 from src.ui.excel_format import _get_date_range, shift_period_back, fuel_label, _render_html_table, year_selectbox
 
 
@@ -614,23 +614,44 @@ def bus_report_view():
         rates = pd.to_numeric(recent["Rate"], errors="coerce").dropna() if not recent.empty else []
         price = float(rates.iloc[-1]) if len(rates) else 0.0
 
-    # ── ✅ NEW — Data-driven mileage estimate (Diesel only; CNG interval
-    # logic abhi implement nahi kiya, is baar Diesel ke liye hi). Poori
-    # vehicle_records + poori fuel_fills history use hoti hai (period-scoped
-    # nahi), kyunki fill-intervals kisi period-boundary se pehle shuru ho
-    # sakte hain. fuel_avg ko override kar deta hai jab toggle ON ho aur
-    # kaafi data mile — warna manual avg hi (transparently) use hota hai. ──
+    fuel_type = "cng" if is_cng else "diesel"
+
+    # ── ✅ Robust, physically-bounded mileage estimate — computed ALWAYS
+    # (not just when the toggle is on), because the old "Avg (Actual KM
+    # basis)" card used a period-only ratio (this period's actual_km ÷
+    # this period's diesel) which is mathematically broken whenever fill
+    # days don't line up with the period boundary — that's what produced
+    # impossible numbers like 61.58 km/L. This card now always shows the
+    # robust, full-history estimate so it stays realistic and doesn't
+    # jump around when you change the period. ──
+    full_vr    = get_vehicle_records(bus_number)
+    full_fills = get_all_fuel_fills(bus_number)
+    estimate   = estimate_bus_mileage(full_vr, full_fills, fuel_type=fuel_type)
+
+    if estimate.get("avg_kmpl", 0) > 0:
+        display_avg_actual_km = estimate["avg_kmpl"]
+        avg_actual_sub = f"{estimate['intervals_used']} fill-intervals se · {estimate['trend']}"
+        if estimate.get("intervals_dropped"):
+            avg_actual_sub += f" · {estimate['intervals_dropped']} impossible fill(s) ignored"
+        if estimate.get("range_capped"):
+            avg_actual_sub += " · ⚠️ capped to realistic range"
+    else:
+        display_avg_actual_km = full["avg_actual_km"]
+        avg_actual_sub = "⏳ abhi kaafi data nahi (fallback: is period ka ratio)"
+
+    # ── Expected {fuel} Cost — toggle ON par isi robust estimate se
+    # fuel_avg override hota hai; OFF par manual number hi (transparently)
+    # use hota hai. ──
     data_note = None
-    if use_data_driven and not is_cng:
-        full_vr    = get_vehicle_records(bus_number)
-        full_fills = get_all_fuel_fills(bus_number)
-        estimate    = estimate_bus_mileage(full_vr, full_fills)
-        cost_result = expected_diesel_cost(estimate, full["actual_km"], price, fallback_kmpl=fuel_avg)
+    if use_data_driven:
+        cost_result = expected_diesel_cost(estimate, full["actual_km"], price, fuel_type=fuel_type)
         fuel_avg = cost_result["avg_kmpl"]
         if cost_result["used_fallback"]:
             data_note = "⏳ abhi kaafi data nahi — manual avg use hua"
         else:
             data_note = f"📊 {cost_result['intervals_used']} fill-intervals se · {cost_result['trend']}"
+            if cost_result.get("range_capped"):
+                data_note += " · ⚠️ capped to realistic range"
 
     def _exp_cost(km):
         return (km / fuel_avg) * price if fuel_avg > 0 else 0.0
@@ -657,8 +678,7 @@ def bus_report_view():
         _metric_card("Avg (Diesel KM basis)", f"{full['avg_diesel_km']:.2f} km/L",
                      sublabel=_sub("", "avg_diesel_km", fmt_kml))
     with d4:
-        _metric_card("Avg (Actual KM basis)", f"{full['avg_actual_km']:.2f} km/L",
-                     sublabel=_sub("", "avg_actual_km", fmt_kml))
+        _metric_card("Avg (Actual KM basis)", f"{display_avg_actual_km:.2f} km/L", sublabel=avg_actual_sub)
     with d5:
         _metric_card(f"Expected {fuel} Cost", f"₹{expected_fuel_cost:,.0f}", sublabel=_expected_cost_sub())
 
