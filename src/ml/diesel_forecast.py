@@ -1,24 +1,128 @@
 """
-Diesel Mileage & Cost Estimation — actual_km-interval based, outlier-robust.
+Diesel Forecasting & Mileage Estimation.
 
-'Diesel KM' field manual entry pe depend karta hai jo reliably nahi bharta
-(pichle fill ke baad se kitna km chala, ye pata nahi rehta). Isliye yahan
-DAILY 'Actual KM' (jo already bharni padti hai — Vehicle Records ka core
-field) se interval-km khud reconstruct karte hain:
+This module has TWO independent pieces of logic that answer different
+questions — keep both, don't merge them:
 
-  Har fuel-fill ka interval-km = us fill se PICHLE fill ke beech ke
-  saare din ka actual_km ka sum (fill-date included, prev fill-date
-  excluded).
+1. forecast_diesel() / forecast_summary_rows()
+   "How much diesel (litres) will the next N days likely need?"
+   — a simple day-by-day trend (linear regression) over daily diesel
+   quantities. Used by src/screens/vehicle_records.py.
 
-Ye poore tarah automatic hai — koi extra manual field ki zaroorat nahi.
+2. estimate_bus_mileage() / expected_diesel_cost() / compute_intervals()
+   "What is the bus's real current mileage (km/L), and what will the
+   NEXT PERIOD cost given its expected KM?"
+   — reconstructs actual fill-to-fill interval KM from the daily
+   'Actual KM' field (since the manual 'Diesel KM' field isn't reliably
+   filled), then computes an outlier-robust, KM-weighted average mileage.
+   Used by src/screens/bus_report_view.py.
 
-Real-world noise (traffic/idling/AC, ya galti se galat entry/meter-error)
-ki wajah se ek fill ka mileage kabhi upar-neeche ho sakta hai — isliye
-IQR-capping se ek outlier fill poore average ko nahi bigaadta.
+Both are numpy/pandas-only — no heavy ML dependency.
 """
 
 import numpy as np
 import pandas as pd
+
+# ══════════════════════════════════════════════
+# 1. DAY-TREND DIESEL-QUANTITY FORECAST
+# ══════════════════════════════════════════════
+
+MIN_DAYS_FOR_FORECAST = 5  # itne diesel-days na ho to forecast unreliable hai
+
+
+def forecast_diesel(raw_rows: list, forecast_days: int = 15) -> dict:
+    """raw_rows: list of {"bus_number", "date", "diesel"} dicts, diesel > 0 wale.
+    Har bus ke liye agle `forecast_days` din ka expected total diesel (litres)
+    forecast karta hai — linear trend (slope) + average ka combination.
+    Returns: {bus_number: {"forecast_litres": float, "avg_daily": float,
+                            "trend": "badh raha" | "ghat raha" | "stable",
+                            "days_used": int}}"""
+    if not raw_rows:
+        return {}
+
+    ddf = pd.DataFrame(raw_rows)
+    if ddf.empty or "diesel" not in ddf.columns or "date" not in ddf.columns:
+        return {}
+
+    ddf["diesel"] = pd.to_numeric(ddf["diesel"], errors="coerce")
+    ddf["date"]   = pd.to_datetime(ddf["date"], errors="coerce")
+    ddf = ddf.dropna(subset=["diesel", "date"])
+    ddf = ddf[ddf["diesel"] > 0]
+    if ddf.empty:
+        return {}
+
+    results = {}
+    for bus, g in ddf.groupby("bus_number"):
+        g = g.sort_values("date")
+        if len(g) < MIN_DAYS_FOR_FORECAST:
+            avg_daily = float(g["diesel"].mean())
+            results[bus] = {
+                "forecast_litres": round(avg_daily * forecast_days, 1),
+                "avg_daily": round(avg_daily, 2),
+                "trend": "abhi seekh raha hai",
+                "days_used": len(g),
+            }
+            continue
+
+        x = np.arange(len(g))
+        y = g["diesel"].values
+        slope, intercept = np.polyfit(x, y, 1)
+
+        avg_daily = float(y.mean())
+        # Trend-adjusted forecast: average + thoda sa slope-based adjustment,
+        # taaki ek outlier din pura forecast na bigaad de
+        trend_adjustment = slope * forecast_days * 0.5
+        forecast_total = max(0.0, avg_daily * forecast_days + trend_adjustment)
+
+        if slope > avg_daily * 0.02:
+            trend_label = "📈 Badh raha hai"
+        elif slope < -avg_daily * 0.02:
+            trend_label = "📉 Ghat raha hai"
+        else:
+            trend_label = "➡️ Stable"
+
+        results[bus] = {
+            "forecast_litres": round(forecast_total, 1),
+            "avg_daily": round(avg_daily, 2),
+            "trend": trend_label,
+            "days_used": len(g),
+        }
+    return results
+
+
+def forecast_summary_rows(forecast: dict, rate_per_litre: float = None) -> list:
+    rows = []
+    for bus in sorted(forecast.keys()):
+        f = forecast[bus]
+        row = {
+            "Bus": bus,
+            "Avg Daily (L)": f["avg_daily"],
+            "Trend": f["trend"],
+            "Forecast (L)": f["forecast_litres"],
+            "Based on (days)": f["days_used"],
+        }
+        if rate_per_litre:
+            row["Est. Cost (₹)"] = round(f["forecast_litres"] * rate_per_litre, 0)
+        rows.append(row)
+    return rows
+
+
+# ══════════════════════════════════════════════
+# 2. ACTUAL-KM-INTERVAL BASED MILEAGE ESTIMATION
+# ══════════════════════════════════════════════
+#
+# 'Diesel KM' field manual entry pe depend karta hai jo reliably nahi bharta
+# (pichle fill ke baad se kitna km chala, ye pata nahi rehta). Isliye yahan
+# DAILY 'Actual KM' (jo already bharni padti hai — Vehicle Records ka core
+# field) se interval-km khud reconstruct karte hain:
+#
+#   Har fuel-fill ka interval-km = us fill se PICHLE fill ke beech ke
+#   saare din ka actual_km ka sum (fill-date included, prev fill-date
+#   excluded).
+#
+# Real-world noise (traffic/idling/AC, ya galti se galat entry/meter-error)
+# ki wajah se ek fill ka mileage kabhi upar-neeche ho sakta hai — isliye
+# IQR-capping se ek outlier fill poore average ko nahi bigaadta.
 
 MIN_KM_FOR_ESTIMATE = 500   # itna total interval-KM na ho to mileage estimate abhi unreliable hai
 TREND_BUCKETS        = 4    # trend dekhne ke liye data ko itne chunks mein baanta hai
