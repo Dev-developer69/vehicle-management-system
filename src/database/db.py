@@ -615,6 +615,20 @@ def get_salary_check(from_date: str = None, to_date: str = None, bus_numbers: li
     return grouped
 
 
+
+def check_driver_clash(driver_name: str, date_str: str, current_bus: str) -> str | None:
+    """Same driver_name, same date pe kisi DUSRI vehicle mein 'Present'
+    status se already record hai to uska bus_number return karta hai —
+    warna None. Sirf warning ke liye, blocking nahi."""
+    driver_name = (driver_name or "").strip()
+    if not driver_name or driver_name.lower() in ("none", "no", "test", ""):
+        return None
+    res = supabase.table("vehicle_records").select("bus_number") \
+        .ilike("driver_name", driver_name) \
+        .eq("date", date_str).eq("status", "Present") \
+        .neq("bus_number", current_bus).execute()
+    return res.data[0]["bus_number"] if res.data else None    
+
 # ══════════════════════════════════════════════
 # DRIVER SALARY RATE
 # ══════════════════════════════════════════════
