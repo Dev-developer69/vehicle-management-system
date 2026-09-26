@@ -1110,3 +1110,13 @@ def get_dated_diesel_records_raw(bus_numbers: list) -> list:
         return []
     return supabase.table("vehicle_records").select("bus_number, date, diesel") \
         .in_("bus_number", bus_numbers).gt("diesel", 0).order("date").execute().data or []
+
+
+
+def get_all_fuel_fills(bus_number: str) -> pd.DataFrame:
+    """Saari (ever, date-range-limited nahi) fuel_fills entries — interval-
+    mileage computation ke liye poori history chahiye hoti hai, kyunki
+    interval kisi bhi period-boundary se pehle shuru ho sakta hai."""
+    res = supabase.table("fuel_fills").select("*").eq("bus_number", bus_number).order("date").order("created_at").execute()
+    return _to_df(res.data or [], {"date": "Date", "quantity": "Quantity", "rate": "Rate", "amount": "Amount"},
+                  ["id", "Date", "Quantity", "Rate", "Amount"])
