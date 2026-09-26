@@ -2,6 +2,7 @@ import time
 import streamlit as st
 import pandas as pd
 from datetime import date
+from fpdf import FPDF              # ✅ NEW — poore Bus Report ka PDF download banane ke liye
 from httpx import TransportError   # RemoteProtocolError / ReadError / ConnectError ka base
 
 from src.database.auth import get_accessible_vehicles
@@ -12,7 +13,9 @@ from src.database.db import (
     get_duty_splits, compute_role_duty_credits,
     get_vehicle_fuel_rate, save_vehicle_fuel_rate,
     get_scheduled_km,   # NEW — Total Schedule KM = Present Days × bus ka daily schedule KM
+    get_all_fuel_fills,  # ✅ NEW — poori fuel_fills history (interval-mileage ke liye)
 )
+from src.ml.diesel_forecast import estimate_bus_mileage, expected_diesel_cost  # ✅ NEW
 from src.ui.excel_format import _get_date_range, shift_period_back, fuel_label, _render_html_table, year_selectbox
 
 
@@ -233,6 +236,139 @@ def _get_vehicle_records_for_period(bus_number: str, year: int, month: int, peri
     return vr[normal_mask | shifted_mask]
 
 
+# ══════════════════════════════════════════════
+# 📥 PDF EXPORT — poora Bus Report ek PDF me. db.py me is tarah ka
+# multi-section report-generator maujood nahi tha (waha sirf single-table
+# generators the — vehicle_records ke _generate_pdf/_generate_expenses_pdf),
+# isliye yahin naya, is page ke hisaab se bana diya.
+# ══════════════════════════════════════════════
+def _safe_pdf_text(val) -> str:
+    """FPDF core fonts (Helvetica) sirf Latin-1 support karte hain — unsupported chars replace karo"""
+    return str(val).encode("latin-1", errors="replace").decode("latin-1")
+
+
+def _pdf_kv_section(pdf: FPDF, title: str, pairs: list):
+    """Ek section heading + label:value pairs ko 2-column grid mein
+    draw karta hai (Summary/Diesel/Payment/Expenses jaisi cards ke liye)."""
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.set_text_color(139, 58, 58)
+    pdf.cell(0, 8, _safe_pdf_text(title), ln=True)
+    pdf.set_text_color(0, 0, 0)
+
+    col_w = (pdf.w - 2 * pdf.l_margin) / 2
+    pdf.set_font("Helvetica", "", 10)
+    for i in range(0, len(pairs), 2):
+        row_pairs = pairs[i:i + 2]
+        for label, value in row_pairs:
+            pdf.set_font("Helvetica", "B", 10)
+            pdf.cell(col_w * 0.55, 7, _safe_pdf_text(f"{label}:"), border=0)
+            pdf.set_font("Helvetica", "", 10)
+            pdf.cell(col_w * 0.45, 7, _safe_pdf_text(value), border=0)
+        pdf.ln()
+    pdf.ln(3)
+
+
+def _pdf_data_table(pdf: FPDF, df: pd.DataFrame, max_rows: int = 15):
+    """Generic dataframe -> bordered table (maintenance/driver-salary
+    records ke liye) — vehicle_records ke expenses-PDF table jaisa hi style."""
+    if df.empty:
+        return
+    df = df.head(max_rows)
+    cols   = list(df.columns)
+    page_w = pdf.w - 2 * pdf.l_margin
+    col_w  = page_w / len(cols)
+
+    pdf.set_fill_color(52, 73, 94); pdf.set_text_color(255, 255, 255)
+    pdf.set_font("Helvetica", "B", 8)
+    for col in cols:
+        pdf.cell(col_w, 8, _safe_pdf_text(col), border=1, align="C", fill=True)
+    pdf.ln()
+
+    pdf.set_text_color(0, 0, 0); pdf.set_font("Helvetica", "", 8)
+    for i, row in df.iterrows():
+        fill = i % 2 == 0
+        pdf.set_fill_color(245, 245, 245) if fill else pdf.set_fill_color(255, 255, 255)
+        for col in cols:
+            val = row[col] if pd.notna(row[col]) else ""
+            pdf.cell(col_w, 7, _safe_pdf_text(val), border=1, align="C", fill=fill)
+        pdf.ln()
+    pdf.ln(3)
+
+
+def _generate_bus_report_pdf(bus_number: str, year: int, month: int, period: str,
+                              full: dict, fuel: str, fuel_avg: float, unit: str,
+                              price: float, price_unit: str, expected_fuel_cost: float,
+                              data_note, salary_savings: float, final_bachat: float,
+                              maint_df: pd.DataFrame, sal_df: pd.DataFrame) -> bytes:
+    """Poora Bus Report (Summary + Diesel + Payment + Expenses/Salary +
+    Final Bachat + Maintenance + Driver Salary records) ek single PDF me."""
+    pdf = FPDF(orientation="P", unit="mm", format="A4")
+    pdf.add_page()
+    pdf.set_auto_page_break(auto=True, margin=12)
+
+    month_name = date(2000, month, 1).strftime("%B")
+    pdf.set_font("Helvetica", "B", 15)
+    pdf.cell(0, 10, _safe_pdf_text(f"Bus Report — {bus_number}"), ln=True, align="C")
+    pdf.set_font("Helvetica", "", 11)
+    pdf.cell(0, 7, _safe_pdf_text(f"{month_name} {year}  ({period})"), ln=True, align="C")
+    pdf.ln(4)
+
+    _pdf_kv_section(pdf, "Summary", [
+        ("Present Days", f"{full['present_days']}"),
+        ("On Leave", f"{full['leave_days']}"),
+        ("Actual KM", f"{full['actual_km']:,.0f}"),
+        ("Efficiency", f"{full['efficiency']}%"),
+    ])
+
+    diesel_pairs = [
+        (f"Total {fuel}", f"{full['diesel']:.2f} L ({full['diesel_days']} din)"),
+        ("Total Cost", f"Rs {full['diesel_cost']:,.0f}"),
+        ("Avg (Diesel KM basis)", f"{full['avg_diesel_km']:.2f} km/L"),
+        ("Avg (Actual KM basis)", f"{full['avg_actual_km']:.2f} km/L"),
+        (f"Expected {fuel} Cost", f"Rs {expected_fuel_cost:,.0f} (@ {fuel_avg} {unit}, Rs {price:.2f}/{price_unit})"),
+    ]
+    if data_note:
+        diesel_pairs.append(("Mileage Source", data_note.replace("📊 ", "").replace("⏳ ", "")))
+    _pdf_kv_section(pdf, f"{fuel}", diesel_pairs)
+
+    _pdf_kv_section(pdf, "Payment", [
+        ("Payment (before tax/deduction)", f"Rs {full['raw_payment']:,.0f}"),
+        ("Final Payment", f"Rs {full['final_payment']:,.0f} ({int(full['tax_pct']*100)}% tax + fixed deduction minus)"),
+    ])
+
+    _pdf_kv_section(pdf, "Expenses & Driver Salary", [
+        ("Vehicle Expenses", f"Rs {full['expenses']:,.0f}"),
+        ("Driver Salary Paid", f"Rs {full['salary_paid']:,.0f}"),
+        ("Expected Driver Salary", f"Rs {full['expected_salary']:,.0f}"),
+        ("Salary Savings (Expected - Paid)", f"Rs {salary_savings:,.0f}"),
+    ])
+
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.set_fill_color(201, 162, 39)
+    pdf.set_text_color(255, 255, 255)
+    pdf.cell(0, 10, _safe_pdf_text(f"Final Bachat: Rs {final_bachat:,.0f}"), ln=True, align="C", fill=True)
+    pdf.set_text_color(0, 0, 0)
+    pdf.ln(4)
+
+    if not maint_df.empty:
+        pdf.set_font("Helvetica", "B", 12)
+        pdf.set_text_color(139, 58, 58)
+        pdf.cell(0, 8, _safe_pdf_text("Maintenance Records (this period)"), ln=True)
+        pdf.set_text_color(0, 0, 0)
+        _pdf_data_table(pdf, maint_df.drop(columns=["id"], errors="ignore").reset_index(drop=True))
+
+    if not sal_df.empty:
+        show_sal = sal_df.drop(columns=["id", "Updated By"], errors="ignore").copy()
+        show_sal["Date"] = pd.to_datetime(show_sal["Date"]).dt.strftime("%Y-%m-%d")
+        pdf.set_font("Helvetica", "B", 12)
+        pdf.set_text_color(139, 58, 58)
+        pdf.cell(0, 8, _safe_pdf_text("Driver Salary Records (this period)"), ln=True)
+        pdf.set_text_color(0, 0, 0)
+        _pdf_data_table(pdf, show_sal.reset_index(drop=True))
+
+    return bytes(pdf.output())
+
+
 def bus_report_view():
     _page_style()
 
@@ -279,6 +415,18 @@ def bus_report_view():
             save_vehicle_fuel_rate(bus_number, cng_rate_input, diesel_rate_input)
             st.success("✅ Avg saved!")
             st.rerun()
+
+    # ── ✅ NEW — Data-driven mileage toggle. Off rehne par sab kuch bilkul
+    # pehle jaisa hi (manual avg jo upar set kiya). On karne par, actual_km
+    # se reconstruct kiye gaye fill-interval-KM se ek outlier-robust,
+    # KM-weighted average nikalta hai, aur "Expected Diesel Cost" card
+    # usi ko use karta hai — koi extra manual field (jaise Diesel KM)
+    # ki zaroorat nahi. ──
+    use_data_driven = st.checkbox(
+        "📊 Use data-driven average (recommended)", value=False,
+        key=f"br_datadriven_{bus_number}",
+        help="Manual number ki jagah, actual KM aur fill-history se nikala hua outlier-robust average use karega.",
+    )
 
     col_year, col1, col2, col3 = st.columns([1, 2, 2, 1])
     with col_year:
@@ -466,6 +614,24 @@ def bus_report_view():
         rates = pd.to_numeric(recent["Rate"], errors="coerce").dropna() if not recent.empty else []
         price = float(rates.iloc[-1]) if len(rates) else 0.0
 
+    # ── ✅ NEW — Data-driven mileage estimate (Diesel only; CNG interval
+    # logic abhi implement nahi kiya, is baar Diesel ke liye hi). Poori
+    # vehicle_records + poori fuel_fills history use hoti hai (period-scoped
+    # nahi), kyunki fill-intervals kisi period-boundary se pehle shuru ho
+    # sakte hain. fuel_avg ko override kar deta hai jab toggle ON ho aur
+    # kaafi data mile — warna manual avg hi (transparently) use hota hai. ──
+    data_note = None
+    if use_data_driven and not is_cng:
+        full_vr    = get_vehicle_records(bus_number)
+        full_fills = get_all_fuel_fills(bus_number)
+        estimate    = estimate_bus_mileage(full_vr, full_fills)
+        cost_result = expected_diesel_cost(estimate, full["actual_km"], price, fallback_kmpl=fuel_avg)
+        fuel_avg = cost_result["avg_kmpl"]
+        if cost_result["used_fallback"]:
+            data_note = "⏳ abhi kaafi data nahi — manual avg use hua"
+        else:
+            data_note = f"📊 {cost_result['intervals_used']} fill-intervals se · {cost_result['trend']}"
+
     def _exp_cost(km):
         return (km / fuel_avg) * price if fuel_avg > 0 else 0.0
 
@@ -473,6 +639,8 @@ def bus_report_view():
 
     def _expected_cost_sub():
         base = f"@ {fuel_avg} {unit} · ₹{price:.2f}/{price_unit}"
+        if data_note:
+            base += f"<br>{data_note}"
         if not show_split:
             return base
         return (f"{base}<br>{fmt_rs(_exp_cost(p1_metrics['actual_km']))}"
@@ -568,3 +736,18 @@ def bus_report_view():
         show_sal = sal.drop(columns=["id", "Updated By"], errors="ignore").copy()
         show_sal["Date"] = show_sal["Date"].dt.strftime("%Y-%m-%d")
         _render_html_table(show_sal)
+
+    # ── 📥 Poora Bus Report ek PDF me download karo — sab kuch (Summary,
+    # Diesel, Payment, Expenses/Salary, Final Bachat, Maintenance, Driver
+    # Salary records) ek hi file mein. ──
+    st.markdown("<br>", unsafe_allow_html=True)
+    report_pdf = _generate_bus_report_pdf(
+        bus_number, year, br_month, br_period, full, fuel, fuel_avg, unit,
+        price, price_unit, expected_fuel_cost, data_note, salary_savings,
+        final_bachat, maint, sal,
+    )
+    st.download_button(
+        "📥 Download Full Report (PDF)", data=report_pdf,
+        file_name=f"bus_report_{bus_number}_{date(2000, br_month, 1).strftime('%B')}_{year}_{br_period.replace('-', '_')}.pdf",
+        mime="application/pdf", key=f"br_pdf_{bus_number}", width='stretch',
+    )
