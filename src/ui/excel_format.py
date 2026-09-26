@@ -740,7 +740,155 @@ def editable_grid(bus_number: str):
                 st.info(f"{fuel_label(bus_number)} change cancel ho gaya.")
                 st.rerun()
 
-    if st.session_state.get(confirm_key):
+    driver_clash_confirm_key = f"driver_clash_confirm_{bus_number}"
+    driver_clash_pending_key = f"driver_clash_pending_{bus_number}"
+
+    def _perform_save(cleaned_df: pd.DataFrame):
+        """Actual diesel-handling + conflict-check + save logic. Called
+        either directly (no driver clash) or after the user confirms
+        'Save Anyway' on the driver-clash screen."""
+        # ── Diesel/CNG entered here does NOT directly overwrite
+        # vehicle_records.diesel. Three cases:
+        # 1. Empty → nothing happens
+        # 2. Positive value, this date has NO existing fuel_fills data yet
+        #    → a new fill is added directly (no confirmation)
+        # 3. Positive value, this date ALREADY has data → not saved yet,
+        #    a 3-button confirmation (Yes Update / Add Diesel / Cancel)
+        #    appears the next time the page renders
+        # 4. Explicitly 0 → all existing fills for that date are cleared
+        # save_fuel_fill()/clear_fuel_fills_for_date()/replace_fuel_fill_for_date()
+        # internally also sync that date's vehicle_records.diesel total. ──
+        new_fill_count      = 0
+        cleared_date_count  = 0
+        diesel_conflict_pending = []
+
+        diesel_rows = [
+            (idx, row) for idx, row in cleaned_df.iterrows()
+            if row.get("Diesel") is not None and pd.notna(row.get("Diesel"))
+        ]
+        positive_dates = [
+            str(row["Date"]) for _, row in diesel_rows if float(row["Diesel"]) > 0
+        ]
+        already_filled_dates = get_existing_fuel_fill_dates(bus_number, positive_dates)
+
+        for idx, row in diesel_rows:
+            qty = float(row["Diesel"])
+            row_date_str = str(row["Date"])
+            if qty > 0:
+                row_date   = pd.Timestamp(row["Date"])
+                row_period = "1-15" if row_date.day <= 15 else "16-31"
+                if row_date_str in already_filled_dates:
+                    diesel_conflict_pending.append({
+                        "date": row_date_str, "qty": qty,
+                        "month": row_date.month, "period": row_period,
+                    })
+                else:
+                    rate_data = get_diesel_rate_payment(bus_number, row_date.month, row_period)
+                    save_fuel_fill(bus_number, row_date_str, qty, rate_data["rate"])
+                    new_fill_count += 1
+            else:
+                # ✅ explicitly 0 — clear/reset all fills for this date
+                cleared = clear_fuel_fills_for_date(bus_number, row_date_str)
+                if cleared:
+                    cleared_date_count += 1
+            cleaned_df.at[idx, "Diesel"] = None  # ✅ vehicle_records save-path should not touch this
+
+        if diesel_conflict_pending:
+            st.session_state[diesel_pending_key] = diesel_conflict_pending
+            st.session_state[diesel_confirm_key]  = True
+
+        if fetch_key not in st.session_state:
+            st.session_state[fetch_key] = get_vehicle_records(bus_number)
+        fetched_df = st.session_state[fetch_key]
+
+        existing_by_date = {}
+        if not fetched_df.empty:
+            for _, r in fetched_df.iterrows():
+                existing_by_date[str(r["Date"])] = r.to_dict()
+
+        safe_rows, conflict_rows, conflict_old = [], [], {}
+        for _, new_row in cleaned_df.iterrows():
+            date_str = str(new_row["Date"])
+            old_row  = existing_by_date.get(date_str)
+            if old_row is None:
+                safe_rows.append(new_row)
+                continue
+            has_conflict = False
+            for col in _COMPARE_COLS:
+                old_val = old_row.get(col, "")
+                new_val = new_row.get(col, "")
+                if not _is_empty_val(old_val) and not _is_empty_val(new_val) and _values_differ(col, old_val, new_val):
+                    has_conflict = True
+                    break
+            if has_conflict:
+                conflict_rows.append(new_row)
+                conflict_old[date_str] = old_row
+            else:
+                safe_rows.append(new_row)  # ✅ only filling empty fields, or value is unchanged — direct save
+
+        if safe_rows:
+            save_vehicle_records(bus_number, pd.DataFrame(safe_rows))
+
+        if conflict_rows:
+            st.session_state[pending_key]              = pd.DataFrame(conflict_rows)
+            st.session_state[f"{pending_key}_old"]      = conflict_old
+            st.session_state[confirm_key]               = True
+            msg_parts = []
+            if safe_rows:
+                msg_parts.append(f"{len(safe_rows)} row(s) saved directly")
+            if new_fill_count:
+                msg_parts.append(f"{new_fill_count} new {fuel_label(bus_number)} fill added")
+            if cleared_date_count:
+                msg_parts.append(f"{cleared_date_count} date(s) {fuel_label(bus_number)} entries cleared")
+            if msg_parts:
+                st.success("✅ " + ", ".join(msg_parts) + ".")
+            if diesel_conflict_pending:
+                st.info(f"ℹ️ {len(diesel_conflict_pending)} date(s) need {fuel_label(bus_number)} confirmation — see below.")
+            st.session_state.pop(fetch_key, None)
+            st.rerun()
+        else:
+            msg_parts = ["✅ Saved!"]
+            if new_fill_count:
+                msg_parts.append(f"({new_fill_count} new {fuel_label(bus_number)} fill also added)")
+            if cleared_date_count:
+                msg_parts.append(f"({cleared_date_count} date(s) {fuel_label(bus_number)} entries cleared)")
+            st.success(" ".join(msg_parts))
+            if diesel_conflict_pending:
+                st.info(f"ℹ️ {len(diesel_conflict_pending)} date(s) need {fuel_label(bus_number)} confirmation — see below.")
+            st.session_state[reset_key] += 1
+            st.session_state.pop(key, None)
+            st.session_state.pop(ed_key, None)
+            st.session_state.pop(fetch_key, None)
+            st.rerun()
+
+    if st.session_state.get(driver_clash_confirm_key):
+        # ── Driver clash confirmation screen — behaves like the other
+        # conflict-confirmation flows: save is PAUSED, the clash is shown
+        # clearly, and the user must explicitly choose to proceed or cancel. ──
+        pending_clash_df = st.session_state.get(driver_clash_pending_key)
+        clash_rows        = st.session_state.get(f"{driver_clash_pending_key}_clashes", [])
+
+        st.warning("⚠️ Driver clash found — review before saving:")
+        for c in clash_rows:
+            st.markdown(
+                f"📅 **{c['Date']}** — Driver **{c['Driver']}** is already on "
+                f"vehicle **{c['Also Present on']}** on this date."
+            )
+        _render_html_table(pd.DataFrame(clash_rows))
+
+        cc1, cc2 = st.columns(2)
+        with cc1:
+            if st.button("✅ Save Anyway", key=f"clash_save_{bus_number}", width='stretch'):
+                for k in [driver_clash_confirm_key, f"{driver_clash_pending_key}_clashes"]:
+                    st.session_state.pop(k, None)
+                _perform_save(pending_clash_df)
+        with cc2:
+            if st.button("❌ Cancel", key=f"clash_cancel_{bus_number}", width='stretch'):
+                for k in [driver_clash_confirm_key, driver_clash_pending_key, f"{driver_clash_pending_key}_clashes"]:
+                    st.session_state.pop(k, None)
+                st.info("Save cancelled.")
+                st.rerun()
+    elif st.session_state.get(confirm_key):
         conflict_df = st.session_state.get(pending_key)
         old_lookup  = st.session_state.get(f"{pending_key}_old", {})
 
@@ -816,9 +964,9 @@ def editable_grid(bus_number: str):
 
             # ── Cross-vehicle driver clash check — if the same driver name
             # is already 'Present' on a DIFFERENT vehicle on the same date,
-            # show a warning table. This is warning-only — it does not
-            # block the save, so genuine cases (small overlaps, data-entry
-            # corrections) aren't stuck. ──
+            # PAUSE the save (same pattern as the other conflict-confirmation
+            # flows above) and show a clear clash screen instead of saving
+            # right away. ──
             clashes = []
             for _, crow in cleaned_df.iterrows():
                 if crow.get("Status") == "Present" and crow.get("Driver Name"):
@@ -827,127 +975,14 @@ def editable_grid(bus_number: str):
                         clashes.append({
                             "Date": crow["Date"], "Driver": crow["Driver Name"], "Also Present on": clash_bus,
                         })
+
             if clashes:
-                st.warning(
-                    "⚠️ Driver clash found — this driver is already 'Present' on "
-                    "another vehicle for the same date (saved anyway, please verify):"
-                )
-                _render_html_table(pd.DataFrame(clashes))
-
-            # ── ✅ Diesel/CNG yahan bharoge to woh seedha vehicle_records.diesel
-            # overwrite NAHI karta. Teen cases:
-            # 1. Khaali → kuch nahi hota
-            # 2. Positive value, us date ka fuel_fills me PEHLE SE koi data
-            #    nahi → seedha naya fill add ho jaata hai (koi confirmation nahi)
-            # 3. Positive value, us date ka data PEHLE SE hai → save nahi hota,
-            #    3-button confirmation (Yes Update / Add Diesel / Cancel) upar
-            #    dikhta hai agli baar page render hone par
-            # 4. Explicitly 0 → us date ki saari existing fills clear ho jaati hain
-            # save_fuel_fill()/clear_fuel_fills_for_date()/replace_fuel_fill_for_date()
-            # internally us date ka vehicle_records.diesel total bhi khud sync
-            # kar dete hain. ──
-            new_fill_count      = 0
-            cleared_date_count  = 0
-            diesel_conflict_pending = []
-
-            diesel_rows = [
-                (idx, row) for idx, row in cleaned_df.iterrows()
-                if row.get("Diesel") is not None and pd.notna(row.get("Diesel"))
-            ]
-            positive_dates = [
-                str(row["Date"]) for _, row in diesel_rows if float(row["Diesel"]) > 0
-            ]
-            already_filled_dates = get_existing_fuel_fill_dates(bus_number, positive_dates)
-
-            for idx, row in diesel_rows:
-                qty = float(row["Diesel"])
-                row_date_str = str(row["Date"])
-                if qty > 0:
-                    row_date   = pd.Timestamp(row["Date"])
-                    row_period = "1-15" if row_date.day <= 15 else "16-31"
-                    if row_date_str in already_filled_dates:
-                        diesel_conflict_pending.append({
-                            "date": row_date_str, "qty": qty,
-                            "month": row_date.month, "period": row_period,
-                        })
-                    else:
-                        rate_data = get_diesel_rate_payment(bus_number, row_date.month, row_period)
-                        save_fuel_fill(bus_number, row_date_str, qty, rate_data["rate"])
-                        new_fill_count += 1
-                else:
-                    # ✅ explicitly 0 — is date ki saari fills clear/reset karo
-                    cleared = clear_fuel_fills_for_date(bus_number, row_date_str)
-                    if cleared:
-                        cleared_date_count += 1
-                cleaned_df.at[idx, "Diesel"] = None  # ✅ vehicle_records save-path isko touch na kare
-
-            if diesel_conflict_pending:
-                st.session_state[diesel_pending_key] = diesel_conflict_pending
-                st.session_state[diesel_confirm_key]  = True
-
-            if fetch_key not in st.session_state:
-                st.session_state[fetch_key] = get_vehicle_records(bus_number)
-            fetched_df = st.session_state[fetch_key]
-
-            existing_by_date = {}
-            if not fetched_df.empty:
-                for _, r in fetched_df.iterrows():
-                    existing_by_date[str(r["Date"])] = r.to_dict()
-
-            safe_rows, conflict_rows, conflict_old = [], [], {}
-            for _, new_row in cleaned_df.iterrows():
-                date_str = str(new_row["Date"])
-                old_row  = existing_by_date.get(date_str)
-                if old_row is None:
-                    safe_rows.append(new_row)
-                    continue
-                has_conflict = False
-                for col in _COMPARE_COLS:
-                    old_val = old_row.get(col, "")
-                    new_val = new_row.get(col, "")
-                    if not _is_empty_val(old_val) and not _is_empty_val(new_val) and _values_differ(col, old_val, new_val):
-                        has_conflict = True
-                        break
-                if has_conflict:
-                    conflict_rows.append(new_row)
-                    conflict_old[date_str] = old_row
-                else:
-                    safe_rows.append(new_row)  # ✅ sirf khaali fields bhar rahe ho, ya value same hai — direct save
-
-            if safe_rows:
-                save_vehicle_records(bus_number, pd.DataFrame(safe_rows))
-
-            if conflict_rows:
-                st.session_state[pending_key]              = pd.DataFrame(conflict_rows)
-                st.session_state[f"{pending_key}_old"]      = conflict_old
-                st.session_state[confirm_key]               = True
-                msg_parts = []
-                if safe_rows:
-                    msg_parts.append(f"{len(safe_rows)} row(s) direct save ho gayi")
-                if new_fill_count:
-                    msg_parts.append(f"{new_fill_count} naya {fuel_label(bus_number)} fill add hua")
-                if cleared_date_count:
-                    msg_parts.append(f"{cleared_date_count} date ki {fuel_label(bus_number)} entries clear hui")
-                if msg_parts:
-                    st.success("✅ " + ", ".join(msg_parts) + ".")
-                if diesel_conflict_pending:
-                    st.info(f"ℹ️ {len(diesel_conflict_pending)} date(s) ke {fuel_label(bus_number)} data ke liye confirmation chahiye — neeche dekho.")
-                st.session_state.pop(fetch_key, None)
+                st.session_state[driver_clash_pending_key] = cleaned_df
+                st.session_state[f"{driver_clash_pending_key}_clashes"] = clashes
+                st.session_state[driver_clash_confirm_key] = True
                 st.rerun()
             else:
-                msg_parts = ["✅ Saved!"]
-                if new_fill_count:
-                    msg_parts.append(f"({new_fill_count} naya {fuel_label(bus_number)} fill bhi add hua)")
-                if cleared_date_count:
-                    msg_parts.append(f"({cleared_date_count} date ki {fuel_label(bus_number)} entries clear hui)")
-                st.success(" ".join(msg_parts))
-                if diesel_conflict_pending:
-                    st.info(f"ℹ️ {len(diesel_conflict_pending)} date(s) ke {fuel_label(bus_number)} data ke liye confirmation chahiye — neeche dekho.")
-                st.session_state[reset_key] += 1
-                st.session_state.pop(key, None)
-                st.session_state.pop(ed_key, None)
-                st.session_state.pop(fetch_key, None)
-                st.rerun()
+                _perform_save(cleaned_df)
 
     st.markdown("### Saved Records 📋")
 
