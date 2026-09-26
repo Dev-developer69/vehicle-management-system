@@ -22,6 +22,7 @@ from src.database.db import (
     migrate_diesel_to_fuel_fills, get_unmigrated_diesel_dates,
     get_vehicle_payment_config, save_vehicle_payment_config,
     get_duty_splits, save_duty_split, delete_duty_split,
+    get_drivers_for_buses, check_driver_clash,  # ✅ added: driver dropdown + clash check
 )
 
 # ──────────────────────────────────────────────
@@ -448,6 +449,13 @@ def editable_grid(bus_number: str):
         st.session_state[sched_km_key] = get_scheduled_km(bus_number)
     scheduled_km = st.session_state[sched_km_key]
 
+    # ── ✅ Driver Name ko "dropdown + writable" banane ke liye — DB me
+    # jitne bhi distinct drivers hain (case-insensitive dedup, junk names
+    # already filtered) unki list + ek sentinel "Naya Driver" option, jo
+    # select hone par neeche ek free-text input khol deta hai. ──
+    DRIVER_NEW = "➕ Naya Driver Likho"
+    driver_options = get_drivers_for_buses() + [DRIVER_NEW]
+
     st.markdown(f"### Vehicle Records {bus_number} 🚐")
 
     if key not in st.session_state:
@@ -630,7 +638,7 @@ def editable_grid(bus_number: str):
         column_config={
             "Date":           st.column_config.DateColumn("Date", default=date.today()),
             "Status":         st.column_config.SelectboxColumn("Status", options=["Present", "On Leave"], default="Present"),
-            "Driver Name":    st.column_config.TextColumn("Driver Name"),
+            "Driver Name":    st.column_config.SelectboxColumn("Driver Name", options=driver_options),  # ✅ dropdown + "Naya Driver" option
             "Conductor Name": st.column_config.TextColumn("Conductor Name"),
             "Scheduled KM":   st.column_config.NumberColumn("Scheduled KM", min_value=0, default=scheduled_km),
             "Actual KM":      st.column_config.NumberColumn("Actual KM", min_value=0, default=scheduled_km),
@@ -646,6 +654,19 @@ def editable_grid(bus_number: str):
     edited_df     = _apply_editor_state(st.session_state[key], editor_state)
     on_leave_mask = edited_df["Status"] == "On Leave"
     edited_df.loc[on_leave_mask, ["Scheduled KM", "Actual KM", "Income"]] = 0
+
+    # ── ✅ "➕ Naya Driver Likho" select hua to uske liye ek alag free-text
+    # input dikhao — typed value seedha edited_df me wapas daal diya jaata
+    # hai, taaki save-flow ko pata bhi na chale ki ye dropdown se aaya ya
+    # naya typed gaya. ──
+    for _drv_idx, _drv_row in edited_df.iterrows():
+        if _drv_row.get("Driver Name") == DRIVER_NEW:
+            _typed_driver = st.text_input(
+                f"Naya driver naam — {_drv_row['Date']}",
+                key=f"new_driver_{bus_number}_{_drv_idx}",
+            )
+            if _typed_driver.strip():
+                edited_df.at[_drv_idx, "Driver Name"] = _typed_driver.strip()
 
     # ── Naye vs purane data ka column-wise compare karo — sirf REAL conflict
     #    (jaha already koi non-empty value ek alag value se overwrite ho rahi
@@ -792,6 +813,26 @@ def editable_grid(bus_number: str):
             if cleaned_df.empty:
                 st.warning("⚠️ No valid rows to save.")
                 return
+
+            # ── ✅ Cross-vehicle driver clash check — agar isi date pe
+            # yehi driver naam kisi DUSRI vehicle me bhi 'Present' hai to
+            # warning table dikhao. Ye sirf warning hai — save block nahi
+            # hota, taaki genuine cases (jaise chota overlap, data-entry
+            # correction ke waqt) rukein na. ──
+            clashes = []
+            for _, crow in cleaned_df.iterrows():
+                if crow.get("Status") == "Present" and crow.get("Driver Name"):
+                    clash_bus = check_driver_clash(crow["Driver Name"], str(crow["Date"]), bus_number)
+                    if clash_bus:
+                        clashes.append({
+                            "Date": crow["Date"], "Driver": crow["Driver Name"], "Also Present on": clash_bus,
+                        })
+            if clashes:
+                st.warning(
+                    "⚠️ Driver clash mila — same date pe ye driver dusri vehicle mein bhi "
+                    "'Present' hai (save phir bhi ho gaya, verify kar lo):"
+                )
+                _render_html_table(pd.DataFrame(clashes))
 
             # ── ✅ Diesel/CNG yahan bharoge to woh seedha vehicle_records.diesel
             # overwrite NAHI karta. Teen cases:
