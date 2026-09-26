@@ -127,6 +127,20 @@ def forecast_summary_rows(forecast: dict, rate_per_litre: float = None) -> list:
 MIN_KM_FOR_ESTIMATE = 500   # itna total interval-KM na ho to mileage estimate abhi unreliable hai
 TREND_BUCKETS        = 4    # trend dekhne ke liye data ko itne chunks mein baanta hai
 
+# ── Physical sanity bounds — kisi bhi bus ka mileage in ke bahar
+# NAHI ho sakta (real-world diesel/CNG bus ranges). Ye do purpose serve
+# karte hain:
+# 1. HARD_BOUNDS: individual fill-intervals jo in bounds se bahar hain
+#    (jaise 61 km/L) sirf data-entry/meter-error ho sakte hain — inhe
+#    average nikalne se PEHLE hi drop kar dete hain, taaki wo IQR ko bhi
+#    corrupt na kar sakein.
+# 2. TYPICAL_RANGE: final average agar (real fills hone ke baad bhi) is
+#    range se bahar aaye, to nearest bound par clamp kar dete hain aur
+#    "range_capped" flag True kar dete hain — taaki UI chahe to warna
+#    dikha sake.
+HARD_BOUNDS   = {"diesel": (1.0, 10.0), "cng": (1.5, 12.0)}   # generous — sirf impossible values drop karne ke liye
+TYPICAL_RANGE = {"diesel": (3.0, 6.0),  "cng": (4.0, 7.0)}     # realistic range — isse bahar aaye to clamp + flag
+
 
 def compute_intervals(vr_df: pd.DataFrame, fills_df: pd.DataFrame) -> pd.DataFrame:
     """vr_df: Vehicle Records ki FULL history — columns 'Date', 'Actual KM'
@@ -173,7 +187,8 @@ def compute_intervals(vr_df: pd.DataFrame, fills_df: pd.DataFrame) -> pd.DataFra
 
 def _robust_weighted_mileage(mileages: np.ndarray, weights: np.ndarray) -> float:
     """IQR-capping (outlier intervals exclude) + KM-weighted average (bada
-    interval ka mileage zyada trust hota hai)."""
+    interval ka mileage zyada trust hota hai). Yeh HARD_BOUNDS-filtered
+    intervals par chalta hai (impossible values already nikal chuke hain)."""
     if len(mileages) == 0:
         return 0.0
     if len(mileages) < 4:
@@ -187,27 +202,55 @@ def _robust_weighted_mileage(mileages: np.ndarray, weights: np.ndarray) -> float
     return float(np.average(mileages[mask], weights=weights[mask]))
 
 
-def estimate_bus_mileage(vr_df: pd.DataFrame, fills_df: pd.DataFrame) -> dict:
+def estimate_bus_mileage(vr_df: pd.DataFrame, fills_df: pd.DataFrame, fuel_type: str = "diesel") -> dict:
     """Ek bus ke liye robust, KM-weighted average mileage nikalta hai.
-    Returns: {"avg_kmpl", "total_km", "total_diesel", "intervals_used", "trend"}"""
+    `fuel_type`: "diesel" ya "cng" — physical sanity bounds isi se decide
+    hote hain (diesel 1-10 km/L hard bound / 3-6 typical; CNG 1.5-12 /
+    4-7 typical).
+    Returns: {"avg_kmpl", "total_km", "total_diesel", "intervals_used",
+              "intervals_dropped", "trend", "range_capped"}"""
+    lo_hard, hi_hard = HARD_BOUNDS.get(fuel_type, HARD_BOUNDS["diesel"])
+    lo_typ, hi_typ   = TYPICAL_RANGE.get(fuel_type, TYPICAL_RANGE["diesel"])
+
     intervals = compute_intervals(vr_df, fills_df)
     if intervals.empty:
-        return {"avg_kmpl": 0.0, "total_km": 0.0, "total_diesel": 0.0, "intervals_used": 0, "trend": "abhi seekh raha hai"}
+        return {"avg_kmpl": 0.0, "total_km": 0.0, "total_diesel": 0.0,
+                "intervals_used": 0, "intervals_dropped": 0,
+                "trend": "abhi seekh raha hai", "range_capped": False}
 
-    total_km, total_diesel = intervals["km_in_interval"].sum(), intervals["diesel_filled"].sum()
+    # ── Step 1: physically-impossible fill-intervals drop karo (meter-error,
+    # galti se double/half entry) — ye average nikalne se PEHLE hi hatate
+    # hain, taaki IQR bhi corrupt na ho ──
+    n_before = len(intervals)
+    valid = intervals[(intervals["mileage"] >= lo_hard) & (intervals["mileage"] <= hi_hard)]
+    intervals_dropped = n_before - len(valid)
+    if valid.empty:
+        valid = intervals  # sab hi impossible nikle to original hi use karo (better than nothing)
+        intervals_dropped = 0
+
+    total_km, total_diesel = valid["km_in_interval"].sum(), valid["diesel_filled"].sum()
 
     if total_km < MIN_KM_FOR_ESTIMATE:
         return {
             "avg_kmpl": round(total_km / total_diesel, 2) if total_diesel else 0.0,
             "total_km": round(total_km, 0), "total_diesel": round(total_diesel, 1),
-            "intervals_used": len(intervals), "trend": "abhi seekh raha hai",
+            "intervals_used": len(valid), "intervals_dropped": intervals_dropped,
+            "trend": "abhi seekh raha hai", "range_capped": False,
         }
 
-    avg_kmpl = _robust_weighted_mileage(intervals["mileage"].values, intervals["km_in_interval"].values)
+    avg_kmpl = _robust_weighted_mileage(valid["mileage"].values, valid["km_in_interval"].values)
+
+    # ── Step 2: final average bhi agar typical range se bahar aaye, to
+    # nearest bound par clamp karo aur flag lagao — is card ne kabhi
+    # 61 km/L jaisa impossible number nahi dikhana chahiye ──
+    range_capped = False
+    if avg_kmpl > 0 and not (lo_typ <= avg_kmpl <= hi_typ):
+        avg_kmpl = min(max(avg_kmpl, lo_typ), hi_typ)
+        range_capped = True
 
     # ── Trend: data ko chunks mein baant kar pehle vs aakhri chunk ka
     # KM-weighted mileage compare karo ──
-    intervals_sorted = intervals.sort_values("interval_end").reset_index(drop=True)
+    intervals_sorted = valid.sort_values("interval_end").reset_index(drop=True)
     n_buckets  = min(TREND_BUCKETS, len(intervals_sorted))
     chunk_size = max(1, len(intervals_sorted) // n_buckets)
     bucket_vals = []
@@ -228,15 +271,22 @@ def estimate_bus_mileage(vr_df: pd.DataFrame, fills_df: pd.DataFrame) -> dict:
 
     return {
         "avg_kmpl": round(avg_kmpl, 2), "total_km": round(total_km, 0),
-        "total_diesel": round(total_diesel, 1), "intervals_used": len(intervals), "trend": trend,
+        "total_diesel": round(total_diesel, 1), "intervals_used": len(valid),
+        "intervals_dropped": intervals_dropped, "trend": trend, "range_capped": range_capped,
     }
 
 
 def expected_diesel_cost(estimate: dict, period_expected_km: float,
-                          rate_per_litre: float, fallback_kmpl: float = 5.5) -> dict:
+                          rate_per_litre: float, fallback_kmpl: float = None,
+                          fuel_type: str = "diesel") -> dict:
     """Data-driven avg_kmpl ko period ke expected KM ke saath combine karke
     Expected Diesel Cost deta hai. Agar bus ke paas abhi kaafi data nahi hai
-    (avg_kmpl 0), to `fallback_kmpl` (manual/config default) use hota hai."""
+    (avg_kmpl 0), to `fallback_kmpl` (agar diya gaya) ya fuel_type ke
+    TYPICAL_RANGE ka midpoint use hota hai."""
+    if fallback_kmpl is None:
+        lo, hi = TYPICAL_RANGE.get(fuel_type, TYPICAL_RANGE["diesel"])
+        fallback_kmpl = round((lo + hi) / 2, 2)
+
     avg_kmpl = estimate.get("avg_kmpl") or 0.0
     used_fallback = avg_kmpl <= 0
     if used_fallback:
@@ -249,5 +299,7 @@ def expected_diesel_cost(estimate: dict, period_expected_km: float,
         "avg_kmpl": round(avg_kmpl, 2),
         "used_fallback": used_fallback,
         "intervals_used": estimate.get("intervals_used", 0),
+        "intervals_dropped": estimate.get("intervals_dropped", 0),
         "trend": estimate.get("trend", ""),
+        "range_capped": estimate.get("range_capped", False),
     }
